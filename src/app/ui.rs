@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use egui::{Align, Color32, CornerRadius, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 
 use super::theme::{self, BODY, SECONDARY, TOOLBAR_H, TRAFFIC_LIGHTS_W};
+use super::widgets::{self as w, Icon};
 use super::{Cmd, Meter, State};
 use crate::compose::{self, Corner, Place, Scene, Shape};
 use crate::settings::Settings;
@@ -12,7 +13,7 @@ use crate::settings::{FPS, RESOLUTIONS};
 use crate::writer::{AudioLayout, Codec};
 
 const RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x30);
-const SIDEBAR_W: f32 = 290.0;
+const SIDEBAR_W: f32 = 304.0;
 
 static DRAG: AtomicBool = AtomicBool::new(false);
 
@@ -107,7 +108,7 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
         .show(ui, |ui| controls(ui, st));
     egui::Panel::right("sources")
         .exact_size(SIDEBAR_W)
-        .frame(egui::Frame::NONE.fill(p.sidebar).inner_margin(Margin { left: 14, right: 4, top: 6, bottom: 6 }))
+        .frame(egui::Frame::NONE.fill(p.sidebar).stroke(Stroke::new(1.0, p.separator)))
         .show(ui, |ui| {
             // Lay the contents out in a child of exactly the panel's
             // size: a too-wide widget (a long device name) would otherwise
@@ -116,8 +117,14 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
             let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)));
             inner.set_clip_rect(rect.intersect(ui.clip_rect()));
             egui::ScrollArea::vertical().auto_shrink(false).show(&mut inner, |ui| {
-                ui.set_max_width(SIDEBAR_W - 32.0);
-                sources(ui, st)
+                // 16 pt gutters; the floating scroll bar sits in the right one.
+                egui::Frame::NONE.inner_margin(Margin { left: 16, right: 16, top: 0, bottom: 16 }).show(ui, |ui| {
+                    ui.set_max_width(SIDEBAR_W - 32.0);
+                    ui.set_min_width(SIDEBAR_W - 32.0);
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.spacing_mut().button_padding = vec2(10.0, 4.0);
+                    sources(ui, st)
+                });
             });
         });
     egui::CentralPanel::default()
@@ -298,53 +305,60 @@ fn shape_icon(ui: &Ui, rect: egui::Rect, shape: Shape, roundness: f64, color: Co
 /// Camera overlay look and position. Live: also while recording.
 fn overlay_controls(ui: &mut Ui, s: &mut Settings) {
     let p = theme::pal(ui);
+    ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let bw = ((ui.available_width() - 16.0) / 5.0).max(30.0);
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let n = Shape::PICKER.len() as f32;
+        let bw = ((ui.available_width() - 6.0 * (n - 1.0)) / n).max(28.0);
         for shape in Shape::PICKER {
             let sel = s.pip_shape == shape;
-            let (rect, resp) = ui.allocate_exact_size(vec2(bw, 30.0), Sense::click());
-            let fill = if sel { theme::accent() } else if resp.hovered() { p.hover } else { p.control };
-            ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-            shape_icon(ui, rect, shape, s.pip_roundness, if sel { Color32::WHITE } else { p.text });
+            let (rect, resp) = ui.allocate_exact_size(vec2(bw, 32.0), Sense::click());
+            let fill = if sel { theme::accent().gamma_multiply(0.18) } else if resp.hovered() { p.hover } else { Color32::TRANSPARENT };
+            ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+            let stroke = if sel { Stroke::new(1.5, theme::accent()) } else { Stroke::new(1.0, p.control_border) };
+            ui.painter().rect_stroke(rect, CornerRadius::same(7), stroke, egui::StrokeKind::Inside);
+            shape_icon(ui, rect.shrink(2.0), shape, s.pip_roundness, if sel { theme::accent() } else { p.secondary });
             if resp.on_hover_text(shape.label()).clicked() {
                 s.pip_shape = shape;
             }
         }
     });
     ui.add_space(4.0);
-    // Label (64) + slider + value box (about 52) + spacing must fit.
-    let slider_w = (ui.available_width() - 64.0 - 60.0 - 40.0).max(60.0);
-    let row = |ui: &mut Ui, label: &str, add: &mut dyn FnMut(&mut Ui)| {
-        ui.horizontal(|ui| {
-            ui.add_sized(vec2(64.0, 18.0), egui::Label::new(RichText::new(label).size(SECONDARY).color(p.secondary)));
-            add(ui);
-        });
+    // Label column, slider, then a fixed-width value so sliders line up.
+    const LABEL_W: f32 = 72.0;
+    const VALUE_W: f32 = 40.0;
+    let slider = |ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>, fmt: &dyn Fn(f64) -> String, enabled: bool, extra: f32| -> bool {
+        ui.spacing_mut().slider_width = (ui.available_width() - VALUE_W - extra - 8.0).max(40.0);
+        let changed = ui.add_enabled(enabled, egui::Slider::new(value, range).show_value(false)).changed();
+        w::slot(ui, VALUE_W, Align::Max, RichText::new(fmt(*value)).size(SECONDARY + 1.0).color(p.secondary));
+        changed
     };
-    ui.spacing_mut().slider_width = slider_w;
-    row(ui, "Size", &mut |ui| {
+    w::field(ui, "Size", LABEL_W, |ui| {
         let mut pct = s.pip_size * 100.0;
-        if ui.add(egui::Slider::new(&mut pct, 10.0..=50.0).suffix(" %").integer()).changed() {
-            s.pip_size = pct / 100.0;
+        if slider(ui, &mut pct, 10.0..=50.0, &|v| format!("{v:.0}%"), true, 0.0) {
+            s.pip_size = pct.round() / 100.0;
         }
     });
-    row(ui, "Roundness", &mut |ui| {
+    w::field(ui, "Roundness", LABEL_W, |ui| {
         let mut pct = s.pip_roundness * 100.0;
-        if ui.add_enabled(s.pip_shape.uses_roundness(), egui::Slider::new(&mut pct, 0.0..=100.0).suffix(" %").integer()).changed() {
-            s.pip_roundness = pct / 100.0;
+        let on = s.pip_shape.uses_roundness();
+        if slider(ui, &mut pct, 0.0..=100.0, &|v| format!("{v:.0}%"), on, 0.0) {
+            s.pip_roundness = pct.round() / 100.0;
         }
     });
-    row(ui, "Border", &mut |ui| {
-        // Narrower slider: the color swatch shares the row.
-        ui.spacing_mut().slider_width = slider_w - 30.0;
-        ui.add(egui::Slider::new(&mut s.pip_border, 0.0..=20.0).suffix(" px").integer());
+    w::field(ui, "Border", LABEL_W, |ui| {
+        // The color swatch shares the row.
+        let mut b = s.pip_border;
+        if slider(ui, &mut b, 0.0..=20.0, &|v| format!("{v:.0} px"), true, 30.0) {
+            s.pip_border = b.round();
+        }
         ui.add_enabled_ui(s.pip_border > 0.0, |ui| {
             ui.spacing_mut().interact_size = vec2(22.0, 18.0);
             ui.color_edit_button_srgb(&mut s.pip_border_color);
         });
     });
-    row(ui, "Position", &mut |ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
+    w::field(ui, "Position", LABEL_W, |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
         for (c, label, tip) in [
             (Corner::TopLeft, "↖", "Top left"),
             (Corner::TopRight, "↗", "Top right"),
@@ -352,7 +366,7 @@ fn overlay_controls(ui: &mut Ui, s: &mut Settings) {
             (Corner::BottomRight, "↘", "Bottom right"),
         ] {
             let sel = s.pip_place == Place::Corner(c);
-            if ui.add(egui::Button::selectable(sel, label).min_size(vec2(26.0, 22.0))).on_hover_text(tip).clicked() {
+            if ui.add(egui::Button::selectable(sel, label).min_size(vec2(28.0, 24.0)).corner_radius(6)).on_hover_text(tip).clicked() {
                 s.pip_place = Place::Corner(c);
             }
         }
@@ -360,11 +374,12 @@ fn overlay_controls(ui: &mut Ui, s: &mut Settings) {
             ui.label(RichText::new("custom").size(SECONDARY).color(p.secondary));
         }
     });
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut s.pip_shadow, "Shadow");
-        ui.checkbox(&mut s.mirror, "Mirror");
-    });
-    ui.label(RichText::new("Drag the camera in the preview to move it; it snaps to corners.").size(SECONDARY).color(p.secondary));
+    w::divider(ui);
+    w::row(ui, "Shadow", |ui| w::switch(ui, &mut s.pip_shadow, true));
+    w::row(ui, "Mirror", |ui| w::switch(ui, &mut s.mirror, true));
+    w::divider(ui);
+    w::hint(ui, "Drag the camera in the preview to move it; it snaps to corners.");
+    ui.add_space(2.0);
 }
 
 fn controls(ui: &mut Ui, st: &mut State) {
@@ -475,95 +490,113 @@ fn mic_label(mics: &[(Option<String>, String)], id: &Option<String>) -> Option<S
 fn combo<T: Clone + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, options: &[(T, String)], enabled: bool) -> bool {
     let current = options.iter().find(|(v, _)| v == value).map(|(_, l)| l.clone()).unwrap_or_default();
     let mut changed = false;
-    ui.add_enabled_ui(enabled, |ui| {
-        let resp = egui::ComboBox::from_id_salt(id).width(ui.available_width()).truncate().selected_text(current.clone()).show_ui(ui, |ui| {
-            for (v, label) in options {
-                if ui.selectable_label(v == value, label).clicked() && v != value {
-                    *value = v.clone();
-                    changed = true;
-                }
-            }
+    // An explicit full-width slot: laid out bare, a combo with a short
+    // label can come out narrower than the row.
+    let full = ui.available_width();
+    ui.allocate_ui_with_layout(vec2(full, 24.0), Layout::top_down(Align::Min), |ui| {
+        ui.add_enabled_ui(enabled, |ui| {
+            let resp = egui::ComboBox::from_id_salt(id)
+                .width(full)
+                .truncate()
+                .icon(w::popup_chevrons)
+                .selected_text(current.clone())
+                .show_ui(ui, |ui| {
+                    for (v, label) in options {
+                        if ui.selectable_label(v == value, label).clicked() && v != value {
+                            *value = v.clone();
+                            changed = true;
+                        }
+                    }
+                });
+            // Long names are cut to fit; show the whole one on hover.
+            resp.response.on_hover_text(current);
         });
-        // Long names are cut to fit; show the whole one on hover.
-        resp.response.on_hover_text(current);
     });
     changed
 }
 
 fn sources(ui: &mut Ui, st: &mut State) {
+    let p = theme::pal(ui);
     let recording = st.recording.is_some() || st.finishing;
     let idle = !recording;
     let mut s = st.settings.clone();
 
-    section(ui, "SCENE");
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let w = (ui.available_width() - 8.0) / 3.0;
-        for scene in Scene::ALL {
-            // While recording, only scenes the running session supports.
-            let ok = idle || st.can_switch_live(scene);
+    w::header(ui, Icon::Scene, "Scene");
+    // While recording, only scenes the running session supports.
+    let scenes: Vec<(Scene, &str, bool, &str)> = Scene::ALL
+        .into_iter()
+        .map(|scene| {
             let label = match scene {
                 Scene::Screen => "Screen",
                 Scene::ScreenCam => "Screen + Cam",
                 Scene::Cam => "Camera",
             };
-            let sel = s.scene == scene;
-            let b = egui::Button::selectable(sel, RichText::new(label).size(SECONDARY + 1.0)).min_size(vec2(w, 26.0));
-            let resp = ui.add_enabled(ok, b);
-            let resp = if ok { resp } else { resp.on_disabled_hover_text("Start the recording with a camera scene to switch live") };
-            if resp.clicked() && !sel {
-                s.scene = scene;
-                if let Some(r) = &st.recording {
-                    r.set_scene(scene);
-                }
+            (scene, label, idle || st.can_switch_live(scene), "Start the recording with a camera scene to switch live")
+        })
+        .collect();
+    if w::segmented(ui, &mut s.scene, &scenes)
+        && let Some(r) = &st.recording
+    {
+        r.set_scene(s.scene);
+    }
+
+    w::header(ui, Icon::Display, "Screen");
+    w::card(ui, |ui| {
+        let displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
+        combo(ui, "display", &mut s.display, &displays, idle);
+        let mut targets: Vec<(Option<u32>, String)> = vec![(None, "Entire display".into())];
+        targets.extend(st.windows.iter().map(|(id, l)| (Some(*id), l.clone())));
+        ui.horizontal(|ui| {
+            let bw = 26.0;
+            ui.allocate_ui(vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0), |ui| {
+                combo(ui, "window", &mut s.window, &targets, idle);
+            });
+            // Tight padding so the button is exactly `bw` wide: a wider row
+            // would widen every card below it.
+            ui.spacing_mut().button_padding.x = 4.0;
+            if ui.add_enabled(idle, egui::Button::new("↻").min_size(vec2(bw, 24.0))).on_hover_text("Refresh windows and devices").clicked() {
+                st.refresh_devices = true;
             }
-        }
-    });
-
-    section(ui, "SCREEN");
-    let displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
-    combo(ui, "display", &mut s.display, &displays, idle);
-    ui.add_space(4.0);
-    let mut targets: Vec<(Option<u32>, String)> = vec![(None, "Entire display".into())];
-    targets.extend(st.windows.iter().map(|(id, l)| (Some(*id), l.clone())));
-    ui.horizontal(|ui| {
-        let w = ui.available_width() - 30.0;
-        ui.allocate_ui(vec2(w, 24.0), |ui| {
-            combo(ui, "window", &mut s.window, &targets, idle);
         });
-        if ui.add_enabled(idle, egui::Button::new("↻")).on_hover_text("Refresh windows and devices").clicked() {
-            st.refresh_devices = true;
+    });
+
+    w::header(ui, Icon::Camera, "Camera");
+    w::card(ui, |ui| {
+        let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
+        cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
+        combo(ui, "camera", &mut s.camera, &cams, idle && s.scene.uses_cam());
+        if !s.scene.uses_cam() {
+            w::hint(ui, "Pick a camera scene to use the webcam.");
+        }
+    });
+    if s.scene == Scene::ScreenCam {
+        w::header(ui, Icon::Overlay, "Camera Overlay");
+        w::card(ui, |ui| overlay_controls(ui, &mut s));
+    }
+
+    w::header(ui, Icon::Audio, "Audio");
+    w::card(ui, |ui| {
+        w::row(ui, "System audio", |ui| w::switch(ui, &mut s.system_audio, idle));
+        w::divider(ui);
+        w::row(ui, "Microphone", |ui| w::switch(ui, &mut s.mic_enabled, idle));
+        let mics = mic_options(st, &s);
+        if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
+            s.mic_name = mic_label(&mics, &s.mic);
         }
     });
 
-    section(ui, "CAMERA");
-    let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
-    cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
-    combo(ui, "camera", &mut s.camera, &cams, idle && s.scene.uses_cam());
-    if !s.scene.uses_cam() {
-        ui.label(RichText::new("Pick a camera scene to use the webcam.").size(SECONDARY).color(theme::pal(ui).secondary));
-    }
-    if s.scene == Scene::ScreenCam {
-        section(ui, "CAMERA OVERLAY");
-        overlay_controls(ui, &mut s);
-    }
-
-    section(ui, "AUDIO");
-    ui.add_enabled(idle, egui::Checkbox::new(&mut s.system_audio, "System audio"));
-    ui.add_enabled(idle, egui::Checkbox::new(&mut s.mic_enabled, "Microphone"));
-    let mics = mic_options(st, &s);
-    if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
-        s.mic_name = mic_label(&mics, &s.mic);
-    }
-
-    section(ui, "OUTPUT");
-    let codec = s.codec.map_or("Auto codec".to_string(), |c| format!("{c:?}").replace("H264", "H.264").replace("Hevc", "HEVC").replace("Prores", "ProRes 422"));
-    ui.label(
-        RichText::new(format!("{} · {} fps · {} · .{}", s.resolution.to_uppercase(), s.fps, codec, s.container))
-            .size(SECONDARY)
-            .color(theme::pal(ui).secondary),
-    );
-    ui.label(RichText::new(tilde(&s.output_dir)).size(SECONDARY).color(theme::pal(ui).secondary));
+    w::header(ui, Icon::Output, "Output");
+    w::card(ui, |ui| {
+        let codec = s.codec.map_or("Auto".to_string(), |c| format!("{c:?}").replace("H264", "H.264").replace("Hevc", "HEVC").replace("Prores", "ProRes 422"));
+        let value = |ui: &mut Ui, text: String| {
+            ui.add(egui::Label::new(RichText::new(&text).color(p.secondary)).truncate()).on_hover_text(text);
+        };
+        w::row(ui, "Format", |ui| value(ui, format!("{} · {} fps", s.resolution.to_uppercase(), s.fps)));
+        w::divider(ui);
+        w::row(ui, "Codec", |ui| value(ui, format!("{codec} · .{}", s.container)));
+        w::divider(ui);
+        w::row(ui, "Folder", |ui| value(ui, tilde(&s.output_dir)));
+    });
 
     live_controls(ui, st, &mut s);
 
@@ -583,65 +616,78 @@ pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", 
 /// with or without a recording.
 fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     let p = theme::pal(ui);
-    section(ui, "REPLAY BUFFER");
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut s.replay_enabled, "Keep the last");
-        ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
-        ui.add(egui::Slider::new(&mut s.replay_secs, 15..=300).suffix(" s").step_by(5.0));
-    });
-    if let Some((held, bytes)) = st.replay_stats {
-        ui.horizontal(|ui| {
-            let tip = match st.replay_hotkey {
-                Some(true) => "Save the buffer to an MP4 without stopping (⇧⌘S)",
-                _ => "Save the buffer to an MP4 without stopping (⇧⌘S unavailable)",
-            };
-            if ui.add_enabled(held > 0.0, egui::Button::new("Save Replay")).on_hover_text(tip).clicked() {
-                st.cmds.push(Cmd::SaveReplay);
-            }
-            ui.label(RichText::new(format!("{held:.0} s · {} in memory", bytes_text(bytes))).size(SECONDARY).color(p.secondary));
+    w::header(ui, Icon::Replay, "Replay Buffer");
+    w::card(ui, |ui| {
+        w::row(ui, "Keep recent footage", |ui| w::switch(ui, &mut s.replay_enabled, true));
+        w::field(ui, "Length", 72.0, |ui| {
+            ui.spacing_mut().slider_width = (ui.available_width() - 48.0).max(40.0);
+            ui.add(egui::Slider::new(&mut s.replay_secs, 15..=300).step_by(5.0).show_value(false));
+            w::slot(ui, 40.0, Align::Max, RichText::new(format!("{} s", s.replay_secs)).size(SECONDARY + 1.0).color(p.secondary));
         });
-    }
-
-    section(ui, "STREAM");
-    let live = st.stream_id.is_some();
-    let dests: Vec<(String, String)> = STREAM_DESTS.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
-    combo(ui, "stream-dest", &mut s.stream_dest, &dests, !live);
-    if s.stream_dest == "custom" {
-        ui.add_space(4.0);
-        ui.add_enabled(
-            !live,
-            egui::TextEdit::singleline(&mut s.stream_custom_url)
-                .hint_text("rtmp://… or https://…/whip")
-                .desired_width(f32::INFINITY),
-        );
-    }
-    // The key goes to the Keychain (per destination URL), never to settings.
-    let url = s.stream_url();
-    let has_key = if url == st.settings.stream_url() { st.has_stream_key() } else { false };
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        if has_key && st.stream_key_input.is_empty() {
-            ui.label(RichText::new("Stream key saved in Keychain").size(SECONDARY).color(p.secondary));
-            if ui.add_enabled(!live, egui::Button::new("Remove")).clicked() {
-                st.delete_stream_key();
-            }
-        } else {
-            let w = ui.available_width() - 50.0;
-            ui.add_sized(
-                vec2(w, 22.0),
-                egui::TextEdit::singleline(&mut st.stream_key_input).password(true).hint_text("Stream key"),
-            );
-            if ui.add_enabled(!st.stream_key_input.trim().is_empty(), egui::Button::new("Save")).clicked() {
-                st.save_stream_key();
-            }
+        if let Some((held, bytes)) = st.replay_stats {
+            w::divider(ui);
+            ui.horizontal(|ui| {
+                let tip = match st.replay_hotkey {
+                    Some(true) => "Save the buffer to an MP4 without stopping (⇧⌘S)",
+                    _ => "Save the buffer to an MP4 without stopping (⇧⌘S unavailable)",
+                };
+                if ui.add_enabled(held > 0.0, egui::Button::new("Save Replay")).on_hover_text(tip).clicked() {
+                    st.cmds.push(Cmd::SaveReplay);
+                }
+                ui.label(RichText::new(format!("{held:.0} s · {} in memory", bytes_text(bytes))).size(SECONDARY).color(p.secondary));
+            });
         }
     });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
+
+    w::header(ui, Icon::Stream, "Stream");
+    w::card(ui, |ui| {
+        let live = st.stream_id.is_some();
+        let dests: Vec<(String, String)> = STREAM_DESTS.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
+        combo(ui, "stream-dest", &mut s.stream_dest, &dests, !live);
+        if s.stream_dest == "custom" {
+            ui.add_enabled(
+                !live,
+                egui::TextEdit::singleline(&mut s.stream_custom_url)
+                    .hint_text("rtmp://… or https://…/whip")
+                    .margin(vec2(8.0, 4.0))
+                    .desired_width(f32::INFINITY),
+            );
+        }
+        // The key goes to the Keychain (per destination URL), never to settings.
+        let url = s.stream_url();
+        let has_key = if url == st.settings.stream_url() { st.has_stream_key() } else { false };
+        if has_key && st.stream_key_input.is_empty() {
+            w::row(ui, "Stream key", |ui| {
+                if ui.add_enabled(!live, egui::Button::new("Remove")).clicked() {
+                    st.delete_stream_key();
+                }
+                ui.label(RichText::new("In Keychain").size(SECONDARY).color(p.secondary));
+            });
+        } else {
+            ui.horizontal(|ui| {
+                let bw = 52.0;
+                ui.add_sized(
+                    vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0),
+                    egui::TextEdit::singleline(&mut st.stream_key_input).password(true).margin(vec2(8.0, 4.0)).hint_text("Stream key"),
+                );
+                if ui.add_enabled(!st.stream_key_input.trim().is_empty(), egui::Button::new("Save").min_size(vec2(bw, 24.0))).clicked() {
+                    st.save_stream_key();
+                }
+            });
+        }
+        w::divider(ui);
         let whip = url.starts_with("http");
         let ready = !url.is_empty() && (has_key || whip);
         let label = if live { "Stop Stream" } else { "Go Live" };
-        let b = egui::Button::new(RichText::new(label).color(if live { Color32::WHITE } else { p.text })).fill(if live { RED } else { p.control });
+        let (fill, fg) = if live {
+            (RED, Color32::WHITE)
+        } else if ready {
+            (theme::accent(), Color32::WHITE)
+        } else {
+            (p.control, p.secondary)
+        };
+        // Growable atoms on both sides center the label.
+        let b = egui::Button::new((egui::Atom::grow(), RichText::new(label).font(theme::semibold(BODY)).color(fg), egui::Atom::grow())).fill(fill).corner_radius(7).min_size(vec2(ui.available_width(), 28.0));
         let resp = ui.add_enabled(live || ready, b);
         let resp = if ready || live { resp } else { resp.on_disabled_hover_text("Save a stream key first") };
         if resp.clicked() {
@@ -655,10 +701,10 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
             };
             ui.label(RichText::new(text).size(SECONDARY).color(if status.live { p.text } else { p.secondary }));
         }
+        if let Some(e) = st.stream_status.as_ref().and_then(|s| (!s.live).then_some(s.error.as_ref()).flatten()) {
+            ui.add(egui::Label::new(RichText::new(e).size(SECONDARY).color(RED)).wrap());
+        }
     });
-    if let Some(e) = st.stream_status.as_ref().and_then(|s| (!s.live).then_some(s.error.as_ref()).flatten()) {
-        ui.label(RichText::new(e).size(SECONDARY).color(RED));
-    }
 }
 
 pub fn settings_window(ui: &mut Ui, st: &mut State) {

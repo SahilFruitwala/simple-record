@@ -336,3 +336,11 @@ These are tracked in the README under "Known gaps".
 - **2026-10-12 08:30–11:00:** 4K quality: native capture with Metal Lanczos scaling; HEVC
   (enhanced RTMP, WHIP) and platform presets for streams; pixel-sharp zero-copy preview; sRGB
   color management; idle while hidden. Measured with SSIM/PSNR/VMAF.
+- **2026-10-13 21:10–22:00:** Sidebar redesign (GOAL "Beautiful sidebar"). Section headers with
+  painted line icons and letter-spaced uppercase labels; controls grouped in soft rounded cards
+  on a 16/12/8 pt rhythm; label-left, control-right rows with hairline dividers; switches
+  replace checkboxes; a raised-segment Scene control; pop-up chevrons on combos; slider rows
+  with aligned label and value columns; full-width Go Live. Sidebar 304 pt. Fixed a latent
+  overflow (the ↻ button's padding widened every card below it). Before/after shots at
+  1040×660 and 860×560 in `~/Movies/rec-rs-tests/sidebar/`. Light mode not visually checked
+  (needs the system appearance switched).

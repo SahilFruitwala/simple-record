@@ -13,6 +13,7 @@ mod menubar;
 mod preview;
 mod theme;
 mod ui;
+mod widgets;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
