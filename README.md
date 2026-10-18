@@ -61,6 +61,9 @@ is live and baked into the recording. The camera here is a virtual camera with a
 |---|---|
 | ![Settings window: output folder, format, resolution, frame rate, codec, bitrate, audio and camera options](docs/screenshots/settings.png) | ![Menu bar menu: Start Recording (⇧⌘R), Pause, Show Rec Window, Settings, Reveal Last Recording, Open Recordings Folder, Quit](docs/screenshots/menu.png) |
 
+*The main window and Settings screenshots predate the Scene card's frame shape, screen and
+background controls and the Settings tabs. They are described under [The app](#the-app).*
+
 ## Reverse-engineered origin
 
 rec-rs is an independent, clean-room-style reimplementation. It was reverse engineered from
@@ -106,8 +109,12 @@ scripts/srt-e2e.sh               # needs ffmpeg with SRT (ffmpeg -protocols | gr
 
 The app's first run shows a welcome screen with each permission's state, an **Allow…**
 button for the system prompt, **Open System Settings** for a permission that was turned down,
-and **Restart Rec** (macOS applies Screen Recording only after a restart). From the command
-line:
+and **Restart Rec** (macOS applies Screen Recording only after a restart). Only Screen
+Recording is required, and its button is the prominent one. **Continue without Screen
+Recording** skips the welcome screen. Until Screen Recording is allowed, the record button is
+dimmed and a banner says what is missing, with **Request Permissions** and **Open System
+Settings**. Without the microphone, Rec records without it, and the Audio card says so. From
+the command line:
 
 ```sh
 dist/rec-rs permissions --request
@@ -145,20 +152,29 @@ The **main window** contains:
     it. Shape: circle, rounded rectangle, square, pill or squircle, with a roundness slider.
     Size, border (width and color), drop shadow and mirroring are in the sidebar.
   - **Custom scenes**: New Scene starts from the scene shown. The Layers card adds the screen,
-    the camera, other cameras, other displays, video files (looped or not), web pages (alerts,
-    chat, a countdown; transparent pages stay transparent), images (a logo, a frame), text (a
-    name tag, with a box) and color layers; shows, hides, reorders and removes them; and sets each one's box, fit, shape,
-    roundness, border and shadow. Drag layers in the preview to move them and their corners to
-    resize them; they snap to the frame's edges and center. Export a scene as JSON for
-    `record --scene-file`, and import it back.
+    the camera, video files (looped or not), web pages (alerts, chat, a countdown; transparent
+    pages stay transparent), images (a logo, a frame), text (a name tag, with a box) and color
+    layers, plus **Other camera…** and **Other display…** menus. It shows, hides, reorders and
+    removes layers, and sets each one's box, fit, shape, roundness, border and shadow. Drag
+    layers in the preview to move them and their corners to resize them; they snap to the
+    frame's edges and center. Export a scene as JSON for `record --scene-file`, and import it
+    back. **Delete Scene…** (or Delete… on the scene's right-click menu) asks first.
   - **Filters** on the camera (Camera Overlay card, or `--chroma-key`,
     `--camera-brightness/contrast/saturation`) and on any layer: a **chroma key** (green or
     blue screen, with similarity, smoothness and spill removal, computed like OBS's) and
     **color correction** (brightness, contrast, saturation), on the GPU.
   - **Studio mode**: click a scene to stage it; the preview shows it beside the program (what
     is recorded and streamed), and **Transition** (or its shortcut) makes it the program.
-  - **Frame**: the screen's own shape (no bars), or 16:9, 9:16, 1:1 or 4:5, with a gradient
-    background (Settings) behind layers that don't cover it.
+  - **Frame shape**, one click in the Scene card: **Screen** (the screen's own shape, no
+    bars), **16:9**, **9:16**, **1:1** or **4:5**. Vertical switches to 9:16 by itself, and
+    picking another scene switches back, unless you chose the shape yourself.
+  - **Screen** (on Screen and Screen + Camera): **Full frame** (edge to edge) or **On
+    background** (inset with rounded corners, with a **Spacing** slider), so the background
+    shows around it.
+  - **Background**: a gradient behind whatever doesn't cover the frame. Pick one of eight
+    presets (Midnight, Graphite, Ocean, Forest, Sunset, Peach, Paper, Black) or your own top
+    and bottom colours, live, also while recording. The card says when the background is
+    hidden because the screen or camera fills the frame.
   - Scene switches are live, also while recording (provided the recording started with the
     sources the scene needs), with a **Move** (layers glide to their new places), **Fade** or
     **Cut** transition. Everything is baked into the recording by the CoreImage compositor, so
@@ -176,6 +192,7 @@ The **main window** contains:
 - **Record / Stop** (⇧⌘R from anywhere by default), **Pause / Resume**, the recording timer,
   and **level meters** for system audio and mic with peak hold.
 - **Reveal Last** and **Open Folder**.
+- **Output**: the format, codec and folder at a glance. Click one to change it in Settings.
 - **Replay buffer**: keep the last 15–300 s (default 60) in memory, shown with its memory use.
   **Save Replay** or **⇧⌘S** from anywhere writes it to an MP4 in the output folder without
   stopping anything. ⇧⌘S is only taken while the buffer is on, because it is Save As in most
@@ -187,26 +204,33 @@ The **main window** contains:
   never in the settings file or logs. **Go Live** / **Stop Stream**, with each stream's
   duration, bitrate and dropped frames, and a LIVE badge.
 
+  The sidebar is resizable: drag its left edge (280–460 pt). The width is remembered, and
+  double-clicking the edge restores the default.
+
   The replay buffer and the stream run with or without a recording. Starting or stopping a
   recording, or closing the window, doesn't interrupt them: the capture keeps running for them
   and short gaps while the app swaps capture sessions are bridged (the last frame repeats,
   silence fills the audio).
 
-The **settings window** (⌘, or the Settings… button) covers:
+The **settings window** (⌘, or the Settings… button) has six tabs. It is locked while
+recording, except the camera overlay:
 
-- Output folder and container (`.mov` or `.mp4`).
-- Resolution: 720p, 1080p, 1440p, 4K or native. The frame always has the shape of the display
-  or window (4K of a 16:10 display is 3456x2160): no black bars, nothing cropped.
-- Frame rate, codec (auto, H.264, HEVC, ProRes), bitrate, and HDR (experimental).
-- Cursor and click highlighting.
-- Scenes: frame shape, background gradient, transition and its length.
-- Audio devices, track layout, gains, and the mic filters' thresholds, ratio and makeup gain.
-- Shortcuts: click an action and press the keys. Start/stop recording, pause, save replay, go
-  live and next/previous scene.
-- Camera device, plus the overlay: shape, roundness, size, border, shadow, corner presets and
-  mirroring.
-- Live encode for the replay buffer and streams: resolution, video bitrate, CBR, keyframe
-  interval and audio bitrate (locked while streaming).
+- **General**: output folder and container (`.mov` or `.mp4`); scenes' frame shape,
+  background and transition with its length; Report a Problem… and Open Log; and **Restore
+  Defaults…**, which asks first and keeps the output folder.
+- **Video**: resolution (720p, 1080p, 1440p, 4K or native), frame rate, codec (auto, H.264,
+  HEVC, ProRes), bitrate, HDR (experimental), cursor and click highlighting, and the low-power
+  preview. The frame always has the shape of the display or window (4K of a 16:10 display is
+  3456x2160): no black bars, nothing cropped.
+- **Audio**: system audio and microphone, track layout, gains, and the mic filters (low cut,
+  noise suppression, a noise gate with its level, a compressor with its threshold, ratio and
+  makeup gain).
+- **Streaming**: the live encode for the replay buffer and streams: resolution, codec, video
+  bitrate, CBR, keyframe interval and audio bitrate (locked while streaming).
+- **Shortcuts**: click an action and press the keys; × removes one. Start/stop recording,
+  pause, save replay, go live, next/previous scene and transition.
+- **Camera**: the camera, plus the overlay: shape, roundness, size, border, shadow, corner
+  presets, mirroring and filters.
 
 Settings persist in `~/Library/Application Support/rec-rs/settings.json`.
 
