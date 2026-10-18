@@ -2,7 +2,8 @@
 //! SRT caller -> a listener (FFmpeg's libsrt), or straight to a .ts file.
 //! Run by `scripts/srt-e2e.sh`.
 //!
-//! Usage: srt_e2e MEDIA_DIR (OUT.ts | srt://...)
+//! Usage: srt_e2e MEDIA_DIR (OUT.ts | srt://...) [hevc]
+//! (H.264 from MEDIA_DIR/v.h264, or HEVC from v.hevc; AAC from a.aac.)
 use rec_rs_portable::{srt, ts};
 use std::time::{Duration, Instant};
 
@@ -30,27 +31,30 @@ fn nals(data: &[u8]) -> Vec<&[u8]> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        eprintln!("usage: srt_e2e MEDIA_DIR (OUT.ts | srt://...)");
+    if !(3..=4).contains(&args.len()) {
+        eprintln!("usage: srt_e2e MEDIA_DIR (OUT.ts | srt://...) [hevc]");
         std::process::exit(64);
     }
     let dir = std::path::Path::new(&args[1]);
     let target = &args[2];
-    let v = std::fs::read(dir.join("v.h264")).expect("v.h264 (Annex B with AUDs)");
+    let hevc = args.get(3).is_some_and(|a| a == "hevc");
+    let v = std::fs::read(dir.join(if hevc { "v.hevc" } else { "v.h264" })).expect("video (Annex B with AUDs)");
     let a = std::fs::read(dir.join("a.aac")).expect("a.aac (ADTS)");
     // Access units, split at AUDs, as AVCC (what VideoToolbox gives).
     let mut aus: Vec<(bool, Vec<u8>)> = vec![];
     let mut params: Vec<Vec<u8>> = vec![];
+    // NAL types: (access unit delimiter, parameter sets, keyframes).
+    let (aud, sets, keys): (u8, &[u8], &[u8]) = if hevc { (35, &[32, 33, 34], &[19, 20, 21]) } else { (9, &[7, 8], &[5]) };
     for n in nals(&v) {
-        let t = n[0] & 0x1F;
+        let t = if hevc { (n[0] >> 1) & 0x3F } else { n[0] & 0x1F };
         match t {
-            9 => aus.push((false, vec![])),
-            7 | 8 => {
-                if params.len() < 2 { params.push(n.to_vec()); }
+            t if t == aud => aus.push((false, vec![])),
+            t if sets.contains(&t) => {
+                if params.len() < sets.len() { params.push(n.to_vec()); }
             }
             _ => {
-                let au = aus.last_mut().unwrap();
-                if t == 5 { au.0 = true; }
+                let Some(au) = aus.last_mut() else { continue };
+                if keys.contains(&t) { au.0 = true; }
                 au.1.extend_from_slice(&(n.len() as u32).to_be_bytes());
                 au.1.extend_from_slice(n);
             }
@@ -69,7 +73,7 @@ fn main() {
     let mut events: Vec<(f64, bool, usize)> = (0..aus.len()).map(|k| (k as f64 / 30.0, true, k)).collect();
     events.extend((0..frames.len()).map(|k| (k as f64 * 1024.0 / 48000.0, false, k)));
     events.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let mut mux = ts::Muxer::new(false);
+    let mut mux = ts::Muxer::new(hevc);
     let base = 126_000u64;
     let mut stream = vec![];
     let mut chunks: Vec<(f64, Vec<u8>)> = vec![];
@@ -78,7 +82,7 @@ fn main() {
         let pts = base + (t * 90_000.0).round() as u64;
         if video {
             let (key, d) = &aus[k];
-            mux.video(pts, *key, &ts::annex_b(d, false, *key, &params), &mut out);
+            mux.video(pts, *key, &ts::annex_b(d, hevc, *key, &params), &mut out);
         } else {
             let mut adts = ts::adts(frames[k].len(), 3, 2).to_vec();
             adts.extend_from_slice(&frames[k]);

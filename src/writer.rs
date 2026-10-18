@@ -1389,6 +1389,62 @@ fn err_text(w: &AVAssetWriter) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// HDR end to end through the real pieces: ScreenCaptureKit's HDR
+    /// format, the compositor rendering in its color space, and the writer:
+    /// the file must be HEVC Main 10 tagged BT.2020 with PQ (or HLG).
+    #[test]
+    fn hdr_file_is_main10_bt2020() {
+        use objc2_core_video::*;
+        let (pf, cs) = crate::screen::hdr_format();
+        let name: String = pf.to_be_bytes().iter().map(|b| *b as char).collect();
+        println!("ScreenCaptureKit HDR: pixel format '{name}', color space {cs}");
+        assert!(cs.contains("PQ") || cs.contains("HLG"), "unexpected HDR color space {cs}");
+        let pq = cs.contains("PQ");
+        let path = std::env::temp_dir().join(format!("rec-hdr-test-{}.mov", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let spec = super::VideoSpec { width: 320, height: 180, fps: 30, codec: super::Codec::Hevc, bitrate: 4_000_000, pixel_format: pf, hdr_pq: Some(pq) };
+        let o = super::open_output(&path, &spec, false, false, super::AudioLayout::Both).unwrap();
+        let mut c = crate::compose::Compositor::new(320, 180, Default::default());
+        c.set_color_space(&cs);
+        c.set_scene(crate::layout::SceneSpec::Template(crate::compose::Scene::Screen), false);
+        unsafe {
+            o.writer.startSessionAtSourceTime(objc2_core_media::CMTime::new(0, 30));
+            for i in 0..30 {
+                while !o.video.isReadyForMoreMediaData() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let pool = o.adaptor.pixelBufferPool().expect("adaptor pool");
+                let mut buf = std::ptr::null_mut();
+                CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));
+                let buf: objc2_core_foundation::CFRetained<CVPixelBuffer> = objc2_core_foundation::CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap());
+                // No screen yet: the background gradient, in the HDR space.
+                c.render(i as f64 / 30.0, None, None, &[], &buf);
+                assert!(o.adaptor.appendPixelBuffer_withPresentationTime(&buf, objc2_core_media::CMTime::new(i, 30)), "{}", super::err_text(&o.writer));
+            }
+            o.video.markAsFinished();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let block = block2::RcBlock::new(move || {
+                let _ = tx.send(());
+            });
+            o.writer.finishWritingWithCompletionHandler(&block);
+            rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+            assert_eq!(o.writer.status(), objc2_av_foundation::AVAssetWriterStatus::Completed, "{}", super::err_text(&o.writer));
+        }
+        let out = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,profile,pix_fmt,color_primaries,color_transfer,color_space,nb_frames", "-of", "default=nw=1"])
+            .arg(&path)
+            .output()
+            .expect("ffprobe");
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        println!("{text}");
+        let _ = std::fs::remove_file(&path);
+        assert!(text.contains("codec_name=hevc"), "{text}");
+        assert!(text.contains("profile=Main 10"), "{text}");
+        assert!(text.contains("color_primaries=bt2020"), "{text}");
+        assert!(text.contains(if pq { "color_transfer=smpte2084" } else { "color_transfer=arib-std-b67" }), "{text}");
+        assert!(text.contains("nb_frames=30"), "{text}");
+    }
+
     /// Color levels through the encoder for BGRA frames untagged, tagged
     /// sRGB (the encoder converts those to the BT.709 curve: darker
     /// midtones) and BT.709 (a camera's tags). PROBE_CAM=1 sends them

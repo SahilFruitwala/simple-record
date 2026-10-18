@@ -12,11 +12,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install ffmpeg (with libsrt)
+      - name: Install ffmpeg (with libsrt, libx264, libx265)
         run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
       - name: Unit tests (layouts, shapes, mic filters, shortcuts, MPEG-TS, SRT)
         run: cargo test --manifest-path portable/Cargo.toml
-      - name: SRT against FFmpeg's libsrt (plain, AES-128/256, 5% loss, wrong passphrase)
+      - name: Install MediaMTX (a second, independent SRT implementation)
+        run: |
+          tag=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/bluenviron/mediamtx/releases/latest | jq -r .tag_name)
+          curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/$tag/mediamtx_${tag}_linux_amd64.tar.gz" | sudo tar xz -C /usr/local/bin mediamtx
+          mediamtx --version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: SRT end to end (libsrt plain, AES-128/256, HEVC, 5% loss, wrong passphrase; MediaMTX)
         run: scripts/srt-e2e.sh
 
   macos:
