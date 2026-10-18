@@ -16,6 +16,15 @@ ffmpeg -v error -y -f lavfi -i testsrc2=size=640x360:rate=30 -t 8 -c:v libx264 -
   -pix_fmt yuv420p -x264-params aud=1 -f h264 "$WORK/v.h264"
 ffmpeg -v error -y -f lavfi -i sine=frequency=440:sample_rate=48000 -t 8 -c:a aac -ac 2 -b:a 128k -f adts "$WORK/a.aac"
 
+# Run "$@" in the background, stopped after $1 seconds (macOS has no
+# `timeout`).
+bg_for() {
+  local secs=$1; shift
+  "$@" &
+  local pid=$!
+  (sleep "$secs"; kill "$pid" 2>/dev/null || true) &
+}
+
 fail=0
 # The received file must hold every frame and decode without errors.
 check() {
@@ -39,10 +48,10 @@ send() {
   local name=$1 cq=$2 lq=$3 up=${4:-} down=${5:-}
   port=$((port + 2))
   local out="$WORK/$port.ts" target=$port
-  timeout 30 ffmpeg -v error -y -i "srt://127.0.0.1:$port?mode=listener&$lq" -c copy -f mpegts "$out" 2>/dev/null &
+  bg_for 30 ffmpeg -v error -y -i "srt://127.0.0.1:$port?mode=listener&$lq" -c copy -f mpegts "$out" 2>/dev/null
   if [ -n "$up" ]; then
     target=$((port + 1))
-    timeout 30 "$BIN/lossy_relay" "127.0.0.1:$target" "127.0.0.1:$port" "$up" "$down" 2>/dev/null &
+    bg_for 30 "$BIN/lossy_relay" "127.0.0.1:$target" "127.0.0.1:$port" "$up" "$down" 2>/dev/null
   fi
   sleep 1
   "$BIN/srt_e2e" "$WORK" "srt://127.0.0.1:$target?$cq" 2>"$WORK/client.log" || { echo "FAIL $name: $(tail -1 "$WORK/client.log")"; fail=1; return; }
@@ -58,7 +67,7 @@ send "srt 5% loss" "latency=300" "latency=300000" 5 2
 
 # A wrong passphrase must be refused, with that reason.
 port=$((port + 2))
-timeout 10 ffmpeg -v error -y -i "srt://127.0.0.1:$port?mode=listener&passphrase=correct-horse-battery" -c copy -f mpegts "$WORK/x.ts" 2>/dev/null &
+bg_for 10 ffmpeg -v error -y -i "srt://127.0.0.1:$port?mode=listener&passphrase=correct-horse-battery" -c copy -f mpegts "$WORK/x.ts" 2>/dev/null
 sleep 1
 if "$BIN/srt_e2e" "$WORK" "srt://127.0.0.1:$port?passphrase=wrong-horse-battery" 2>"$WORK/client.log"; then
   echo "FAIL wrong passphrase was accepted"; fail=1

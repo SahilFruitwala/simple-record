@@ -290,11 +290,13 @@ pub struct RecordArgs {
     #[arg(long)]
     denoise: bool,
     /// Microphone: noise gate opening above this level (dBFS, e.g. -45).
-    #[arg(long, value_name = "DB", allow_hyphen_values = true, num_args = 0..=1, default_missing_value = "-45")]
+    // allow_negative_numbers, not allow_hyphen_values: with an optional
+    // value, the latter takes the next flag as the value (`--gate --low-cut`).
+    #[arg(long, value_name = "DB", allow_negative_numbers = true, num_args = 0..=1, default_missing_value = "-45")]
     gate: Option<f32>,
     /// Microphone: compressor starting at this level (dBFS, e.g. -20),
     /// 3:1 with 6 dB makeup gain.
-    #[arg(long, value_name = "DB", allow_hyphen_values = true, num_args = 0..=1, default_missing_value = "-20")]
+    #[arg(long, value_name = "DB", allow_negative_numbers = true, num_args = 0..=1, default_missing_value = "-20")]
     compressor: Option<f32>,
     /// Microphone capture backend.
     #[arg(long, value_enum, default_value_t = record::MicBackend::Sck)]
@@ -921,6 +923,10 @@ mod tests {
         assert_eq!(a.compressor, Some(-24.0));
         let a = parse_record_args(&[]).unwrap();
         assert!(a.gate.is_none() && a.compressor.is_none());
+        // A value-less filter flag doesn't swallow the next flag.
+        let a = parse_record_args(&["--gate", "--low-cut", "--compressor"]).unwrap();
+        assert_eq!((a.gate, a.compressor, a.low_cut), (Some(-45.0), Some(-20.0), true));
+        assert_eq!(parse_record_args(&["--gate", "-50"]).unwrap().gate, Some(-50.0));
     }
 
     #[test]
