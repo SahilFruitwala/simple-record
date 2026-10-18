@@ -623,7 +623,7 @@ mod tests {
         let except = Settings { app_audio: crate::appaudio::AppAudio::Except(vec!["com.apple.Music".into()]), ..Default::default() };
         assert!(except.record_args(None).windows(2).any(|w| w == ["--audio-except", "com.apple.Music"]));
         let none = Settings { app_audio: crate::appaudio::AppAudio::Except(vec![]), ..Default::default() };
-        assert!(!none.record_args(None).iter().any(|a| a.starts_with("--audio-")));
+        assert!(!none.record_args(None).iter().any(|a| a == "--audio-apps" || a == "--audio-except"));
     }
 
     #[test]

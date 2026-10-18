@@ -717,7 +717,15 @@ mod tests {
             let pb: objc2_core_foundation::CFRetained<CVPixelBuffer> =
                 unsafe { objc2_core_foundation::CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap()) };
             live.video(&pb, t0 - 1.0, fps as u32);
-            std::thread::sleep(std::time::Duration::from_millis(400));
+            // Until every encoder (a destination's own too) is made: a busy
+            // machine takes longer than the usual ~100 ms.
+            fn made(l: &Live) -> bool {
+                (l.enc.lock().unwrap().video.is_some() || l.made.lock().unwrap().is_some()) && l.children().iter().all(|c| made(c))
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !made(live) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         }
         for i in 0..n {
             let t = t0 + i as f64 / fps as f64;
