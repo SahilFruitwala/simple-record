@@ -639,6 +639,48 @@ pub fn place(sw: f64, sh: f64, r: [f64; 4], fit: Fit) -> ([f64; 4], f64, f64) {
     }
 }
 
+/// Which part of a layer box a drag holds.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Grip {
+    Body,
+    Corner(bool, bool),
+}
+
+/// Move a box (fractions) by a drag of `d` fractions with `grip`, keeping
+/// it at least `min` across, and snap its edges and center to the frame's
+/// edges and center when within `snap`.
+pub fn drag_box(r: [f64; 4], grip: Grip, d: [f64; 2], min: f64, snap: f64) -> [f64; 4] {
+    let [mut x, mut y, mut w, mut h] = r;
+    let snapped = |v: f64, targets: &[f64]| targets.iter().copied().find(|t| (v - t).abs() <= snap);
+    match grip {
+        Grip::Body => {
+            x += d[0];
+            y += d[1];
+            // The nearest of the left edge, center and right edge to a target.
+            for (pos, size) in [(&mut x, w), (&mut y, h)] {
+                let candidates = [(*pos, 0.0), (*pos + size / 2.0, size / 2.0), (*pos + size, size)];
+                if let Some((v, off)) = candidates.iter().find_map(|(v, off)| snapped(*v, &[0.0, 0.5, 1.0]).map(|t| (t, *off))) {
+                    *pos = v - off;
+                }
+            }
+        }
+        Grip::Corner(right, bottom) => {
+            let (mut x0, mut y0, mut x1, mut y1) = (x, y, x + w, y + h);
+            if right { x1 += d[0] } else { x0 += d[0] }
+            if bottom { y1 += d[1] } else { y0 += d[1] }
+            for v in [&mut x0, &mut y0, &mut x1, &mut y1] {
+                if let Some(t) = snapped(*v, &[0.0, 0.5, 1.0]) {
+                    *v = t;
+                }
+            }
+            if right { x1 = x1.max(x0 + min) } else { x0 = x0.min(x1 - min) }
+            if bottom { y1 = y1.max(y0 + min) } else { y0 = y0.min(y1 - min) }
+            (x, y, w, h) = (x0, y0, x1 - x0, y1 - y0);
+        }
+    }
+    [x, y, w, h]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,5 +837,26 @@ mod tests {
             let json = serde_json::to_string(&c).unwrap();
             assert_eq!(json, format!("\"{name}\""));
         }
+    }
+
+    #[test]
+    fn dragging_moves_and_snaps() {
+        let r = drag_box([0.1, 0.1, 0.2, 0.2], Grip::Body, [0.05, 0.0], 0.02, 0.01);
+        assert!((r[0] - 0.15).abs() < 1e-9 && r[2] == 0.2);
+        // The center lands near the middle: it snaps there.
+        let r = drag_box([0.3, 0.1, 0.2, 0.2], Grip::Body, [0.095, 0.0], 0.02, 0.01);
+        assert!((r[0] + r[2] / 2.0 - 0.5).abs() < 1e-9, "{r:?}");
+        // The left edge snaps to the frame edge.
+        let r = drag_box([0.02, 0.4, 0.2, 0.2], Grip::Body, [-0.015, 0.0], 0.02, 0.01);
+        assert_eq!(r[0], 0.0);
+    }
+
+    #[test]
+    fn corners_resize_with_a_minimum() {
+        let r = drag_box([0.1, 0.1, 0.2, 0.2], Grip::Corner(true, true), [0.1, 0.05], 0.02, 0.0);
+        assert!((r[2] - 0.3).abs() < 1e-9 && (r[3] - 0.25).abs() < 1e-9 && r[0] == 0.1);
+        // Dragging the top-left past the bottom-right stops at the minimum.
+        let r = drag_box([0.1, 0.1, 0.2, 0.2], Grip::Corner(false, false), [0.5, 0.5], 0.02, 0.0);
+        assert!((r[2] - 0.02).abs() < 1e-9 && (r[0] + r[2] - 0.3).abs() < 1e-9, "{r:?}");
     }
 }

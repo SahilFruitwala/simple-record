@@ -432,14 +432,18 @@ impl Sink {
     /// Switch scenes live, with the scene transition. Anything but the
     /// plain screen needs a compositor (the session was started with a
     /// webcam or a composed scene); returns false otherwise.
-    pub fn set_scene(&mut self, scene: SceneSpec) -> bool {
+    pub fn set_scene(&mut self, scene: SceneSpec, animate: bool) -> bool {
         match self.compositor.as_mut() {
             Some(c) => {
-                c.set_scene(scene, true);
+                c.set_scene(scene, animate);
                 true
             }
             None => scene == SceneSpec::Template(Scene::Screen),
         }
+    }
+
+    pub fn composed(&self) -> bool {
+        self.compositor.is_some()
     }
 
     /// Pause at host time `now`: nothing captured from the next frame slot on

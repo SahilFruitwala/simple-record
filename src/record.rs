@@ -449,10 +449,18 @@ impl Session {
 
     /// Switch scenes live (with the transition); false if this session
     /// can't show it (see `Sink::set_scene`).
-    pub fn set_scene(&self, scene: SceneSpec) -> bool {
+    pub fn set_scene(&self, scene: SceneSpec, animate: bool) -> bool {
         let mut ok = false;
-        self.shared.with(|s| ok = s.set_scene(scene));
+        self.shared.with(|s| ok = s.set_scene(scene, animate));
         ok
+    }
+
+    /// Frames go through the compositor (any scene can be shown, given
+    /// its sources).
+    pub fn composed(&self) -> bool {
+        let mut c = false;
+        self.shared.with(|s| c = s.composed());
+        c
     }
 
     /// (stats, peak levels [system, mic] since last call).

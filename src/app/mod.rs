@@ -11,6 +11,7 @@ mod dock;
 mod macos;
 mod menubar;
 mod preview;
+mod scenes;
 mod theme;
 mod ui;
 mod widgets;
@@ -162,11 +163,14 @@ pub struct State {
     pub refresh_devices: bool,
     /// Overlay last sent to the running session.
     pip_applied: Option<crate::compose::PipSpec>,
-    /// Scene and look (background, transition) last sent to it.
-    scene_applied: Option<crate::layout::SceneSpec>,
+    /// Scene (which one, and what it shows) and look (background,
+    /// transition) last sent to it.
+    scene_applied: Option<((crate::compose::Scene, Option<usize>), crate::layout::SceneSpec)>,
     look_applied: Option<(crate::layout::Background, crate::layout::Transition, u32)>,
     /// Width / height of the screen source (for scene thumbnails).
     pub screen_aspect: f64,
+    /// The custom scene layer being edited.
+    pub selected_layer: Option<usize>,
     /// Camera aspect ratio from the running session (for drag hit-testing).
     pub cam_aspect: f64,
     pub permissions_missing: bool,
@@ -261,9 +265,13 @@ impl State {
             self.look_applied = None;
             return;
         };
-        let spec = self.settings.scene_spec();
-        if self.scene_applied.as_ref() != Some(&spec) && sess.set_scene(spec.clone()) {
-            self.scene_applied = Some(spec);
+        let applied = (self.settings.scene_id(), self.settings.scene_spec());
+        if self.scene_applied.as_ref() != Some(&applied) {
+            // Another scene animates in; edits to the same one apply at once.
+            let animate = self.scene_applied.as_ref().is_none_or(|(id, _)| *id != applied.0);
+            if sess.set_scene(applied.1.clone(), animate) {
+                self.scene_applied = Some(applied);
+            }
         }
         let s = &self.settings;
         let look = (s.background, s.transition, s.transition_ms);
@@ -276,14 +284,17 @@ impl State {
     /// The running session was started with the current scene and look.
     fn scene_started(&mut self) {
         let s = &self.settings;
-        self.scene_applied = Some(s.scene_spec());
+        self.scene_applied = Some((s.scene_id(), s.scene_spec()));
         self.look_applied = Some((s.background, s.transition, s.transition_ms));
     }
 
-    /// Whether the running session can switch to `scene` live.
-    pub fn can_switch_live(&self, scene: Scene) -> bool {
-        let cam_running = self.recording.as_ref().is_some_and(|s| s.camera_name().is_some());
-        !scene.uses_cam() || cam_running
+    /// Whether the running recording can switch to `scene` live: it needs
+    /// the camera if the scene shows it, and the compositor unless it is
+    /// the plain screen.
+    pub fn can_switch_live(&self, scene: &crate::layout::SceneSpec) -> bool {
+        let Some(r) = &self.recording else { return true };
+        let plain = *scene == crate::layout::SceneSpec::Template(Scene::Screen);
+        (!scene.uses_cam() || r.camera_name().is_some()) && (plain || r.composed())
     }
 }
 
@@ -363,6 +374,7 @@ impl App {
             scene_applied: None,
             look_applied: None,
             screen_aspect: 16.0 / 10.0,
+            selected_layer: None,
             cam_aspect: 16.0 / 9.0,
             live: crate::live::Live::new(),
             replay_stats: None,
@@ -556,6 +568,7 @@ impl App {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let (mut o, t) = crate::prepare(crate::parse_record_args(&refs)?)?;
         o.live = Some(self.st.live.clone());
+        o.scene = self.st.settings.scene_spec();
         // Fallbacks never block: say so once.
         let warning = [warning, o.mic_warning.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let warning = Some(warning).filter(|w| !w.is_empty());

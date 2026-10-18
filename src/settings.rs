@@ -8,7 +8,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::compose::{PipSpec, Place, Scene, Shape};
-use crate::layout::{Background, Canvas, Transition};
+use crate::layout::{Background, Canvas, Layout, SceneSpec, Transition};
 use crate::writer::{AudioLayout, Codec};
 
 pub const RESOLUTIONS: [(&str, &str); 5] =
@@ -36,6 +36,10 @@ pub struct Settings {
     pub background: Background,
     pub transition: Transition,
     pub transition_ms: u32,
+    /// The user's own scenes.
+    pub custom_scenes: Vec<Layout>,
+    /// The custom scene shown instead of the template, if any.
+    pub custom_scene: Option<usize>,
     /// Camera unique ID; None = system default.
     pub camera: Option<String>,
     pub mic_enabled: bool,
@@ -98,6 +102,8 @@ impl Default for Settings {
             background: Background::default(),
             transition: Transition::Move,
             transition_ms: 400,
+            custom_scenes: vec![],
+            custom_scene: None,
             camera: None,
             mic_enabled: true,
             mic: None,
@@ -202,15 +208,32 @@ impl Settings {
     }
 
     /// The scene these settings show.
-    pub fn scene_spec(&self) -> crate::layout::SceneSpec {
-        crate::layout::SceneSpec::Template(self.scene)
+    pub fn scene_spec(&self) -> SceneSpec {
+        match self.custom_scene.and_then(|i| self.custom_scenes.get(i)) {
+            Some(l) => SceneSpec::Custom(l.clone()),
+            None => SceneSpec::Template(self.scene),
+        }
+    }
+
+    /// Which scene is shown (a template, or a custom scene by index):
+    /// switching between these animates, editing one doesn't.
+    pub fn scene_id(&self) -> (Scene, Option<usize>) {
+        match self.custom_scene.filter(|i| *i < self.custom_scenes.len()) {
+            Some(i) => (Scene::Screen, Some(i)),
+            None => (self.scene, None),
+        }
     }
 
     /// The settings that need a new capture session when they change. The
-    /// overlay's look and position are applied live instead.
-    pub fn capture_key(&self) -> Settings {
+    /// overlay's look and position, and switches between scenes that the
+    /// session can show (with the camera on, or composed), are applied live
+    /// instead.
+    pub fn capture_key(&self) -> (Settings, bool) {
         let d = Settings::default();
-        Settings {
+        let spec = self.scene_spec();
+        // A scene without the camera that still needs the compositor.
+        let composed = !spec.uses_cam() && spec != SceneSpec::Template(Scene::Screen);
+        let key = Settings {
             pip_size: d.pip_size,
             pip_place: d.pip_place,
             pip_shape: d.pip_shape,
@@ -221,7 +244,9 @@ impl Settings {
             mirror: d.mirror,
             // Scenes switch live (their look too), as long as the camera is
             // on for all of them.
-            scene: if self.scene.uses_cam() { Scene::ScreenCam } else { Scene::Screen },
+            scene: if spec.uses_cam() { Scene::ScreenCam } else { Scene::Screen },
+            custom_scenes: vec![],
+            custom_scene: None,
             background: d.background,
             transition: d.transition,
             transition_ms: d.transition_ms,
@@ -238,7 +263,8 @@ impl Settings {
             stream_cbr: d.stream_cbr,
             stream_audio_kbps: d.stream_audio_kbps,
             ..self.clone()
-        }
+        };
+        (key, composed)
     }
 
     /// The stream destination URL (the YouTube and Twitch ingest URLs for
@@ -303,13 +329,16 @@ impl Settings {
         if let Some(o) = output {
             a.extend(["-o".into(), o.to_string_lossy().into_owned()]);
         }
-        a.extend(["--scene".into(), value(self.scene)]);
+        // A custom scene is set on the options by the app (`App::options`);
+        // here it only turns the webcam on.
+        let spec = self.scene_spec();
+        a.extend(["--scene".into(), value(if self.scene_id().1.is_some() { Scene::Screen } else { self.scene })]);
         a.extend(["--canvas".into(), value(self.canvas)]);
         let hex = |c: [u8; 3]| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
         a.extend(["--background".into(), format!("{},{}", hex(self.background.top), hex(self.background.bottom))]);
         a.extend(["--transition".into(), value(self.transition)]);
         a.extend(["--transition-ms".into(), self.transition_ms.to_string()]);
-        if self.scene.uses_cam() {
+        if spec.uses_cam() {
             a.extend(["--webcam".into(), self.camera.clone().unwrap_or_else(|| "default".into())]);
         }
         if !self.mic_enabled {
@@ -427,6 +456,30 @@ mod tests {
         assert_ne!(a.capture_key(), d.capture_key());
         let f = Settings { canvas: Canvas::Portrait, ..a.clone() };
         assert_ne!(a.capture_key(), f.capture_key());
+    }
+
+    #[test]
+    fn custom_scenes() {
+        use crate::layout::{Content, Layer, Layout};
+        let cam = Layout { name: "Cam".into(), layers: vec![Layer { content: Content::Camera, ..Default::default() }], ..Default::default() };
+        let logo = Layout { name: "Logo".into(), layers: vec![Layer::default(), Layer { content: Content::Color([1, 2, 3]), ..Default::default() }], ..Default::default() };
+        let s = Settings { custom_scenes: vec![cam, logo], custom_scene: Some(0), ..Default::default() };
+        assert!(matches!(s.scene_spec(), SceneSpec::Custom(ref l) if l.name == "Cam"));
+        assert_eq!(s.scene_id(), (Scene::Screen, Some(0)));
+        // A camera custom scene turns the webcam on.
+        let args = s.record_args(None);
+        assert!(args.iter().any(|a| a == "--webcam"));
+        // Same sources as a camera template: switches live.
+        let t = Settings { scene: Scene::SideBySide, custom_scene: None, ..s.clone() };
+        assert_eq!(s.capture_key(), t.capture_key());
+        // A composed scene without the camera needs another session than
+        // the plain screen.
+        let logo = Settings { custom_scene: Some(1), ..s.clone() };
+        let plain = Settings { custom_scene: None, scene: Scene::Screen, ..s.clone() };
+        assert_ne!(logo.capture_key(), plain.capture_key());
+        // A missing index falls back to the template.
+        let gone = Settings { custom_scene: Some(9), ..s };
+        assert_eq!(gone.scene_spec(), SceneSpec::Template(gone.scene));
     }
 
     #[test]

@@ -7,8 +7,8 @@ use egui::{Align, Color32, CornerRadius, Layout, Margin, RichText, Sense, Stroke
 use super::theme::{self, BODY, SECONDARY, TOOLBAR_H, TRAFFIC_LIGHTS_W};
 use super::widgets::{self as w, Icon};
 use super::{Cmd, Meter, State};
-use crate::compose::{self, Corner, Place, Scene, Shape};
-use crate::layout::{self, Background, Canvas, Content, Transition};
+use crate::compose::{self, Corner, Place, Shape};
+use crate::layout::{Background, Canvas, Transition};
 use crate::settings::Settings;
 use crate::settings::{FPS, RESOLUTIONS};
 use crate::writer::{AudioLayout, Codec};
@@ -211,7 +211,10 @@ fn preview(ui: &mut Ui, st: &mut State) {
             // Around the picture, not over its edges.
             ui.painter().rect_stroke(rect, r, Stroke::new(2.0, border), egui::StrokeKind::Outside);
         }
-        if live && st.settings.scene.has_pip() {
+        let custom = st.settings.scene_id().1.is_some();
+        if live && custom {
+            super::scenes::edit_in_preview(ui, st, rect);
+        } else if live && st.settings.scene.has_pip() {
             drag_overlay(ui, st, rect);
         }
     });
@@ -268,16 +271,17 @@ fn drag_overlay(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
     }
 }
 
-/// A small icon of `shape` (with the current roundness).
-fn shape_icon(ui: &Ui, rect: egui::Rect, shape: Shape, roundness: f64, color: Color32) {
+/// A small icon of `shape` (with the current roundness), `scale` times the
+/// usual size.
+pub(super) fn shape_icon(ui: &Ui, rect: egui::Rect, shape: Shape, roundness: f64, color: Color32, scale: f32) {
     let c = rect.center();
-    let (w, h) = if shape.is_square() { (16.0, 16.0) } else { (22.0, 13.0) };
+    let (w, h) = if shape.is_square() { (16.0 * scale, 16.0 * scale) } else { (22.0 * scale, 13.0 * scale) };
     let r = egui::Rect::from_center_size(c, vec2(w, h));
     let painter = ui.painter();
     let stroke = Stroke::new(1.5, color);
     match shape {
         Shape::Circle => {
-            painter.circle_stroke(c, 8.0, stroke);
+            painter.circle_stroke(c, 8.0 * scale, stroke);
         }
         Shape::Squircle => {
             let n = compose::squircle_exponent(roundness);
@@ -285,8 +289,8 @@ fn shape_icon(ui: &Ui, rect: egui::Rect, shape: Shape, roundness: f64, color: Co
                 .map(|i| {
                     let t = i as f64 / 64.0 * std::f64::consts::TAU;
                     let (ct, s) = (t.cos(), t.sin());
-                    let x = ct.signum() * ct.abs().powf(2.0 / n) * 8.0;
-                    let y = s.signum() * s.abs().powf(2.0 / n) * 8.0;
+                    let x = ct.signum() * ct.abs().powf(2.0 / n) * 8.0 * scale as f64;
+                    let y = s.signum() * s.abs().powf(2.0 / n) * 8.0 * scale as f64;
                     c + vec2(x as f32, y as f32)
                 })
                 .collect();
@@ -318,7 +322,7 @@ fn overlay_controls(ui: &mut Ui, s: &mut Settings) {
             ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
             let stroke = if sel { Stroke::new(1.5, theme::accent()) } else { Stroke::new(1.0, p.control_border) };
             ui.painter().rect_stroke(rect, CornerRadius::same(7), stroke, egui::StrokeKind::Inside);
-            shape_icon(ui, rect.shrink(2.0), shape, s.pip_roundness, if sel { theme::accent() } else { p.secondary });
+            shape_icon(ui, rect.shrink(2.0), shape, s.pip_roundness, if sel { theme::accent() } else { p.secondary }, 1.0);
             if resp.on_hover_text(shape.label()).clicked() {
                 s.pip_shape = shape;
             }
@@ -524,14 +528,18 @@ fn sources(ui: &mut Ui, st: &mut State) {
 
     w::header(ui, Icon::Scene, "Scene");
     w::card(ui, |ui| {
-        if scene_gallery(ui, st, &mut s, idle) && idle
+        if super::scenes::gallery(ui, st, &mut s, idle)
+            && idle
+            && s.scene_id().1.is_none()
             && let Some(c) = s.scene.suggested_canvas()
             && s.canvas == Canvas::Source
         {
             // A template made for another frame shape picks it.
             s.canvas = c;
         }
-        w::hint(ui, s.scene.description());
+        if s.scene_id().1.is_none() {
+            w::hint(ui, s.scene.description());
+        }
         w::divider(ui);
         w::row(ui, "Frame", |ui| {
             let opts: Vec<(Canvas, String)> = Canvas::ALL.iter().map(|c| (*c, c.label().to_string())).collect();
@@ -563,12 +571,16 @@ fn sources(ui: &mut Ui, st: &mut State) {
     w::card(ui, |ui| {
         let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
         cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
-        combo(ui, "camera", &mut s.camera, &cams, idle && s.scene.uses_cam());
-        if !s.scene.uses_cam() {
+        let uses_cam = s.scene_spec().uses_cam();
+        combo(ui, "camera", &mut s.camera, &cams, idle && uses_cam);
+        if !uses_cam {
             w::hint(ui, "Pick a camera scene to use the webcam.");
         }
     });
-    if s.scene.has_pip() {
+    if s.scene_id().1.is_some() {
+        w::header(ui, Icon::Overlay, "Layers");
+        w::card(ui, |ui| super::scenes::layers_panel(ui, st, &mut s, idle));
+    } else if s.scene.has_pip() {
         w::header(ui, Icon::Overlay, "Camera Overlay");
         w::card(ui, |ui| overlay_controls(ui, &mut s));
     }
@@ -604,121 +616,6 @@ fn sources(ui: &mut Ui, st: &mut State) {
         st.apply_scene();
         let _ = st.settings.save();
     }
-}
-
-/// Fill `rect` with a vertical gradient.
-fn gradient(ui: &Ui, rect: egui::Rect, bg: Background) {
-    let c = |v: [u8; 3]| Color32::from_rgb(v[0], v[1], v[2]);
-    let mut mesh = egui::Mesh::default();
-    let i = mesh.vertices.len() as u32;
-    for (pos, col) in [(rect.left_top(), bg.top), (rect.right_top(), bg.top), (rect.right_bottom(), bg.bottom), (rect.left_bottom(), bg.bottom)] {
-        mesh.vertices.push(egui::epaint::Vertex { pos, uv: egui::epaint::WHITE_UV, color: c(col) });
-    }
-    mesh.add_triangle(i, i + 1, i + 2);
-    mesh.add_triangle(i, i + 2, i + 3);
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
-
-/// A miniature of a scene, drawn from the same layout the compositor uses:
-/// the screen as a window, the camera as a person.
-fn scene_thumb(ui: &Ui, rect: egui::Rect, scene: Scene, s: &Settings, aspect: f64, screen_aspect: f64) {
-    let (w, h) = (1920.0, (1920.0 / aspect).round());
-    let env = layout::Env { w, h, screen_aspect, cam_aspect: 16.0 / 9.0, pip: s.pip_spec(), background: s.background };
-    let f = scene.resolve(&env);
-    let k = rect.width() as f64 / w;
-    gradient(ui, rect, f.background);
-    let painter = ui.painter_at(rect);
-    for l in &f.layers {
-        let src = if l.content == Content::Screen { screen_aspect } else { 16.0 / 9.0 };
-        let (r, _, _) = layout::place(src * 100.0, 100.0, l.rect, l.fit);
-        let r = if l.fit == layout::Fit::Cover { l.rect } else { r };
-        let er = egui::Rect::from_min_size(rect.min + vec2((r[0] * k) as f32, (r[1] * k) as f32), vec2((r[2] * k) as f32, (r[3] * k) as f32));
-        let radius = match l.style.shape {
-            Shape::Circle | Shape::Pill => er.width().min(er.height()) / 2.0,
-            Shape::Rect => 0.0,
-            _ => (l.style.roundness as f32 * er.width().min(er.height()) / 2.0).max(0.0),
-        };
-        let cr = CornerRadius::same(radius.round().min(255.0) as u8);
-        match l.content {
-            Content::Screen => {
-                painter.rect_filled(er, cr, Color32::from_rgb(0xe8, 0xec, 0xf3));
-                // A title bar and a few lines of text.
-                let bar = egui::Rect::from_min_size(er.min, vec2(er.width(), (er.height() * 0.12).max(1.0)));
-                painter.rect_filled(bar, CornerRadius { nw: cr.nw, ne: cr.ne, sw: 0, se: 0 }, Color32::from_rgb(0xc5, 0xcc, 0xd8));
-                for i in 0..3 {
-                    let y = er.top() + er.height() * (0.3 + 0.18 * i as f32);
-                    let x1 = er.left() + er.width() * (0.12 + 0.5 - 0.12 * i as f32);
-                    painter.hline((er.left() + er.width() * 0.12)..=x1, y, Stroke::new((er.height() * 0.06).clamp(0.5, 2.0), Color32::from_rgb(0x9a, 0xa5, 0xb8)));
-                }
-            }
-            _ => {
-                painter.rect_filled(er, cr, Color32::from_rgb(0x4a, 0x55, 0x6a));
-                // Head and shoulders.
-                let u = er.width().min(er.height());
-                let c = er.center();
-                let skin = Color32::from_rgb(0xf0, 0xc0, 0x98);
-                painter.circle_filled(c - vec2(0.0, u * 0.12), u * 0.17, skin);
-                let body = egui::Rect::from_center_size(c + vec2(0.0, u * 0.33), vec2(u * 0.6, u * 0.4));
-                painter.rect_filled(body.intersect(er), CornerRadius::same((u * 0.2).min(255.0) as u8), Color32::from_rgb(0x3d, 0x8b, 0xff));
-            }
-        }
-        if l.style.border > 0.0 {
-            let c = l.style.border_color;
-            painter.rect_stroke(er, cr, Stroke::new(1.0, Color32::from_rgb(c[0], c[1], c[2])), egui::StrokeKind::Inside);
-        }
-    }
-}
-
-/// The scene templates as a grid of miniatures. Returns true on a change.
-fn scene_gallery(ui: &mut Ui, st: &State, s: &mut Settings, idle: bool) -> bool {
-    let p = theme::pal(ui);
-    let cols = 3;
-    let gap = 6.0;
-    let tile_w = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).floor();
-    // The frame's shape, as the preview shows it.
-    let aspect = (st.preview_aspect as f64).clamp(0.3, 4.0);
-    let screen_aspect = if s.canvas == Canvas::Source { aspect } else { st.screen_aspect };
-    let thumb_h = (tile_w / aspect as f32).min(tile_w * 0.9);
-    let thumb_w = (thumb_h * aspect as f32).min(tile_w);
-    let mut changed = false;
-    for row in Scene::ALL.chunks(cols) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for &scene in row {
-                let ok = idle || st.can_switch_live(scene);
-                let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, thumb_h + 18.0), if ok { Sense::click() } else { Sense::hover() });
-                let sel = s.scene == scene;
-                let thumb = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + thumb_h / 2.0), vec2(thumb_w, thumb_h));
-                scene_thumb(ui, thumb, scene, s, aspect, screen_aspect);
-                if !ok {
-                    ui.painter().rect_filled(thumb, CornerRadius::same(4), p.window.gamma_multiply(0.6));
-                }
-                let stroke = if sel {
-                    Stroke::new(2.0, theme::accent())
-                } else if resp.hovered() && ok {
-                    Stroke::new(1.0, p.secondary)
-                } else {
-                    Stroke::new(1.0, p.control_border)
-                };
-                ui.painter().rect_stroke(thumb, CornerRadius::same(4), stroke, egui::StrokeKind::Outside);
-                let color = if !ok { p.tertiary } else if sel { p.text } else { p.secondary };
-                ui.painter().text(
-                    egui::pos2(rect.center().x, thumb.bottom() + 9.0),
-                    egui::Align2::CENTER_CENTER,
-                    scene.label(),
-                    if sel { theme::semibold(SECONDARY) } else { egui::FontId::proportional(SECONDARY) },
-                    color,
-                );
-                let resp = if ok { resp.on_hover_text(scene.description()) } else { resp.on_hover_text("Start the recording with a camera scene to switch live") };
-                if resp.clicked() && !sel {
-                    s.scene = scene;
-                    changed = true;
-                }
-            }
-        });
-        ui.add_space(4.0);
-    }
-    changed
 }
 
 fn bytes_text(b: usize) -> String {
