@@ -315,7 +315,7 @@ impl Settings {
     /// overlay's look and position, and switches between scenes that the
     /// session can show (with the camera on, or composed), are applied live
     /// instead.
-    pub fn capture_key(&self) -> (Settings, bool, Vec<usize>) {
+    pub fn capture_key(&self) -> (Settings, bool, Vec<crate::layout::Source>) {
         let d = Settings::default();
         let spec = self.scene_spec();
         // A scene without the camera that still needs the compositor.
@@ -356,8 +356,8 @@ impl Settings {
             mic_filters: d.mic_filters,
             ..self.clone()
         };
-        // Other displays shown need capture streams.
-        (key, composed, spec.extra_displays())
+        // Other displays and cameras shown need captures of their own.
+        (key, composed, spec.sources())
     }
 
     /// The stream destination URL (the YouTube and Twitch ingest URLs for

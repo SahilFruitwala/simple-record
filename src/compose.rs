@@ -12,7 +12,7 @@ use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::NSData;
 
 use crate::effects::{self, ChromaKey, Effects};
-use crate::layout::{self, Background, Content, Env, Frame, Placed, SceneSpec, Style, TextSpec, Transition};
+use crate::layout::{self, Background, Content, Source, Env, Frame, Placed, SceneSpec, Style, TextSpec, Transition};
 use crate::util::*;
 
 pub use crate::layout::Scene;
@@ -175,6 +175,9 @@ pub struct Compositor {
     cam_aspect: f64,
     /// Aspect ratio of the last screen frame (the frame's until one arrives).
     screen_aspect: f64,
+    /// The main camera's unique ID (a `Content::Webcam` layer naming it
+    /// shows the main camera's frames).
+    main_cam: Option<String>,
     /// Chroma key lookup tables, most recent last.
     cubes: Vec<(ChromaKey, Retained<NSData>)>,
     /// sRGB, which the tables are indexed in (whatever the output is in).
@@ -236,6 +239,7 @@ impl Compositor {
                 texts: vec![],
                 cam_aspect: 16.0 / 9.0,
                 screen_aspect: width as f64 / height.max(1) as f64,
+                main_cam: None,
                 cubes: vec![],
                 srgb: cs.clone(),
                 cs,
@@ -254,6 +258,10 @@ impl Compositor {
         if let Some(cs) = CGColorSpace::with_name(Some(&cf)) {
             self.cs = cs;
         }
+    }
+
+    pub fn set_main_camera(&mut self, id: Option<String>) {
+        self.main_cam = id;
     }
 
     pub fn set_background(&mut self, bg: Background) {
@@ -482,7 +490,7 @@ impl Compositor {
     }
 
     /// Draw a resolved frame.
-    fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, extras: &[(usize, Retained<CIImage>)], k: f64) -> Retained<CIImage> {
+    fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, extras: &[(&Source, Retained<CIImage>)], k: f64) -> Retained<CIImage> {
         let mut img = self.background_image(f.background);
         for l in &f.layers {
             if l.opacity <= 0.0 {
@@ -491,7 +499,11 @@ impl Compositor {
             let src = match &l.content {
                 Content::Screen => screen.cloned(),
                 Content::Camera => cam.cloned(),
-                Content::Display(n) => extras.iter().find(|(d, _)| d == n).map(|(_, i)| i.clone()),
+                Content::Webcam { id, .. } if self.main_cam.as_ref() == Some(id) => cam.cloned(),
+                Content::Display(_) | Content::Webcam { .. } => {
+                    let want = l.content.source();
+                    extras.iter().find(|(s, _)| Some(*s) == want.as_ref()).map(|(_, i)| i.clone())
+                }
                 Content::Image(p) => self.image(p),
                 Content::Text(t) => self.text(t, l.rect[3]),
                 Content::Color(c) => {
@@ -508,13 +520,13 @@ impl Compositor {
     }
 
     /// Render the scene at frame time `t` (seconds; drives transitions).
-    /// `extras` are other displays' frames by display number.
-    pub fn render(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, extras: &[(usize, &CVPixelBuffer)], out: &CVPixelBuffer) {
+    /// `extras` are other displays' and cameras' frames.
+    pub fn render(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, extras: &[(&Source, &CVPixelBuffer)], out: &CVPixelBuffer) {
         self.now = t;
         let canvas = rect(0.0, 0.0, self.w, self.h);
         let screen = screen.map(|s| unsafe { CIImage::imageWithCVPixelBuffer(s) });
         let cam = cam.map(|c| unsafe { CIImage::imageWithCVPixelBuffer(c) });
-        let extras: Vec<(usize, Retained<CIImage>)> = extras.iter().map(|(n, b)| (*n, unsafe { CIImage::imageWithCVPixelBuffer(b) })).collect();
+        let extras: Vec<(&Source, Retained<CIImage>)> = extras.iter().map(|(n, b)| (*n, unsafe { CIImage::imageWithCVPixelBuffer(b) })).collect();
         for (img, aspect) in [(&cam, &mut self.cam_aspect), (&screen, &mut self.screen_aspect)] {
             if let Some(i) = img {
                 let e = unsafe { i.extent() };
@@ -614,6 +626,33 @@ mod tests {
         c.render(0.2, None, Some(&red), &[], &out);
         let [b, g, r] = pixel(&out, 160, 90);
         assert!(r.abs_diff(g) < 8 && g.abs_diff(b) < 8 && r > 20, "gray: {:?}", [b, g, r]);
+    }
+
+    /// Layers of other cameras show their own frames; one naming the main
+    /// camera shows the main camera's.
+    #[test]
+    fn other_cameras() {
+        let (red, _p1) = solid(160, 90, [0, 0, 255, 255]);
+        let (blue, _p2) = solid(160, 90, [255, 0, 0, 255]);
+        let (out, _p3) = solid(320, 180, [0, 0, 0, 255]);
+        let layer = |id: &str, x: f64| crate::layout::Layer {
+            content: Content::Webcam { id: id.into(), name: id.into() },
+            rect: [x, 0.0, 0.5, 1.0],
+            fit: crate::layout::Fit::Cover,
+            mirror: false,
+            ..Default::default()
+        };
+        let scene = crate::layout::Layout { layers: vec![layer("a", 0.0), layer("b", 0.5)], ..Default::default() };
+        let mut c = Compositor::new(320, 180, PipSpec::default());
+        c.set_scene(SceneSpec::Custom(scene), false);
+        let b = Source::Camera("b".into());
+        c.render(0.0, None, Some(&red), &[(&b, &blue)], &out);
+        let is_red = |v: [u8; 3]| v[2] > 200 && v[0] < 40;
+        let is_blue = |v: [u8; 3]| v[0] > 200 && v[2] < 40;
+        assert!(!is_red(pixel(&out, 80, 90)) && is_blue(pixel(&out, 240, 90)), "a has no frames yet: {:?}", pixel(&out, 80, 90));
+        c.set_main_camera(Some("a".into()));
+        c.render(0.1, None, Some(&red), &[(&b, &blue)], &out);
+        assert!(is_red(pixel(&out, 80, 90)) && is_blue(pixel(&out, 240, 90)), "{:?}", pixel(&out, 80, 90));
     }
 
     /// Bake an overlay with CoreImage and read pixels back.

@@ -91,7 +91,7 @@ fn thumb(ui: &Ui, rect: Rect, f: &Frame, fw: f64, screen_aspect: f64) {
                     painter.hline((er.left() + er.width() * 0.12)..=x1, y, stroke);
                 }
             }
-            Content::Camera => {
+            Content::Camera | Content::Webcam { .. } => {
                 painter.rect_filled(er, cr, Color32::from_rgb(0x4a, 0x55, 0x6a).gamma_multiply(alpha));
                 // Head and shoulders.
                 let u = er.width().min(er.height());
@@ -268,12 +268,12 @@ fn delete_scene(st: &mut State, s: &mut Settings, i: usize) {
 fn new_layer(content: Content, aspect: f64) -> Layer {
     let (w, h): (f64, f64) = match &content {
         Content::Text(_) => (0.32, 0.09 * aspect.min(1.8)),
-        Content::Camera => (0.3, 0.3 * aspect / (16.0 / 9.0)),
+        Content::Camera | Content::Webcam { .. } => (0.3, 0.3 * aspect / (16.0 / 9.0)),
         _ => (0.4, 0.4),
     };
     let (w, h) = (w.min(1.0), h.min(1.0));
     let fit = match content {
-        Content::Camera | Content::Color(_) => Fit::Cover,
+        Content::Camera | Content::Webcam { .. } | Content::Color(_) => Fit::Cover,
         _ => Fit::Contain,
     };
     Layer { content, rect: [(1.0 - w) / 2.0, (1.0 - h) / 2.0, w, h], fit, ..Default::default() }
@@ -370,6 +370,12 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
                 if n != s.display && ui.add_enabled(idle, egui::Button::new(format!("Display {n}")).small()).on_hover_text("Another display, whole").clicked() {
                     add = Some(Content::Display(n));
                 }
+            }
+        }
+        // Other cameras (each a capture session of its own).
+        for d in &st.cameras {
+            if s.camera.as_deref() != Some(d.id.as_str()) && ui.add_enabled(idle, egui::Button::new(&d.name).small()).on_hover_text("Another camera").clicked() {
+                add = Some(Content::Webcam { id: d.id.clone(), name: d.name.clone() });
             }
         }
         if let Some(c) = add {
@@ -477,12 +483,12 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
                 ui.color_edit_button_srgb(c);
             });
         }
-        Content::Camera => {
+        Content::Camera | Content::Webcam { .. } => {
             w::row(ui, "Mirror", |ui| w::switch(ui, &mut l.mirror, true));
         }
         Content::Screen | Content::Display(_) => {}
     }
-    if matches!(l.content, Content::Screen | Content::Display(_) | Content::Camera | Content::Image(_)) {
+    if matches!(l.content, Content::Screen | Content::Display(_) | Content::Camera | Content::Webcam { .. } | Content::Image(_)) {
         w::field(ui, "Fit", LABEL_W, |ui| {
             w::segmented(ui, &mut l.fit, &[(Fit::Contain, "Whole picture", true, ""), (Fit::Cover, "Fill the box", true, "")]);
         });

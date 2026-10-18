@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use crate::camera::{self, Camera, Mic};
 use crate::synth::Synth;
 use crate::compose::{Compositor, PipSpec};
-use crate::layout::{Background, Scene, SceneSpec, Transition};
+use crate::layout::{Background, Scene, SceneSpec, Source, Transition};
 use crate::screen::{self, ScreenCapture, ScreenConfig};
 use crate::tcc::{self, Status};
 use crate::util::*;
@@ -166,9 +166,11 @@ pub struct Session {
     stop: Arc<AtomicBool>,
     pacer: Option<std::thread::JoinHandle<()>>,
     screen: Option<ScreenCapture>,
-    /// Other displays the scene shows, and their numbers.
+    /// Other displays and cameras the scene shows, and the sources this
+    /// session has.
     extra_screens: Vec<ScreenCapture>,
-    extra_displays: Vec<usize>,
+    extra_cams: Vec<Camera>,
+    sources: Vec<Source>,
     synth: Option<Synth>,
     cam: Option<Camera>,
     av_mic: Option<Mic>,
@@ -308,7 +310,8 @@ impl Session {
             pacer: None,
             screen: None,
             extra_screens: vec![],
-            extra_displays: vec![],
+            extra_cams: vec![],
+            sources: vec![],
             synth: None,
             cam: None,
             av_mic: None,
@@ -400,6 +403,8 @@ impl Session {
                 let settle = (CAMERA_SETTLE_SECS - c.started.elapsed().as_secs_f64()).max(0.0);
                 self.shared.with(|s| s.wait_for_camera(settle));
             }
+            let id = c.id.clone();
+            self.shared.with(|s| s.set_main_camera(Some(id)));
             self.cam = Some(c);
         }
         if let Some(c) = cam {
@@ -438,34 +443,49 @@ impl Session {
             (None, None) => bail!("internal: no capture target"),
         }
         // Other displays in the scene: whole, at most the frame's size, no
-        // audio.
-        let wanted = o.scene.extra_displays();
-        if o.test_pattern.is_none() && !wanted.is_empty() {
-            let displays = screen::displays()?;
-            for n in wanted {
-                let Some(d) = displays.get(n.wrapping_sub(1)).cloned() else {
-                    eprintln!("rec: warning: display {n} is not connected; its layer stays empty");
-                    continue;
-                };
-                let (w, h) = o.size;
-                let k = (w as f64 / d.pixels.0 as f64).min(h as f64 / d.pixels.1 as f64).min(1.0);
-                let size = (d_px(k, d.pixels.0) & !1, d_px(k, d.pixels.1) & !1);
-                let cfg = ScreenConfig {
-                    target: screen::Target::Display(d, None),
-                    width: size.0.max(2),
-                    height: size.1.max(2),
-                    fps: o.fps,
-                    pixel_format: PIX_BGRA,
-                    cursor: o.cursor,
-                    clicks: o.clicks,
-                    system_audio: false,
-                    mic: None,
-                    extra: Some(n),
-                    hdr: false,
-                };
-                self.extra_screens.push(ScreenCapture::start(&cfg, self.shared.clone())?);
-                self.extra_displays.push(n);
+        // audio. Other cameras: at the main camera's resolution.
+        if o.test_pattern.is_some() {
+            return Ok(());
+        }
+        let wanted = o.scene.sources();
+        let displays = if wanted.iter().any(|s| matches!(s, Source::Display(_))) { screen::displays()? } else { vec![] };
+        for src in wanted {
+            match &src {
+                Source::Display(n) => {
+                    let n = *n;
+                    let Some(d) = displays.get(n.wrapping_sub(1)).cloned() else {
+                        eprintln!("rec: warning: display {n} is not connected; its layer stays empty");
+                        continue;
+                    };
+                    let (w, h) = o.size;
+                    let k = (w as f64 / d.pixels.0 as f64).min(h as f64 / d.pixels.1 as f64).min(1.0);
+                    let size = (d_px(k, d.pixels.0) & !1, d_px(k, d.pixels.1) & !1);
+                    let cfg = ScreenConfig {
+                        target: screen::Target::Display(d, None),
+                        width: size.0.max(2),
+                        height: size.1.max(2),
+                        fps: o.fps,
+                        pixel_format: PIX_BGRA,
+                        cursor: o.cursor,
+                        clicks: o.clicks,
+                        system_audio: false,
+                        mic: None,
+                        extra: Some(src.clone()),
+                        hdr: false,
+                    };
+                    self.extra_screens.push(ScreenCapture::start(&cfg, self.shared.clone())?);
+                }
+                // The main camera by ID: its frames are already here.
+                Source::Camera(id) if self.cam.as_ref().is_some_and(|c| c.id == *id) => {}
+                Source::Camera(id) => match Camera::start_as(Some(id), o.cam_res, self.shared.clone(), Some(src.clone())) {
+                    Ok(c) => self.extra_cams.push(c),
+                    Err(e) => {
+                        eprintln!("rec: warning: {e:#}; its layer stays empty");
+                        continue;
+                    }
+                },
             }
+            self.sources.push(src);
         }
         Ok(())
     }
@@ -474,6 +494,9 @@ impl Session {
         let err = self.screen.take().and_then(|s| s.stop().err());
         for s in self.extra_screens.drain(..) {
             let _ = s.stop();
+        }
+        for c in self.extra_cams.drain(..) {
+            c.stop();
         }
         if let Some(mut s) = self.synth.take() {
             s.stop();
@@ -573,10 +596,10 @@ impl Session {
         self.composed
     }
 
-    /// The other displays this session captures (for scene layers); a
-    /// scene showing any other can't be switched to live.
-    pub fn extra_displays(&self) -> &[usize] {
-        &self.extra_displays
+    /// The other displays and cameras this session captures (for scene
+    /// layers); a scene showing any other can't be switched to live.
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
     }
 
     /// (stats, peak levels [system, mic] since last call).

@@ -341,12 +341,12 @@ impl State {
 
     /// Whether the running recording can switch to `scene` live: it needs
     /// the camera if the scene shows it, a capture of every other display
-    /// it shows, and the compositor unless it is the plain screen.
+    /// and camera it shows, and the compositor unless it is the plain screen.
     pub fn can_switch_live(&self, scene: &crate::layout::SceneSpec) -> bool {
         let Some(r) = &self.recording else { return true };
         let plain = *scene == crate::layout::SceneSpec::Template(Scene::Screen);
-        let displays = scene.extra_displays().iter().all(|n| r.extra_displays().contains(n));
-        (!scene.uses_cam() || r.camera_name().is_some()) && displays && (plain || r.composed())
+        let sources = scene.sources().iter().all(|n| r.sources().contains(n));
+        (!scene.uses_cam() || r.camera_name().is_some()) && sources && (plain || r.composed())
     }
 }
 

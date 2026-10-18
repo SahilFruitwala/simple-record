@@ -198,15 +198,15 @@ pub struct ScreenConfig {
     /// None = no mic; Some(None) = default mic; Some(Some(id)) = specific device.
     pub mic: Option<Option<String>>,
     /// An extra screen source for scene layers (`Content::Display(n)`):
-    /// its frames go to the sink under this display number.
-    pub extra: Option<usize>,
+    /// its frames go to the sink as this source.
+    pub extra: Option<crate::layout::Source>,
     /// Capture HDR (`hdr_format`); the pixel format is then the preset's.
     pub hdr: bool,
 }
 
 pub struct Ivars {
     shared: Arc<Shared>,
-    extra: Option<usize>,
+    extra: Option<crate::layout::Source>,
 }
 
 define_class!(
@@ -234,7 +234,7 @@ define_class!(
 );
 
 impl ScreenOutput {
-    fn create(shared: Arc<Shared>, extra: Option<usize>) -> Retained<Self> {
+    fn create(shared: Arc<Shared>, extra: Option<crate::layout::Source>) -> Retained<Self> {
         let this = Self::alloc().set_ivars(Ivars { shared, extra });
         unsafe { msg_send![super(this), init] }
     }
@@ -253,8 +253,8 @@ impl ScreenOutput {
             let Some(pb) = (unsafe { sb.image_buffer() }) else { return };
             let pts: CMTime = unsafe { sb.presentation_time_stamp() };
             let pb: objc2_core_foundation::CFRetained<CVPixelBuffer> = pb;
-            match self.ivars().extra {
-                Some(n) => shared.with(|s| s.push_extra(n, pts, pb)),
+            match &self.ivars().extra {
+                Some(src) => shared.with(|s| s.push_extra(src, pts, pb)),
                 None => shared.with(|s| s.push_screen(pts, pb)),
             }
         } else if kind == SCStreamOutputType::Audio {
@@ -363,7 +363,7 @@ impl ScreenCapture {
                 }
             }
 
-            let output = ScreenOutput::create(shared, cfg.extra);
+            let output = ScreenOutput::create(shared, cfg.extra.clone());
             let delegate = ProtocolObject::from_ref(&*output);
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, Some(delegate));
             let out_proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);

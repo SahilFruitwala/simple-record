@@ -252,6 +252,18 @@ pub enum Content {
     Text(TextSpec),
     /// A solid color.
     Color([u8; 3]),
+    /// A camera other than the main one (`Camera`), by unique ID; the
+    /// name is shown, and finds it again if the ID changes.
+    Webcam { id: String, name: String },
+}
+
+/// A source with a capture of its own, besides the main screen and camera.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Source {
+    /// A display, 1-based.
+    Display(usize),
+    /// A camera, by unique ID.
+    Camera(String),
 }
 
 impl Content {
@@ -266,7 +278,22 @@ impl Content {
             }
             Content::Text(t) => format!("Text “{}”", t.text),
             Content::Color(_) => "Color".into(),
+            Content::Webcam { name, .. } => format!("Camera {name}"),
         }
+    }
+
+    /// The capture this needs besides the main screen and camera.
+    pub fn source(&self) -> Option<Source> {
+        match self {
+            Content::Display(n) => Some(Source::Display(*n)),
+            Content::Webcam { id, .. } => Some(Source::Camera(id.clone())),
+            _ => None,
+        }
+    }
+
+    /// A camera picture (mirrored like one).
+    pub fn is_camera(&self) -> bool {
+        matches!(self, Content::Camera | Content::Webcam { .. })
     }
 }
 
@@ -408,11 +435,11 @@ impl SceneSpec {
         }
     }
 
-    /// Displays other than the capture target that the scene shows (each
-    /// needs a capture stream of its own), in order, once each.
-    pub fn extra_displays(&self) -> Vec<usize> {
+    /// Sources other than the capture target and main camera that the
+    /// scene shows (each needs a capture of its own), in order, once each.
+    pub fn sources(&self) -> Vec<Source> {
         let SceneSpec::Custom(l) = self else { return vec![] };
-        let mut v: Vec<usize> = l.layers.iter().filter(|x| x.visible).filter_map(|x| if let Content::Display(n) = x.content { Some(n) } else { None }).collect();
+        let mut v: Vec<Source> = l.layers.iter().filter(|x| x.visible).filter_map(|x| x.content.source()).collect();
         v.sort();
         v.dedup();
         v
@@ -425,7 +452,7 @@ impl Layout {
         for l in self.layers.iter().filter(|l| l.visible) {
             let [fx, fy, fw, fh] = l.rect;
             let rect = [(fx * env.w).round(), (fy * env.h).round(), (fw * env.w).round().max(2.0), (fh * env.h).round().max(2.0)];
-            let mirror = l.content == Content::Camera && l.mirror;
+            let mirror = l.content.is_camera() && l.mirror;
             // A text box's fill is a color layer under the text.
             if let Content::Text(t) = &l.content
                 && let Some([r, g, b, a]) = t.background
@@ -839,8 +866,20 @@ mod tests {
             layers: vec![Layer::default(), Layer { content: Content::Display(2), ..Default::default() }, Layer { content: Content::Display(2), visible: true, ..Default::default() }],
             ..Default::default()
         };
-        assert_eq!(SceneSpec::Custom(two).extra_displays(), vec![2]);
-        assert!(SceneSpec::Template(Scene::SideBySide).extra_displays().is_empty());
+        assert_eq!(SceneSpec::Custom(two).sources(), vec![Source::Display(2)]);
+        assert!(SceneSpec::Template(Scene::SideBySide).sources().is_empty());
+        // Other cameras too, after displays; mirrored like the main one.
+        let cam2 = Content::Webcam { id: "usb-1".into(), name: "Logitech".into() };
+        let multi = Layout {
+            layers: vec![Layer { content: cam2.clone(), ..Default::default() }, Layer { content: Content::Display(3), ..Default::default() }, Layer { content: cam2.clone(), visible: false, ..Default::default() }],
+            ..Default::default()
+        };
+        assert_eq!(SceneSpec::Custom(multi.clone()).sources(), vec![Source::Display(3), Source::Camera("usb-1".into())]);
+        assert!(!SceneSpec::Custom(multi.clone()).uses_cam(), "not the main camera");
+        assert!(multi.resolve(&e).layers[0].mirror);
+        let json = serde_json::to_string(&multi).unwrap();
+        assert!(json.contains(r#""webcam":{"id":"usb-1","name":"Logitech"}"#), "{json}");
+        assert_eq!(serde_json::from_str::<Layout>(&json).unwrap(), multi);
         // Text with a box: a color layer, then the text inside it.
         let text = Layout {
             layers: vec![Layer { content: Content::Text(TextSpec::default()), rect: [0.05, 0.8, 0.3, 0.1], ..Default::default() }],

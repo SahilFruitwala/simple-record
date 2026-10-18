@@ -128,6 +128,8 @@ pub fn on_device_change(f: impl Fn() + Clone + 'static) {
 pub struct CamIvars {
     /// Where frames go; switched when the camera moves to another session.
     shared: std::sync::Mutex<Arc<Shared>>,
+    /// Frames go to the sink as this scene source, not as the main camera.
+    extra: Option<crate::layout::Source>,
 }
 
 define_class!(
@@ -153,7 +155,10 @@ define_class!(
                     }
                     let pts = sb.presentation_time_stamp();
                     let shared = self.ivars().shared.lock().unwrap().clone();
-                    shared.with(|s| s.push_cam(pts, pb));
+                    match &self.ivars().extra {
+                        Some(src) => shared.with(|s| s.push_extra(src, pts, pb)),
+                        None => shared.with(|s| s.push_cam(pts, pb)),
+                    }
                 }
             }
         }
@@ -251,6 +256,11 @@ impl Camera {
     /// `sel`: None = first camera, else unique ID or name substring. The
     /// largest of `res` and smaller presets the camera supports is used.
     pub fn start(sel: Option<&str>, res: CamRes, shared: Arc<Shared>) -> Result<Self> {
+        Self::start_as(sel, res, shared, None)
+    }
+
+    /// A camera whose frames go to the sink as `extra` (a scene source).
+    pub fn start_as(sel: Option<&str>, res: CamRes, shared: Arc<Shared>, extra: Option<crate::layout::Source>) -> Result<Self> {
         let dev = Self::device(sel)?;
         unsafe {
             let name = dev.localizedName().to_string();
@@ -282,7 +292,7 @@ impl Camera {
                 num_i(PIX_BGRA as i64),
             )])));
             output.setAlwaysDiscardsLateVideoFrames(true);
-            let delegate = Self::make_delegate(shared);
+            let delegate = Self::make_delegate(shared, extra);
             let queue = DispatchQueue::new("rec.camera", None);
             output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*delegate)), Some(&queue));
             if !session.canAddOutput(&output) {
@@ -299,8 +309,8 @@ impl Camera {
         }
     }
 
-    fn make_delegate(shared: Arc<Shared>) -> Retained<CameraOutput> {
-        let this = CameraOutput::alloc().set_ivars(CamIvars { shared: std::sync::Mutex::new(shared) });
+    fn make_delegate(shared: Arc<Shared>, extra: Option<crate::layout::Source>) -> Retained<CameraOutput> {
+        let this = CameraOutput::alloc().set_ivars(CamIvars { shared: std::sync::Mutex::new(shared), extra });
         unsafe { msg_send![super(this), init] }
     }
 

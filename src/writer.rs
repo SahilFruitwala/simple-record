@@ -190,7 +190,7 @@ impl Pauses {
 type Pb = SendBox<CFRetained<CVPixelBuffer>>;
 
 /// Another display's frames: (display number, queue, current frame).
-type ExtraSource = (usize, VecDeque<(f64, Pb)>, Option<Pb>);
+type ExtraSource = (crate::layout::Source, VecDeque<(f64, Pb)>, Option<Pb>);
 
 /// Receives every emitted (composited) video frame, throttled to ~30 fps.
 pub type PreviewFn = std::sync::Arc<dyn Fn(CFRetained<CVPixelBuffer>) + Send + Sync>;
@@ -264,7 +264,8 @@ pub struct Sink {
     screen_last: Option<Pb>,
     cam_q: VecDeque<(f64, Pb)>,
     cam_last: Option<Pb>,
-    /// Other displays shown by the scene: (display number, queue, current).
+    /// Other displays and cameras shown by the scene: (source, queue,
+    /// current).
     extra: Vec<ExtraSource>,
     compositor: Option<Compositor>,
     /// Scales native-size screen frames to the output size.
@@ -619,6 +620,14 @@ impl Sink {
         }
     }
 
+    /// The main camera's unique ID: a scene layer showing that camera by
+    /// ID shows its frames.
+    pub fn set_main_camera(&mut self, id: Option<String>) {
+        if let Some(c) = self.compositor.as_mut() {
+            c.set_main_camera(id);
+        }
+    }
+
     /// Change the camera overlay live (no-op without a webcam).
     pub fn set_pip(&mut self, pip: crate::compose::PipSpec) {
         if let Some(c) = self.compositor.as_mut() {
@@ -728,13 +737,13 @@ impl Sink {
         Self::cap(&mut self.cam_q, &mut self.cam_last, QUEUE_MAX, due);
     }
 
-    /// A frame of another display (an extra scene source).
-    pub fn push_extra(&mut self, n: usize, pts: CMTime, pb: CFRetained<CVPixelBuffer>) {
+    /// A frame of another display or camera (an extra scene source).
+    pub fn push_extra(&mut self, src: &crate::layout::Source, pts: CMTime, pb: CFRetained<CVPixelBuffer>) {
         let due = self.due_time();
-        let i = match self.extra.iter().position(|e| e.0 == n) {
+        let i = match self.extra.iter().position(|e| e.0 == *src) {
             Some(i) => i,
             None => {
-                self.extra.push((n, VecDeque::new(), None));
+                self.extra.push((src.clone(), VecDeque::new(), None));
                 self.extra.len() - 1
             }
         };
@@ -1039,8 +1048,8 @@ impl Sink {
                     continue;
                 };
                 let cam = self.cam_last.as_ref().map(|b| b.0.clone());
-                let extras: Vec<(usize, CFRetained<CVPixelBuffer>)> = self.extra.iter().filter_map(|(n, _, l)| l.as_ref().map(|b| (*n, b.0.clone()))).collect();
-                let extras: Vec<(usize, &CVPixelBuffer)> = extras.iter().map(|(n, b)| (*n, &**b)).collect();
+                let extras: Vec<(&crate::layout::Source, CFRetained<CVPixelBuffer>)> = self.extra.iter().filter_map(|(n, _, l)| l.as_ref().map(|b| (n, b.0.clone()))).collect();
+                let extras: Vec<(&crate::layout::Source, &CVPixelBuffer)> = extras.iter().map(|(n, b)| (*n, &**b)).collect();
                 self.compositor.as_mut().unwrap().render(slot_t, screen.as_deref(), cam.as_deref(), &extras, &buf);
                 buf
             } else if let Some(sc) = &self.scaler
