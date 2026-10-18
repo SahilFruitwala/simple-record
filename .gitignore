@@ -9,3 +9,6 @@ analysis/raw/
 
 # Logs
 *.log
+
+# macOS Finder metadata
+.DS_Store
