@@ -238,6 +238,8 @@ pub struct Sink {
     latency_at: [f64; 2],
     /// Shared live encode (replay buffer, streams).
     live: Option<std::sync::Arc<crate::live::Live>>,
+    /// Microphone filters (noise suppression, gate, compressor).
+    mic_filters: crate::filters::FilterChain,
     screen_q: VecDeque<(f64, Pb)>,
     screen_last: Option<Pb>,
     cam_q: VecDeque<(f64, Pb)>,
@@ -364,6 +366,7 @@ impl Sink {
             audio_next: [None; 2],
             preroll: VecDeque::new(),
             live: None,
+            mic_filters: crate::filters::FilterChain::new(Default::default()),
             latency_peak: [0.0; 2],
             latency_at: [0.0; 2],
             audio_offset: [0.0; 2],
@@ -489,6 +492,11 @@ impl Sink {
     /// Screen frames are a single window's: fill its transparent corners.
     pub fn fill_window_corners(&mut self) {
         self.corner_fill = Some(crate::compose::CornerFill::new());
+    }
+
+    /// Change the microphone filters live.
+    pub fn set_mic_filters(&mut self, f: crate::filters::MicFilters) {
+        self.mic_filters.set(f);
     }
 
     pub fn set_live(&mut self, live: std::sync::Arc<crate::live::Live>) {
@@ -619,6 +627,27 @@ impl Sink {
                 self.preroll.pop_front();
             }
             return;
+        };
+        // The mic through its filters: the same buffer, filtered, and moved
+        // earlier by the filters' delay (noise suppression buffers 20 ms).
+        let filtered;
+        let sb = match (kind, self.mic_filters.active()) {
+            (AudioKind::Mic, true) => match crate::mixer::decode(sb) {
+                Some((_, rate, mut frames)) => {
+                    self.mic_filters.process(rate, &mut frames);
+                    let shift = (self.mic_filters.latency() * TIMESCALE as f64).round() as i64;
+                    let pts = unsafe { sb.presentation_time_stamp().subtract(CMTime::new(shift, TIMESCALE)) };
+                    match pcm_like(sb, &frames, pts) {
+                        Some(b) => {
+                            filtered = b;
+                            &*filtered
+                        }
+                        None => sb,
+                    }
+                }
+                None => sb,
+            },
+            _ => sb,
         };
         let pts = unsafe { sb.presentation_time_stamp() };
         let i = (kind == AudioKind::Mic) as usize;
@@ -1088,6 +1117,41 @@ fn silence_like(like: &CMSampleBuffer, frames: usize, pts: CMTime) -> Option<CFR
             std::ptr::NonNull::from(&mut out),
         ) != 0
         {
+            return None;
+        }
+        std::ptr::NonNull::new(out).map(|b| CFRetained::from_raw(b))
+    }
+}
+
+/// A buffer in `like`'s linear PCM format carrying `frames` at `pts`.
+fn pcm_like(like: &CMSampleBuffer, frames: &[[f32; 2]], pts: CMTime) -> Option<CFRetained<CMSampleBuffer>> {
+    use objc2_core_audio_types::*;
+    use objc2_core_media::*;
+    unsafe {
+        let fmt = like.format_description()?;
+        let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(&fmt).as_ref()?;
+        if asbd.mFormatID != kAudioFormatLinearPCM || asbd.mFormatFlags & kAudioFormatFlagIsBigEndian != 0 || frames.is_empty() {
+            return None;
+        }
+        let data = crate::filters::encode_pcm(
+            frames,
+            asbd.mChannelsPerFrame as usize,
+            asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+            asbd.mBitsPerChannel,
+            asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0,
+        )?;
+        let len = data.len();
+        let mut block: *mut CMBlockBuffer = std::ptr::null_mut();
+        if CMBlockBuffer::create_with_memory_block(None, std::ptr::null_mut(), len, None, std::ptr::null(), 0, len, kCMBlockBufferAssureMemoryNowFlag, std::ptr::NonNull::from(&mut block)) != 0 {
+            return None;
+        }
+        let block = CFRetained::from_raw(std::ptr::NonNull::new(block)?);
+        if CMBlockBuffer::replace_data_bytes(std::ptr::NonNull::new(data.as_ptr() as *mut std::ffi::c_void)?, &block, 0, len) != 0 {
+            return None;
+        }
+        let mut out: *mut CMSampleBuffer = std::ptr::null_mut();
+        let fd: &CMAudioFormatDescription = &*(&*fmt as *const CMFormatDescription as *const CMAudioFormatDescription);
+        if CMAudioSampleBufferCreateReadyWithPacketDescriptions(None, &block, fd, frames.len() as isize, pts, std::ptr::null(), std::ptr::NonNull::from(&mut out)) != 0 {
             return None;
         }
         std::ptr::NonNull::new(out).map(|b| CFRetained::from_raw(b))

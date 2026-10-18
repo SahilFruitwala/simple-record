@@ -689,6 +689,15 @@ fn sources(ui: &mut Ui, st: &mut State) {
         if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
             s.mic_name = mic_label(&mics, &s.mic);
         }
+        if s.mic_enabled {
+            // Live, also while recording.
+            w::divider(ui);
+            let f = &mut s.mic_filters;
+            w::row(ui, "Noise suppression", |ui| w::switch(ui, &mut f.denoise, true)).on_hover_text("Removes fans, hum and keyboard noise (RNNoise)");
+            w::row(ui, "Noise gate", |ui| w::switch(ui, &mut f.gate, true)).on_hover_text("Silences the mic between words");
+            w::row(ui, "Compressor", |ui| w::switch(ui, &mut f.compressor, true)).on_hover_text("Evens out loud and quiet speech");
+            w::row(ui, "Low cut (80 Hz)", |ui| w::switch(ui, &mut f.low_cut, true)).on_hover_text("Removes rumble and desk knocks");
+        }
     });
 
     w::header(ui, Icon::Output, "Output");
@@ -1068,6 +1077,27 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
         ui.end_row();
         ui.label("Mic gain");
         ui.add(egui::Slider::new(&mut s.mic_gain_db, -24.0..=24.0).suffix(" dB").step_by(0.5));
+        ui.end_row();
+        let f = &mut s.mic_filters;
+        ui.label("Mic filters");
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut f.low_cut, "Low cut");
+            ui.checkbox(&mut f.denoise, "Noise suppression");
+            ui.checkbox(&mut f.gate, "Gate");
+            ui.checkbox(&mut f.compressor, "Compressor");
+        });
+        ui.end_row();
+        ui.label("Gate opens at");
+        ui.add_enabled(f.gate, egui::Slider::new(&mut f.gate_db, -70.0..=-20.0).suffix(" dBFS").step_by(1.0));
+        ui.end_row();
+        ui.label("Compressor");
+        ui.add_enabled_ui(f.compressor, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Slider::new(&mut f.comp_threshold_db, -40.0..=-5.0).suffix(" dB").step_by(1.0).text("threshold"));
+                ui.add(egui::Slider::new(&mut f.comp_ratio, 1.5..=10.0).step_by(0.5).text(": 1"));
+                ui.add(egui::Slider::new(&mut f.comp_makeup_db, 0.0..=18.0).suffix(" dB").step_by(1.0).text("makeup"));
+            });
+        });
         ui.end_row();
     });
 

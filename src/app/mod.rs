@@ -184,6 +184,7 @@ pub struct State {
     /// transition) last sent to it.
     scene_applied: Option<((crate::compose::Scene, Option<usize>), crate::layout::SceneSpec)>,
     look_applied: Option<(crate::layout::Background, crate::layout::Transition, u32)>,
+    filters_applied: Option<crate::filters::MicFilters>,
     /// Width / height of the screen source (for scene thumbnails).
     pub screen_aspect: f64,
     /// The custom scene layer being edited.
@@ -293,6 +294,7 @@ impl State {
         let Some(sess) = self.recording.as_ref().or(self.preview.as_ref()) else {
             self.scene_applied = None;
             self.look_applied = None;
+            self.filters_applied = None;
             return;
         };
         let applied = (self.settings.scene_id(), self.settings.scene_spec());
@@ -309,6 +311,10 @@ impl State {
             sess.set_look(look.0, look.1, look.2 as f64 / 1000.0);
             self.look_applied = Some(look);
         }
+        if self.filters_applied != Some(s.mic_filters) {
+            sess.set_mic_filters(s.mic_filters);
+            self.filters_applied = Some(s.mic_filters);
+        }
     }
 
     /// The running session was started with the current scene and look.
@@ -316,6 +322,7 @@ impl State {
         let s = &self.settings;
         self.scene_applied = Some((s.scene_id(), s.scene_spec()));
         self.look_applied = Some((s.background, s.transition, s.transition_ms));
+        self.filters_applied = Some(s.mic_filters);
     }
 
     /// Whether the running recording can switch to `scene` live: it needs
@@ -409,6 +416,7 @@ impl App {
             pip_applied: None,
             scene_applied: None,
             look_applied: None,
+            filters_applied: None,
             screen_aspect: 16.0 / 10.0,
             selected_layer: None,
             display_points: vec![],
@@ -607,6 +615,7 @@ impl App {
         let (mut o, t) = crate::prepare(crate::parse_record_args(&refs)?)?;
         o.live = Some(self.st.live.clone());
         o.scene = self.st.settings.scene_spec();
+        o.mic_filters = self.st.settings.mic_filters;
         // Fallbacks never block: say so once.
         let warning = [warning, o.mic_warning.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let warning = Some(warning).filter(|w| !w.is_empty());

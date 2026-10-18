@@ -1,6 +1,7 @@
 mod app;
 mod camera;
 mod compose;
+mod filters;
 mod hotkey;
 mod layout;
 mod live;
@@ -262,6 +263,19 @@ pub struct RecordArgs {
     /// Microphone gain in the mix track (dB).
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     mic_gain: f32,
+    /// Microphone: cut rumble below 80 Hz.
+    #[arg(long)]
+    low_cut: bool,
+    /// Microphone: noise suppression (RNNoise; 48 kHz mics).
+    #[arg(long)]
+    denoise: bool,
+    /// Microphone: noise gate opening above this level (dBFS, e.g. -45).
+    #[arg(long, value_name = "DB", allow_hyphen_values = true, num_args = 0..=1, default_missing_value = "-45")]
+    gate: Option<f32>,
+    /// Microphone: compressor starting at this level (dBFS, e.g. -20),
+    /// 3:1 with 6 dB makeup gain.
+    #[arg(long, value_name = "DB", allow_hyphen_values = true, num_args = 0..=1, default_missing_value = "-20")]
+    compressor: Option<f32>,
     /// Microphone capture backend.
     #[arg(long, value_enum, default_value_t = record::MicBackend::Sck)]
     mic_backend: record::MicBackend,
@@ -499,6 +513,15 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         },
         transition: a.transition,
         transition_secs: a.transition_ms.min(3000) as f64 / 1000.0,
+        mic_filters: filters::MicFilters {
+            low_cut: a.low_cut,
+            denoise: a.denoise,
+            gate: a.gate.is_some(),
+            gate_db: a.gate.unwrap_or(-45.0).clamp(-80.0, 0.0),
+            compressor: a.compressor.is_some(),
+            comp_threshold_db: a.compressor.unwrap_or(-20.0).clamp(-60.0, 0.0),
+            ..Default::default()
+        },
         system_offset_ms: a.system_audio_offset_ms,
         mic_offset_ms: a.mic_offset_ms,
         write: !a.no_record,
@@ -829,6 +852,16 @@ mod tests {
         assert_eq!(a.transition, layout::Transition::Fade);
         assert_eq!(parse_background(a.background.as_deref().unwrap()).unwrap(), layout::Background { top: [16; 3], bottom: [48; 3] });
         assert!(parse_record_args(&["--scene", "cam", "--scene-file", "x.json"]).is_err());
+    }
+
+    #[test]
+    fn mic_filter_options() {
+        let a = parse_record_args(&["--denoise", "--gate", "--compressor", "-24", "--low-cut"]).unwrap();
+        assert!(a.denoise && a.low_cut);
+        assert_eq!(a.gate, Some(-45.0));
+        assert_eq!(a.compressor, Some(-24.0));
+        let a = parse_record_args(&[]).unwrap();
+        assert!(a.gate.is_none() && a.compressor.is_none());
     }
 
     #[test]

@@ -112,6 +112,8 @@ pub struct Options {
     pub background: Background,
     pub transition: Transition,
     pub transition_secs: f64,
+    /// Microphone filters.
+    pub mic_filters: crate::filters::MicFilters,
     /// System audio offset in ms; None = the output device's latency.
     pub system_offset_ms: Option<f64>,
     /// Microphone offset in ms.
@@ -248,6 +250,7 @@ impl Session {
             eprintln!("rec: debug: audio offsets: system {sys_ms:+.1} ms, mic {:+.1} ms", o.mic_offset_ms);
         }
         sink.set_audio_offsets([sys_ms / 1000.0, o.mic_offset_ms / 1000.0]);
+        sink.set_mic_filters(o.mic_filters);
         if let Some(l) = &o.live {
             l.begin_session(o.system_audio, o.mic.is_some(), o.gains_db);
             sink.set_live(l.clone());
@@ -454,6 +457,11 @@ impl Session {
     /// Move or restyle the camera overlay live; also applies to the file.
     pub fn set_pip(&self, pip: PipSpec) {
         self.shared.with(|s| s.set_pip(pip));
+    }
+
+    /// Change the microphone filters live.
+    pub fn set_mic_filters(&self, f: crate::filters::MicFilters) {
+        self.shared.with(|s| s.set_mic_filters(f));
     }
 
     /// Change the scene background and transition live.

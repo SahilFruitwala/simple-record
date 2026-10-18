@@ -80,6 +80,8 @@ pub struct Settings {
     pub audio_tracks: AudioLayout,
     pub system_gain_db: f32,
     pub mic_gain_db: f32,
+    /// Noise suppression, gate, compressor, low-cut (applied live).
+    pub mic_filters: crate::filters::MicFilters,
     pub pip_size: f64,
     pub pip_place: Place,
     pub pip_shape: Shape,
@@ -147,6 +149,7 @@ impl Default for Settings {
             audio_tracks: AudioLayout::Both,
             system_gain_db: 0.0,
             mic_gain_db: 0.0,
+            mic_filters: Default::default(),
             pip_size: PipSpec::default().size,
             pip_place: PipSpec::default().place,
             pip_shape: PipSpec::default().shape,
@@ -318,6 +321,7 @@ impl Settings {
             stream_cbr: d.stream_cbr,
             stream_audio_kbps: d.stream_audio_kbps,
             hotkeys: d.hotkeys.clone(),
+            mic_filters: d.mic_filters,
             ..self.clone()
         };
         (key, composed)
@@ -427,6 +431,19 @@ impl Settings {
         a.extend(["--audio-tracks".into(), value(self.audio_tracks)]);
         a.extend(["--system-gain".into(), format!("{}", self.system_gain_db)]);
         a.extend(["--mic-gain".into(), format!("{}", self.mic_gain_db)]);
+        let f = &self.mic_filters;
+        if f.low_cut {
+            a.push("--low-cut".into());
+        }
+        if f.denoise {
+            a.push("--denoise".into());
+        }
+        if f.gate {
+            a.extend(["--gate".into(), format!("{}", f.gate_db)]);
+        }
+        if f.compressor {
+            a.extend(["--compressor".into(), format!("{}", f.comp_threshold_db)]);
+        }
         a.extend(["--pip-size".into(), format!("{}", self.pip_size)]);
         match self.pip_place {
             Place::Corner(c) => a.extend(["--pip-corner".into(), value(c)]),
