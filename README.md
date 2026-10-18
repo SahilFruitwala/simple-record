@@ -145,11 +145,18 @@ The **main window** contains:
     it. Shape: circle, rounded rectangle, square, pill or squircle, with a roundness slider.
     Size, border (width and color), drop shadow and mirroring are in the sidebar.
   - **Custom scenes**: New Scene starts from the scene shown. The Layers card adds the screen,
-    the camera, other displays, images (a logo, a frame), text (a name tag, with a box) and
-    color layers; shows, hides, reorders and removes them; and sets each one's box, fit, shape,
+    the camera, other cameras, other displays, video files (looped or not), web pages (alerts,
+    chat, a countdown; transparent pages stay transparent), images (a logo, a frame), text (a
+    name tag, with a box) and color layers; shows, hides, reorders and removes them; and sets each one's box, fit, shape,
     roundness, border and shadow. Drag layers in the preview to move them and their corners to
     resize them; they snap to the frame's edges and center. Export a scene as JSON for
     `record --scene-file`, and import it back.
+  - **Filters** on the camera (Camera Overlay card, or `--chroma-key`,
+    `--camera-brightness/contrast/saturation`) and on any layer: a **chroma key** (green or
+    blue screen, with similarity, smoothness and spill removal, computed like OBS's) and
+    **color correction** (brightness, contrast, saturation), on the GPU.
+  - **Studio mode**: click a scene to stage it; the preview shows it beside the program (what
+    is recorded and streamed), and **Transition** (or its shortcut) makes it the program.
   - **Frame**: the screen's own shape (no bars), or 16:9, 9:16, 1:1 or 4:5, with a gradient
     background (Settings) behind layers that don't cover it.
   - Scene switches are live, also while recording (provided the recording started with the
@@ -164,7 +171,8 @@ The **main window** contains:
   - Camera, at 720p, 1080p or 4K, optionally also saved alone to `…-camera.mov` on the
     recording's timeline for editing.
   - Microphone, with live noise suppression, noise gate, compressor and low cut.
-  - System audio.
+  - System audio: of every app, **only some apps**, or **all but some** (by bundle ID, helper
+    processes included; `--audio-apps`, `--audio-except`).
 - **Record / Stop** (⇧⌘R from anywhere by default), **Pause / Resume**, the recording timer,
   and **level meters** for system audio and mic with peak hold.
 - **Reveal Last** and **Open Folder**.
@@ -173,8 +181,9 @@ The **main window** contains:
   stopping anything. ⇧⌘S is only taken while the buffer is on, because it is Save As in most
   apps.
 - **Stream**: YouTube, Twitch or a custom RTMP/RTMPS, SRT or WHIP URL, and **+ Add
-  destination** for more at once (one encode feeds them all, within the strictest limits of
-  all of them). The stream key is typed once and stored in the Keychain (per destination URL),
+  destination** for more at once: one encode feeds them all, within the strictest limits of
+  all of them, or a destination gets **its own encode** (its own size and bitrate, e.g. 720p
+  to Twitch beside 1440p to YouTube). The stream key is typed once and stored in the Keychain (per destination URL),
   never in the settings file or logs. **Go Live** / **Stop Stream**, with each stream's
   duration, bitrate and dropped frames, and a LIVE badge.
 
@@ -399,10 +408,13 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 | Window capture | ✅ | ✅ |
 | Region / crop | ✅ crop filter | ✅ drag over the preview, or `--region` |
 | Application capture (all windows of an app) | ✅ | ✅ |
-| Scenes | ✅ unlimited, free layout, transitions | ✅ nine templates plus custom scenes (free layout, image, text and color layers), live switching with Move, Fade or Cut transitions |
+| Scenes | ✅ unlimited, free layout, transitions | ✅ nine templates plus custom scenes (free layout; image, text, color, video file and web page layers), live switching with Move, Fade or Cut transitions |
+| Studio mode | ✅ | ✅ staged scene beside the program, Transition button and shortcut |
+| Browser / media sources | ✅ | ✅ web pages (WKWebView, 15 fps) and video files (picture only) |
+| Chroma key, color correction | ✅ | ✅ camera and any layer, on the GPU |
 | Output frame shape | ✅ any canvas | ✅ the source's shape, 16:9, 9:16, 1:1, 4:5 |
-| Multiple displays/sources at once | ✅ | ✅ other displays as layers in custom scenes, plus the webcam |
-| System audio | ✅ | ✅ |
+| Multiple displays/sources at once | ✅ | ✅ other displays and other cameras as layers in custom scenes |
+| System audio | ✅ per application | ✅ all apps, only some, or all but some |
 | Microphone | ✅ | ✅ |
 | Webcam overlay | ✅ any layout | ✅ drag anywhere with corner snapping; circle, rounded, square, pill or squircle; roundness, border, shadow, mirror; live while recording |
 | Separate audio tracks | ✅ up to 6 | ✅ mix plus system and mic stems |
@@ -415,11 +427,11 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 | Crash-safe files | ✅ hybrid/fragmented MP4 | ✅ fragments every 2 s |
 | Pause / resume | ✅ | ✅ sample-accurate, app and CLI; the pause is cut from the file, audio stays in sync |
 | Replay buffer | ✅ | ✅ 15–300 s in memory, ⇧⌘S or `save-replay` writes an MP4 without stopping, memory use shown |
-| Streaming | ✅ RTMP, WHIP, SRT, multitrack | ✅ RTMP/RTMPS (YouTube, Twitch, custom), SRT (with encryption) and WHIP, several at once from one encode (app and CLI), H.264 or HEVC Main10 (enhanced RTMP), platform bitrate presets up to 4K60, auto-reconnect, live status; key in the Keychain |
+| Streaming | ✅ RTMP, WHIP, SRT, multitrack | ✅ RTMP/RTMPS (YouTube, Twitch, custom), SRT (with encryption) and WHIP, several at once from one encode or each its own (app; CLI: one encode), H.264 or HEVC Main10 (enhanced RTMP), platform bitrate presets up to 4K60, auto-reconnect, live status; key in the Keychain |
 | Screen scaling | GPU bilinear/bicubic/Lanczos | ✅ native capture, Metal Lanczos per plane (5K→4K VMAF 100 vs 90 for ScreenCaptureKit) |
 | Live preview | ✅ | ✅ |
 | Level meters | ✅ | ✅ peak with hold |
-| Global hotkey | ✅ configurable | ✅ configurable: record, pause, save replay, go live, next/previous scene |
+| Global hotkey | ✅ configurable | ✅ configurable: record, pause, save replay, go live, next/previous scene, transition |
 | Separate camera file | ✅ (source record plugin) | ✅ `…-camera.mov` on the recording's timeline |
 | Menu bar control | ❌ | ✅ menu bar item plus Dock app |
 | Headless CLI | ❌ (obs-cli via websocket) | ✅ `rec-rs record …`, `stop`, `pause`, `resume` |
@@ -428,13 +440,16 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 
 ## Known gaps
 
-- **Scenes.** Layers are the screen, the camera, other displays, images, text and colors; there
-  are no browser, media-file or game sources, no per-layer filters (chroma key, color
-  correction), and only one camera. A recording can switch live only to scenes whose sources
-  it started with (turn the camera on to switch into camera scenes).
+- **Scenes.** No game capture. Video file layers show the picture only (their sound isn't
+  played or recorded) and start when capture starts; web pages render at 15 fps and need the
+  main run loop (the app, or `record` in a terminal). In studio mode the layer editor edits the
+  program scene. A recording can switch live only to scenes whose sources it started with
+  (turn the camera on to switch into camera scenes).
+- **Per-app audio** picks among running apps when capture starts; an app launched later isn't
+  heard until capture restarts.
 - **Region capture** applies to one display; other displays in a scene are always whole.
-- **Streaming.** No multitrack (simulcast renditions) and no SRT listener or rendezvous mode
-  (caller only). Changing the live encode settings needs the stream stopped. HEVC to YouTube
+- **Streaming.** Per-destination encodes are separate hardware sessions, not Enhanced RTMP
+  multitrack to one service; no SRT listener or rendezvous mode (caller only). Changing the live encode settings needs the stream stopped. HEVC to YouTube
   was tested only against a local server, not YouTube itself.
 - **HDR is experimental.** It records HDR10 (BT.2020 PQ) from ScreenCaptureKit's HDR capture,
   but the replay buffer and streams stay SDR and are off meanwhile, a window's transparent
