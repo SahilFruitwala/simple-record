@@ -134,6 +134,11 @@ pub struct RecordArgs {
     /// Video bitrate in Mb/s. Default scales with resolution and fps.
     #[arg(long)]
     bitrate: Option<f64>,
+    /// Record HDR (experimental): 10-bit HEVC (or ProRes) tagged BT.2020
+    /// PQ, from ScreenCaptureKit's HDR capture. Recording only: no replay
+    /// buffer or streaming.
+    #[arg(long)]
+    hdr: bool,
     /// Record system audio (the default; see --no-system-audio).
     #[arg(long, overrides_with = "no_system_audio")]
     system_audio: bool,
@@ -494,6 +499,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         fps: a.fps,
         codec: Codec::H264,
         bitrate: 0,
+        hdr: a.hdr,
         system_audio: !a.no_system_audio,
         mic,
         mic_warning,
@@ -584,7 +590,18 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         Some(aspect) => canvas_size(&a.resolution, aspect, native)?,
         None => parse_size(&a.resolution, native)?,
     };
-    let codec = a.codec.unwrap_or(if w * h > 1920 * 1080 { Codec::Hevc } else { Codec::H264 });
+    let codec = a.codec.unwrap_or(if w * h > 1920 * 1080 || a.hdr { Codec::Hevc } else { Codec::H264 });
+    if a.hdr {
+        if codec == Codec::H264 {
+            bail!("HDR needs HEVC or ProRes (--codec hevc or prores)");
+        }
+        if a.test_pattern {
+            bail!("HDR can't be used with the test pattern");
+        }
+        if a.replay.is_some() || !a.stream.is_empty() || a.no_record {
+            bail!("HDR is for recordings: the replay buffer and streams are SDR (drop --hdr, or --replay/--stream)");
+        }
+    }
     // Bits per pixel per frame tuned for screen content (sharp text).
     let bpp = match codec {
         Codec::H264 => 0.16,
@@ -886,6 +903,12 @@ mod tests {
         assert_eq!(a.transition, layout::Transition::Fade);
         assert_eq!(parse_background(a.background.as_deref().unwrap()).unwrap(), layout::Background { top: [16; 3], bottom: [48; 3] });
         assert!(parse_record_args(&["--scene", "cam", "--scene-file", "x.json"]).is_err());
+    }
+
+    #[test]
+    fn hdr_option() {
+        assert!(parse_record_args(&["--hdr", "--codec", "hevc"]).unwrap().hdr);
+        assert!(!parse_record_args(&[]).unwrap().hdr);
     }
 
     #[test]

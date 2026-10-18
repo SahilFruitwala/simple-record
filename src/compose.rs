@@ -500,6 +500,14 @@ impl Compositor {
         self.pip = pip;
     }
 
+    /// Render in this color space (HDR capture's), not sRGB.
+    pub fn set_color_space(&mut self, name: &str) {
+        let cf = objc2_core_foundation::CFString::from_str(name);
+        if let Some(cs) = CGColorSpace::with_name(Some(&cf)) {
+            self.cs = cs;
+        }
+    }
+
     pub fn set_background(&mut self, bg: Background) {
         self.background = bg;
     }

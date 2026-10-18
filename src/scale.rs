@@ -39,6 +39,8 @@ pub struct FrameScaler {
     vt: Option<CFRetained<VTPixelTransferSession>>,
     /// Output (width, height).
     size: (usize, usize),
+    /// 10-bit HDR frames (BT.2020): VideoToolbox scales them.
+    hdr: bool,
 }
 
 // The Metal objects and the session are only used by the sink, behind its
@@ -62,7 +64,7 @@ fn set(session: &VTPixelTransferSession, key: &CFString, value: &CFString) {
     }
 }
 
-fn vt_session() -> Option<CFRetained<VTPixelTransferSession>> {
+fn vt_session(hdr: bool) -> Option<CFRetained<VTPixelTransferSession>> {
     unsafe {
         let mut s = std::ptr::null_mut();
         if VTPixelTransferSession::create(None, std::ptr::NonNull::from(&mut s)) != 0 {
@@ -73,7 +75,8 @@ fn vt_session() -> Option<CFRetained<VTPixelTransferSession>> {
         set(&vt, kVTPixelTransferPropertyKey_DownsamplingMode, kVTDownsamplingMode_Average);
         // Same curve and primaries in and out (no color conversion, as in
         // the unscaled path); the matrix matches what encoders tag.
-        set(&vt, kVTPixelTransferPropertyKey_DestinationYCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2);
+        let matrix = if hdr { kCVImageBufferYCbCrMatrix_ITU_R_2020 } else { kCVImageBufferYCbCrMatrix_ITU_R_709_2 };
+        set(&vt, kVTPixelTransferPropertyKey_DestinationYCbCrMatrix, matrix);
         Some(vt)
     }
 }
@@ -136,8 +139,13 @@ fn planes(buf: &CVPixelBuffer) -> Option<Vec<(MTLPixelFormat, [f64; 4])>> {
 impl FrameScaler {
     pub fn new(width: usize, height: usize) -> Option<FrameScaler> {
         let metal = if std::env::var("REC_SCALER").as_deref() == Ok("vt") { None } else { metal() };
-        let vt = if metal.is_none() { Some(vt_session()?) } else { None };
-        Some(FrameScaler { metal, vt, size: (width, height) })
+        let vt = if metal.is_none() { Some(vt_session(false)?) } else { None };
+        Some(FrameScaler { metal, vt, size: (width, height), hdr: false })
+    }
+
+    /// For 10-bit HDR frames (BT.2020), which the Metal path doesn't take.
+    pub fn new_hdr(width: usize, height: usize) -> Option<FrameScaler> {
+        Some(FrameScaler { metal: None, vt: Some(vt_session(true)?), size: (width, height), hdr: true })
     }
 
     /// Scale to this size from now on.
@@ -158,7 +166,7 @@ impl FrameScaler {
         }
         let vt = match &self.vt {
             Some(v) => v,
-            None => match vt_session() {
+            None => match vt_session(self.hdr) {
                 Some(v) => self.vt.insert(v),
                 None => return false,
             },

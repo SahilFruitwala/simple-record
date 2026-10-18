@@ -90,6 +90,9 @@ pub struct Options {
     pub fps: u32,
     pub codec: Codec,
     pub bitrate: u64,
+    /// Capture and encode HDR (10-bit HEVC or ProRes, BT.2020). The live
+    /// encode (replay buffer, streams) is SDR and stays off.
+    pub hdr: bool,
     pub system_audio: bool,
     pub mic: Option<Option<String>>,
     /// Set when the requested mic isn't connected and the default is used.
@@ -234,10 +237,26 @@ impl Session {
         // rounded corners are filled before encoding (420v has no alpha).
         let window = matches!(target, Some(screen::Target::Window(_)));
         let composed = composed(o);
-        let pixel_format = if composed || window { PIX_BGRA } else { PIX_420V };
-        let spec = VideoSpec { width: w, height: h, fps: o.fps, codec: o.codec, bitrate: o.bitrate, pixel_format };
+        // HDR frames keep ScreenCaptureKit's HDR format end to end, tagged
+        // by its color space.
+        let hdr = o.hdr.then(screen::hdr_format);
+        let hdr_pq = match &hdr {
+            Some((_, cs)) if cs.contains("PQ") => Some(true),
+            Some((_, cs)) if cs.contains("HLG") => Some(false),
+            Some((_, cs)) => bail!("HDR capture delivers {cs}, which can't be tagged for the encoder"),
+            None => None,
+        };
+        let pixel_format = match &hdr {
+            Some((pf, _)) => *pf,
+            None if composed || window => PIX_BGRA,
+            None => PIX_420V,
+        };
+        let spec = VideoSpec { width: w, height: h, fps: o.fps, codec: o.codec, bitrate: o.bitrate, pixel_format, hdr_pq };
         let compositor = composed.then(|| {
             let mut c = Compositor::new(w, h, o.pip.clone());
+            if let Some((_, cs)) = &hdr {
+                c.set_color_space(cs);
+            }
             c.set_background(o.background);
             c.set_transition(o.transition, o.transition_secs);
             c.set_scene(o.scene.clone(), false);
@@ -248,7 +267,7 @@ impl Session {
         // Composed scenes draw the screen at sizes of their own: the scaler
         // takes it there from whatever size it is captured at.
         if (composed || capture_size(o) != (w, h))
-            && let Some(sc) = crate::scale::FrameScaler::new(w, h)
+            && let Some(sc) = if o.hdr { crate::scale::FrameScaler::new_hdr(w, h) } else { crate::scale::FrameScaler::new(w, h) }
         {
             sink.set_scaler(sc);
         }
@@ -272,7 +291,7 @@ impl Session {
             let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::H264 };
             sink.write_camera_file(&camera_file_path(&o.output), o.cam_res.size(), codec, o.fps)?;
         }
-        if let Some(l) = &o.live {
+        if let Some(l) = o.live.as_ref().filter(|_| !o.hdr) {
             l.begin_session(o.system_audio, o.mic.is_some(), o.gains_db);
             sink.set_live(l.clone());
         }
@@ -405,6 +424,7 @@ impl Session {
                     system_audio: o.system_audio,
                     mic: sck_mic,
                     extra: None,
+                    hdr: o.hdr,
                 };
                 self.screen = Some(ScreenCapture::start(&cfg, self.shared.clone())?);
             }
@@ -434,6 +454,7 @@ impl Session {
                     system_audio: false,
                     mic: None,
                     extra: Some(n),
+                    hdr: false,
                 };
                 self.extra_screens.push(ScreenCapture::start(&cfg, self.shared.clone())?);
             }

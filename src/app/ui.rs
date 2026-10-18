@@ -765,6 +765,11 @@ pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", 
 /// with or without a recording.
 fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     let p = theme::pal(ui);
+    if s.hdr {
+        w::header(ui, Icon::Stream, "Replay & Stream");
+        w::card(ui, |ui| w::hint(ui, "Off while recording HDR: the live encode is SDR. Turn HDR off in Settings to use them."));
+        return;
+    }
     w::header(ui, Icon::Replay, "Replay Buffer");
     w::card(ui, |ui| {
         w::row(ui, "Keep recent footage", |ui| w::switch(ui, &mut s.replay_enabled, true));
@@ -1032,6 +1037,15 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
             (Some(Codec::Prores), "ProRes 422 (.mov)".to_string()),
         ];
         combo(ui, "codec", &mut s.codec, &opts, true);
+        ui.end_row();
+        ui.label("HDR");
+        ui.vertical(|ui| {
+            ui.add_enabled(s.codec != Some(Codec::H264), egui::Checkbox::new(&mut s.hdr, "Record HDR (experimental)"))
+                .on_hover_text("10-bit HEVC or ProRes, BT.2020 PQ, from ScreenCaptureKit's HDR capture");
+            if s.hdr {
+                ui.label(RichText::new("HDR is for recordings: the replay buffer and streams are off while it is on.").size(SECONDARY).color(theme::pal(ui).secondary));
+            }
+        });
         ui.end_row();
         ui.label("Bitrate");
         ui.horizontal(|ui| {

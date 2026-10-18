@@ -49,6 +49,8 @@ pub struct VideoSpec {
     pub bitrate: u64,
     /// Pixel format of buffers handed to the encoder.
     pub pixel_format: u32,
+    /// HDR: tag BT.2020 with PQ (true) or HLG (false), 10-bit HEVC.
+    pub hdr_pq: Option<bool>,
 }
 
 /// Audio track layout when both system audio and mic are recorded.
@@ -313,14 +315,30 @@ fn video_settings(v: &VideoSpec) -> Retained<Dict> {
                 ));
                 AVVideoCodecTypeH264.unwrap()
             }
-            Codec::Hevc => AVVideoCodecTypeHEVC.unwrap(),
+            Codec::Hevc => {
+                if v.hdr_pq.is_some() {
+                    let main10 = cf_ns(objc2_video_toolbox::kVTProfileLevel_HEVC_Main10_AutoLevel);
+                    compression.push((AVVideoProfileLevelKey.unwrap(), obj(main10)));
+                }
+                AVVideoCodecTypeHEVC.unwrap()
+            }
             Codec::Prores => AVVideoCodecTypeAppleProRes422.unwrap(),
         };
-        let color = dict(vec![
-            (AVVideoColorPrimariesKey.unwrap(), obj(AVVideoColorPrimaries_ITU_R_709_2.unwrap())),
-            (AVVideoTransferFunctionKey.unwrap(), obj(AVVideoTransferFunction_ITU_R_709_2.unwrap())),
-            (AVVideoYCbCrMatrixKey.unwrap(), obj(AVVideoYCbCrMatrix_ITU_R_709_2.unwrap())),
-        ]);
+        let color = match v.hdr_pq {
+            Some(pq) => dict(vec![
+                (AVVideoColorPrimariesKey.unwrap(), obj(AVVideoColorPrimaries_ITU_R_2020.unwrap())),
+                (
+                    AVVideoTransferFunctionKey.unwrap(),
+                    obj(if pq { AVVideoTransferFunction_SMPTE_ST_2084_PQ.unwrap() } else { AVVideoTransferFunction_ITU_R_2100_HLG.unwrap() }),
+                ),
+                (AVVideoYCbCrMatrixKey.unwrap(), obj(AVVideoYCbCrMatrix_ITU_R_2020.unwrap())),
+            ]),
+            None => dict(vec![
+                (AVVideoColorPrimariesKey.unwrap(), obj(AVVideoColorPrimaries_ITU_R_709_2.unwrap())),
+                (AVVideoTransferFunctionKey.unwrap(), obj(AVVideoTransferFunction_ITU_R_709_2.unwrap())),
+                (AVVideoYCbCrMatrixKey.unwrap(), obj(AVVideoYCbCrMatrix_ITU_R_709_2.unwrap())),
+            ]),
+        };
         let mut settings = vec![
             (AVVideoCodecKey.unwrap(), obj(codec)),
             (AVVideoWidthKey.unwrap(), num_i(v.width as i64)),
@@ -531,6 +549,7 @@ impl Sink {
             codec,
             bitrate: ((size.0 * size.1) as f64 * fps.min(60) as f64 * bpp) as u64,
             pixel_format: PIX_BGRA,
+            hdr_pq: None,
         };
         let (writer, video, adaptor) = open_video(path, &v)?;
         unsafe {
@@ -1379,7 +1398,7 @@ mod tests {
             ] {
                 let path = dir.join(format!("rec-probe-{name}.mov"));
                 let _ = std::fs::remove_file(&path);
-                let spec = super::VideoSpec { width: 320, height: 64, fps: 30, codec: crate::writer::Codec::H264, bitrate: 20_000_000, pixel_format: crate::util::PIX_BGRA };
+                let spec = super::VideoSpec { width: 320, height: 64, fps: 30, codec: crate::writer::Codec::H264, bitrate: 20_000_000, pixel_format: crate::util::PIX_BGRA, hdr_pq: None };
                 let o = super::open_output(&path, &spec, false, false, super::AudioLayout::Both).unwrap();
                 o.writer.startSessionAtSourceTime(objc2_core_media::CMTime::new(0, 30));
                 let src = crate::compose::color_probe::stripes(320, 64, &vals, tag);

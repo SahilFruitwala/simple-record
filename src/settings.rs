@@ -53,6 +53,8 @@ pub struct Settings {
     pub fps: u32,
     /// Mb/s; None = automatic.
     pub bitrate_mbps: Option<f64>,
+    /// HDR recording (10-bit HEVC/ProRes, BT.2020 PQ; experimental).
+    pub hdr: bool,
     /// 1-based display number.
     pub display: usize,
     /// Record only this part of the display: [x, y, width, height] in
@@ -138,6 +140,7 @@ impl Default for Settings {
             resolution: "1080p".into(),
             fps: 60,
             bitrate_mbps: None,
+            hdr: false,
             display: 1,
             region: None,
             app: None,
@@ -413,6 +416,9 @@ impl Settings {
         }
         if let Some(b) = self.bitrate_mbps {
             a.extend(["--bitrate".into(), format!("{b}")]);
+        }
+        if self.hdr && self.codec != Some(Codec::H264) {
+            a.push("--hdr".into());
         }
         if let Some(o) = output {
             a.extend(["-o".into(), o.to_string_lossy().into_owned()]);

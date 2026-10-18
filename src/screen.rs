@@ -176,6 +176,16 @@ impl Target {
     }
 }
 
+/// ScreenCaptureKit's HDR capture format: (pixel format, color space
+/// name), from its HDR stream preset for the canonical display (rendered
+/// for a reference HDR display, the same on any Mac).
+pub fn hdr_format() -> (u32, String) {
+    unsafe {
+        let c = SCStreamConfiguration::streamConfigurationWithPreset(SCStreamConfigurationPreset::CaptureHDRStreamCanonicalDisplay);
+        (c.pixelFormat(), c.colorSpaceName().to_string())
+    }
+}
+
 pub struct ScreenConfig {
     pub target: Target,
     pub width: usize,
@@ -190,6 +200,8 @@ pub struct ScreenConfig {
     /// An extra screen source for scene layers (`Content::Display(n)`):
     /// its frames go to the sink under this display number.
     pub extra: Option<usize>,
+    /// Capture HDR (`hdr_format`); the pixel format is then the preset's.
+    pub hdr: bool,
 }
 
 pub struct Ivars {
@@ -277,7 +289,11 @@ unsafe impl Send for ScreenCapture {}
 impl ScreenCapture {
     pub fn start(cfg: &ScreenConfig, shared: Arc<Shared>) -> Result<Self> {
         unsafe {
-            let conf = SCStreamConfiguration::new();
+            let conf = if cfg.hdr {
+                SCStreamConfiguration::streamConfigurationWithPreset(SCStreamConfigurationPreset::CaptureHDRStreamCanonicalDisplay)
+            } else {
+                SCStreamConfiguration::new()
+            };
             let filter = match &cfg.target {
                 Target::Display(d, region) => {
                     if let Some(r) = region {
@@ -321,16 +337,20 @@ impl ScreenCapture {
             // Slightly under the frame period, so capture jitter never makes
             // ScreenCaptureKit skip a frame the pacer needs (as OBS does).
             conf.setMinimumFrameInterval(CMTime::new(9, cfg.fps as i32 * 10));
-            conf.setPixelFormat(cfg.pixel_format);
+            if !cfg.hdr {
+                conf.setPixelFormat(cfg.pixel_format);
+            }
             conf.setQueueDepth(8);
             conf.setShowsCursor(cfg.cursor);
             conf.setShowMouseClicks(cfg.clicks);
             conf.setScalesToFit(true);
             conf.setPreservesAspectRatio(true);
             conf.setCaptureResolution(SCCaptureResolutionType::Best);
-            conf.setColorSpaceName(kCGColorSpaceSRGB);
-            if cfg.pixel_format == PIX_420V {
-                conf.setColorMatrix(kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
+            if !cfg.hdr {
+                conf.setColorSpaceName(kCGColorSpaceSRGB);
+                if cfg.pixel_format == PIX_420V {
+                    conf.setColorMatrix(kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
+                }
             }
             conf.setCapturesAudio(cfg.system_audio);
             conf.setSampleRate(48000);

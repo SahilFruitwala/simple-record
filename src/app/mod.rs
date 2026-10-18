@@ -650,7 +650,7 @@ impl App {
 
     /// Whether the live encode needs a capture session (replay or stream).
     fn live_wanted(&self) -> bool {
-        self.st.settings.replay_enabled || self.st.streaming()
+        (self.st.settings.replay_enabled && !self.st.settings.hdr) || self.st.streaming()
     }
 
     /// Apply the replay and live-encode settings.
@@ -659,7 +659,8 @@ impl App {
         if self.st.live.config() != cfg {
             self.st.live.set_config(cfg);
         }
-        let want = self.st.settings.replay_enabled.then(|| self.st.settings.replay_secs.clamp(15, 300) as f64);
+        // HDR sessions don't feed the (SDR) live encode.
+        let want = (self.st.settings.replay_enabled && !self.st.settings.hdr).then(|| self.st.settings.replay_secs.clamp(15, 300) as f64);
         let have = self.st.live.replay_stats().is_some();
         if want.is_some() || have {
             self.st.live.set_replay(want);
@@ -748,6 +749,10 @@ impl App {
                 self.st.live.remove_output(id);
             }
             self.st.stream_statuses.clear();
+            return;
+        }
+        if self.st.settings.hdr {
+            self.st.error = Some("Streaming is off while HDR recording is on (Settings > Video)".into());
             return;
         }
         // The encode is set for all destinations before the first starts.
