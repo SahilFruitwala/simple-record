@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::compose::{PipSpec, Shape, overlay_rect, same_aspect};
+use crate::shapes::{PipSpec, Shape, overlay_rect, same_aspect};
 
 /// Built-in scene templates. Switchable live while the webcam runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, clap::ValueEnum, Serialize, Deserialize)]

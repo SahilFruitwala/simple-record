@@ -13,6 +13,8 @@ mod record;
 mod scale;
 mod screen;
 mod settings;
+mod shapes;
+mod shortcut;
 mod synth;
 mod tcc;
 mod util;
