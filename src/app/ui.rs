@@ -6,7 +6,7 @@ use egui::{Align, Color32, CornerRadius, Layout, Margin, RichText, Sense, Stroke
 
 use super::theme::{self, BODY, SECONDARY, TOOLBAR_H, TRAFFIC_LIGHTS_W};
 use super::widgets::{self as w, Icon};
-use super::{Cmd, Meter, State};
+use super::{Cmd, Meter, RegionSelect, State};
 use crate::compose::{self, Corner, Place, Shape};
 use crate::hotkey::{Action, Combo};
 use crate::layout::{Background, Canvas, Transition};
@@ -239,13 +239,13 @@ fn select_region(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
     let current = resp.interact_pointer_pos().map(|p| p.clamp(screen.min, screen.max));
     if let Some(r) = st.region_select.as_mut() {
         if resp.drag_started() {
-            r.1 = current;
+            r.start = current;
         }
         if current.is_some() {
-            r.2 = current;
+            r.end = current;
         }
     }
-    let sel = match st.region_select.as_ref().map(|r| (r.1, r.2)) {
+    let sel = match st.region_select.as_ref().map(|r| (r.start, r.end)) {
         Some((Some(a), Some(b))) => Some(egui::Rect::from_two_pos(a, b)),
         _ => None,
     };
@@ -283,11 +283,11 @@ fn select_region(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
             st.region_select = None;
             let _ = st.settings.save();
         } else if let Some(r) = st.region_select.as_mut() {
-            (r.1, r.2) = (None, None);
+            (r.start, r.end) = (None, None);
         }
     }
     if ui.input(|i| i.key_pressed(egui::Key::Escape))
-        && let Some((before, _, _)) = st.region_select.take()
+        && let Some(RegionSelect { before, .. }) = st.region_select.take()
     {
         st.settings.region = before;
     }
@@ -668,7 +668,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
             w::row(ui, "Area", |ui| {
                 if st.region_select.is_some() {
                     if ui.button("Cancel").clicked()
-                        && let Some((before, _, _)) = st.region_select.take()
+                        && let Some(RegionSelect { before, .. }) = st.region_select.take()
                     {
                         s.region = before;
                     }
@@ -678,7 +678,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
                         s.region = None;
                     }
                     if ui.add_enabled(idle, egui::Button::new(if s.region.is_some() { "Change…" } else { "Select…" })).on_hover_text("Record part of the display: drag over it in the preview").clicked() {
-                        st.region_select = Some((s.region, None, None));
+                        st.region_select = Some(RegionSelect { before: s.region, ..Default::default() });
                         s.region = None;
                     }
                     let text = match s.region {
@@ -769,7 +769,8 @@ pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", 
 /// with or without a recording.
 fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     let p = theme::pal(ui);
-    if s.hdr {
+    // While streaming, the controls stay (Stop Stream must be reachable).
+    if s.hdr_on() && !st.streaming() {
         w::header(ui, Icon::Stream, "Replay & Stream");
         w::card(ui, |ui| w::hint(ui, "Off while recording HDR: the live encode is SDR. Turn HDR off in Settings to use them."));
         return;
@@ -1044,9 +1045,10 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
         ui.end_row();
         ui.label("HDR");
         ui.vertical(|ui| {
-            ui.add_enabled(s.codec != Some(Codec::H264), egui::Checkbox::new(&mut s.hdr, "Record HDR (experimental)"))
+            // Not while streaming: the stream would lose its frames.
+            ui.add_enabled(s.codec != Some(Codec::H264) && !st.streaming(), egui::Checkbox::new(&mut s.hdr, "Record HDR (experimental)"))
                 .on_hover_text("10-bit HEVC or ProRes, BT.2020 PQ, from ScreenCaptureKit's HDR capture");
-            if s.hdr {
+            if s.hdr_on() {
                 ui.label(RichText::new("HDR is for recordings: the replay buffer and streams are off while it is on.").size(SECONDARY).color(theme::pal(ui).secondary));
             }
         });

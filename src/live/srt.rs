@@ -84,7 +84,8 @@ pub fn parse_url(url: &str, key: &str) -> Result<SrtUrl> {
     let addr = addr.trim_end_matches('/');
     let (host, port) = addr.rsplit_once(':').ok_or_else(|| anyhow!("srt:// URL needs a port (srt://host:port)"))?;
     let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
-    let port: u16 = port.parse().map_err(|_| anyhow!("bad port in {url}"))?;
+    // Errors never quote the URL: its query can hold the passphrase.
+    let port: u16 = port.parse().map_err(|_| anyhow!("bad SRT port {port:?}"))?;
     let mut u = SrtUrl { host, port, streamid: None, passphrase: None, latency_ms: 200, pbkeylen: 16 };
     for kv in query.split('&').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));

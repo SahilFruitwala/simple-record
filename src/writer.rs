@@ -594,6 +594,7 @@ impl Sink {
                 // The recording goes on without it.
                 eprintln!("rec: warning: camera file failed: {}", err_text(&c.writer));
                 c.writer.cancelWriting();
+                let _ = std::fs::remove_file(&c.path);
                 self.cam_out = None;
                 self.stats.camera_file = None;
             }
@@ -758,23 +759,28 @@ impl Sink {
         };
         // The mic through its filters: the same buffer, filtered, and moved
         // earlier by the filters' delay (noise suppression buffers 20 ms).
+        // Its decoded samples are reused below (decoded once, not twice).
         let filtered;
-        let sb = match (kind, self.mic_filters.active()) {
-            (AudioKind::Mic, true) => match crate::mixer::decode(sb) {
-                Some((_, rate, mut frames)) => {
-                    self.mic_filters.process(rate, &mut frames);
-                    let shift = (self.mic_filters.latency() * TIMESCALE as f64).round() as i64;
-                    let pts = unsafe { sb.presentation_time_stamp().subtract(CMTime::new(shift, TIMESCALE)) };
-                    match pcm_like(sb, &frames, pts) {
-                        Some(b) => {
-                            filtered = b;
-                            &*filtered
-                        }
-                        None => sb,
+        let mut decoded = crate::mixer::decode(sb);
+        let sb = match (kind, self.mic_filters.active(), decoded.as_mut()) {
+            (AudioKind::Mic, true, Some((t, rate, frames))) => {
+                self.mic_filters.process(*rate, frames);
+                let shift = (self.mic_filters.latency() * TIMESCALE as f64).round() as i64;
+                let pts = unsafe { sb.presentation_time_stamp().subtract(CMTime::new(shift, TIMESCALE)) };
+                match pcm_like(sb, frames, pts) {
+                    Some(b) => {
+                        *t = secs(pts);
+                        filtered = b;
+                        &*filtered
+                    }
+                    // Can't carry them in this format: the mic stays as
+                    // captured, everywhere.
+                    None => {
+                        decoded = crate::mixer::decode(sb);
+                        sb
                     }
                 }
-                None => sb,
-            },
+            }
             _ => sb,
         };
         let pts = unsafe { sb.presentation_time_stamp() };
@@ -782,7 +788,6 @@ impl Sink {
         // When the sound was heard (see `set_audio_offsets`).
         let real_s = secs(pts);
         let pts_s = real_s + self.audio_offset[i];
-        let decoded = crate::mixer::decode(sb);
         if let (Some(l), Some((_, rate, frames))) = (&self.live, &decoded)
             && l.active()
         {
@@ -1136,8 +1141,13 @@ impl Sink {
                 .context("timed out finalizing movie")?;
             if let Some((c, rx)) = cam {
                 let ok = rx.recv_timeout(Duration::from_secs(60)).is_ok() && c.writer.status() == AVAssetWriterStatus::Completed;
-                if !ok {
-                    eprintln!("rec: warning: camera file {} failed: {}", c.path.display(), err_text(&c.writer));
+                // No camera frames (it never delivered) or a failure: no
+                // unplayable file is left behind.
+                if !ok || self.stats.camera_frames == 0 {
+                    if !ok {
+                        eprintln!("rec: warning: camera file {} failed: {}", c.path.display(), err_text(&c.writer));
+                    }
+                    let _ = std::fs::remove_file(&c.path);
                     self.stats.camera_file = None;
                 }
             }

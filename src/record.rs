@@ -166,8 +166,9 @@ pub struct Session {
     stop: Arc<AtomicBool>,
     pacer: Option<std::thread::JoinHandle<()>>,
     screen: Option<ScreenCapture>,
-    /// Other displays the scene shows.
+    /// Other displays the scene shows, and their numbers.
     extra_screens: Vec<ScreenCapture>,
+    extra_displays: Vec<usize>,
     synth: Option<Synth>,
     cam: Option<Camera>,
     av_mic: Option<Mic>,
@@ -273,7 +274,9 @@ impl Session {
         {
             sink.set_scaler(sc);
         }
-        if window && o.test_pattern.is_none() {
+        // The fill needs BGRA's alpha to find the corners; HDR frames may
+        // have none, so their corners stay as captured (README: Known gaps).
+        if window && o.test_pattern.is_none() && pixel_format == PIX_BGRA {
             sink.fill_window_corners();
         }
         sink.limit_secs(o.duration);
@@ -305,6 +308,7 @@ impl Session {
             pacer: None,
             screen: None,
             extra_screens: vec![],
+            extra_displays: vec![],
             synth: None,
             cam: None,
             av_mic: None,
@@ -460,6 +464,7 @@ impl Session {
                     hdr: false,
                 };
                 self.extra_screens.push(ScreenCapture::start(&cfg, self.shared.clone())?);
+                self.extra_displays.push(n);
             }
         }
         Ok(())
@@ -566,6 +571,12 @@ impl Session {
     /// taking the sink's lock from the capture threads.
     pub fn composed(&self) -> bool {
         self.composed
+    }
+
+    /// The other displays this session captures (for scene layers); a
+    /// scene showing any other can't be switched to live.
+    pub fn extra_displays(&self) -> &[usize] {
+        &self.extra_displays
     }
 
     /// (stats, peak levels [system, mic] since last call).

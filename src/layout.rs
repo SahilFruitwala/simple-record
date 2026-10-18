@@ -872,6 +872,22 @@ mod tests {
         assert_eq!(r[0], 0.0);
     }
 
+    /// A slow drag away from a snapped edge: measured from the drag's
+    /// start, the box leaves the edge once past the snap distance.
+    #[test]
+    fn slow_drags_leave_snap_targets() {
+        let start = [0.0, 0.4, 0.2, 0.2];
+        let mut total = 0.0;
+        let mut x = 0.0;
+        for _ in 0..10 {
+            total += 0.0025;
+            x = drag_box(start, Grip::Body, [total, 0.0], 0.02, 0.0075)[0];
+        }
+        assert!((x - 0.025).abs() < 1e-9, "moved off the edge: {x}");
+        // Within the snap distance it still holds.
+        assert_eq!(drag_box(start, Grip::Body, [0.005, 0.0], 0.02, 0.0075)[0], 0.0);
+    }
+
     #[test]
     fn corners_resize_with_a_minimum() {
         let r = drag_box([0.1, 0.1, 0.2, 0.2], Grip::Corner(true, true), [0.1, 0.05], 0.02, 0.0);

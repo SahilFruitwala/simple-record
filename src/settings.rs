@@ -259,6 +259,17 @@ impl Settings {
         }
     }
 
+    /// HDR is in effect: asked for, with a codec that can carry it (with
+    /// H.264 chosen it is off). Everything that depends on HDR asks this.
+    pub fn hdr_on(&self) -> bool {
+        self.hdr && self.codec != Some(Codec::H264)
+    }
+
+    /// The replay buffer runs (it is SDR, so not while recording HDR).
+    pub fn replay_on(&self) -> bool {
+        self.replay_enabled && !self.hdr_on()
+    }
+
     /// The global shortcut for `a`, if any.
     pub fn hotkey(&self, a: Action) -> Option<Combo> {
         self.hotkeys.get(&a).copied().unwrap_or_else(|| a.default_combo())
@@ -417,7 +428,7 @@ impl Settings {
         if let Some(b) = self.bitrate_mbps {
             a.extend(["--bitrate".into(), format!("{b}")]);
         }
-        if self.hdr && self.codec != Some(Codec::H264) {
+        if self.hdr_on() {
             a.push("--hdr".into());
         }
         if let Some(o) = output {
@@ -637,6 +648,17 @@ mod tests {
         assert!(!c.hevc && c.height <= 1080 && c.bitrate <= 6_000_000, "Twitch limits the shared encode: {c:?}");
         s.stream_extra[0].enabled = false;
         assert_eq!(s.stream_urls().len(), 1);
+    }
+
+    #[test]
+    fn hdr_needs_hevc_or_prores() {
+        let s = Settings { hdr: true, replay_enabled: true, ..Default::default() };
+        assert!(s.hdr_on() && !s.replay_on());
+        assert!(s.record_args(None).iter().any(|a| a == "--hdr"));
+        // H.264 can't carry it: HDR is off, the replay buffer on.
+        let h = Settings { codec: Some(Codec::H264), ..s };
+        assert!(!h.hdr_on() && h.replay_on());
+        assert!(!h.record_args(None).iter().any(|a| a == "--hdr"));
     }
 
     #[test]

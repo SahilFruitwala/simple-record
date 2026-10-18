@@ -191,11 +191,13 @@ pub struct State {
     pub screen_aspect: f64,
     /// The custom scene layer being edited.
     pub selected_layer: Option<usize>,
+    /// A layer drag in progress: (layer, grip, its box when the drag
+    /// began, the pointer's total movement as fractions of the frame).
+    pub layer_drag: Option<(usize, crate::layout::Grip, [f64; 4], [f64; 2])>,
     /// Size in points of each display (for regions).
     pub display_points: Vec<(f64, f64)>,
-    /// Picking a region in the preview: the region before (restored on
-    /// cancel), and where the drag started and last was.
-    pub region_select: Option<(Option<[f64; 4]>, Option<egui::Pos2>, Option<egui::Pos2>)>,
+    /// Picking a region in the preview.
+    pub region_select: Option<RegionSelect>,
     /// Camera aspect ratio from the running session (for drag hit-testing).
     pub cam_aspect: f64,
     pub permissions_missing: bool,
@@ -328,13 +330,24 @@ impl State {
     }
 
     /// Whether the running recording can switch to `scene` live: it needs
-    /// the camera if the scene shows it, and the compositor unless it is
-    /// the plain screen.
+    /// the camera if the scene shows it, a capture of every other display
+    /// it shows, and the compositor unless it is the plain screen.
     pub fn can_switch_live(&self, scene: &crate::layout::SceneSpec) -> bool {
         let Some(r) = &self.recording else { return true };
         let plain = *scene == crate::layout::SceneSpec::Template(Scene::Screen);
-        (!scene.uses_cam() || r.camera_name().is_some()) && (plain || r.composed())
+        let displays = scene.extra_displays().iter().all(|n| r.extra_displays().contains(n));
+        (!scene.uses_cam() || r.camera_name().is_some()) && displays && (plain || r.composed())
     }
+}
+
+/// A region being picked by dragging over the preview.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RegionSelect {
+    /// The region before (restored on cancel).
+    pub before: Option<[f64; 4]>,
+    /// Where the drag started, and where it last was.
+    pub start: Option<egui::Pos2>,
+    pub end: Option<egui::Pos2>,
 }
 
 /// A finalized recording: (file, outcome).
@@ -423,6 +436,7 @@ impl App {
             filters_applied: None,
             screen_aspect: 16.0 / 10.0,
             selected_layer: None,
+            layer_drag: None,
             display_points: vec![],
             region_select: None,
             cam_aspect: 16.0 / 9.0,
@@ -650,7 +664,7 @@ impl App {
 
     /// Whether the live encode needs a capture session (replay or stream).
     fn live_wanted(&self) -> bool {
-        (self.st.settings.replay_enabled && !self.st.settings.hdr) || self.st.streaming()
+        self.st.settings.replay_on() || self.st.streaming()
     }
 
     /// Apply the replay and live-encode settings.
@@ -660,7 +674,7 @@ impl App {
             self.st.live.set_config(cfg);
         }
         // HDR sessions don't feed the (SDR) live encode.
-        let want = (self.st.settings.replay_enabled && !self.st.settings.hdr).then(|| self.st.settings.replay_secs.clamp(15, 300) as f64);
+        let want = self.st.settings.replay_on().then(|| self.st.settings.replay_secs.clamp(15, 300) as f64);
         let have = self.st.live.replay_stats().is_some();
         if want.is_some() || have {
             self.st.live.set_replay(want);
@@ -678,7 +692,7 @@ impl App {
         let s = &self.st.settings;
         let want: Vec<(Action, crate::hotkey::Combo)> = Action::ALL
             .into_iter()
-            .filter(|a| self.st.capturing_shortcut.is_none() && (*a != Action::SaveReplay || s.replay_enabled))
+            .filter(|a| self.st.capturing_shortcut.is_none() && (*a != Action::SaveReplay || s.replay_on()))
             .filter_map(|a| s.hotkey(a).map(|c| (a, c)))
             .collect();
         if want == self.hotkeys {
@@ -751,7 +765,7 @@ impl App {
             self.st.stream_statuses.clear();
             return;
         }
-        if self.st.settings.hdr {
+        if self.st.settings.hdr_on() {
             self.st.error = Some("Streaming is off while HDR recording is on (Settings > Video)".into());
             return;
         }

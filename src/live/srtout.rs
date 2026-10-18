@@ -25,7 +25,6 @@ const MAX_QUEUE_SECS: f64 = 3.0;
 /// One SRT payload of TS packets and the media time it carries.
 struct Chunk {
     t: f64,
-    video: bool,
     data: Vec<u8>,
 }
 
@@ -66,9 +65,9 @@ impl SrtOutput {
 
     /// Queue the TS just muxed as whole payloads (the tail too: a frame
     /// goes out as soon as it is muxed).
-    fn queue(&mut self, s: &mut Shared, t: f64, video: bool) {
+    fn queue(&mut self, s: &mut Shared, t: f64) {
         for c in self.pending.chunks(srt::PAYLOAD) {
-            s.queue.push_back(Chunk { t, video, data: c.to_vec() });
+            s.queue.push_back(Chunk { t, data: c.to_vec() });
         }
         self.pending.clear();
     }
@@ -108,8 +107,9 @@ fn run(u: SrtUrl, shared: Arc<(Mutex<Shared>, Condvar)>, stop: Arc<AtomicBool>) 
             s.state = "live".into();
             s.error = None;
             s.live_since.get_or_insert_with(Instant::now);
-            // A new connection starts at a keyframe (with the tables).
-            s.queue.retain(|c| !c.video);
+            // A new connection starts clean at a keyframe (with the
+            // tables): nothing queued from before is current any more.
+            s.queue.clear();
             s.skip_to_key = true;
             s.want_key = true;
         }
@@ -163,6 +163,12 @@ impl Output for SrtOutput {
         let shared = self.shared.clone();
         let (lock, cv) = &*shared;
         let mut s = lock.lock().unwrap();
+        // Nothing queues while disconnected: it would go out stale, in one
+        // burst, on reconnect. The new connection starts at a keyframe.
+        if s.state != "live" {
+            s.skip_to_key = true;
+            return;
+        }
         match p {
             Packet::Video(v) => {
                 if f.param_sets.is_empty() || f.hevc != v.hevc {
@@ -186,7 +192,9 @@ impl Output for SrtOutput {
                     && let Some(first) = s.queue.front().map(|c| c.t)
                     && v.pts - first > MAX_QUEUE_SECS
                 {
-                    s.queue.retain(|c| !c.video);
+                    // Audio included: it would arrive late behind the
+                    // keyframe the stream restarts from.
+                    s.queue.clear();
                     s.skip_to_key = true;
                     s.dropped += 1;
                     return;
@@ -201,11 +209,12 @@ impl Output for SrtOutput {
                 let pts = PTS_BASE + ((v.pts - self.t0.unwrap()).max(0.0) * 90_000.0).round() as u64;
                 let au = ts::annex_b(&v.data, v.hevc, v.key, &f.param_sets);
                 self.mux.as_mut().unwrap().video(pts, v.key, &au, &mut self.pending);
-                self.queue(&mut s, v.pts, true);
+                self.queue(&mut s, v.pts);
             }
             Packet::Audio(a) => {
                 let (Some(t0), Some(mux)) = (self.t0, self.mux.as_mut()) else { return };
-                if a.codec != AudioCodec::Aac || a.pts < t0 || s.queue.len() > 20_000 {
+                // Audio follows the video: none before its first keyframe.
+                if a.codec != AudioCodec::Aac || a.pts < t0 || s.skip_to_key {
                     return;
                 }
                 let pts = PTS_BASE + ((a.pts - t0) * 90_000.0).round() as u64;
@@ -213,7 +222,7 @@ impl Output for SrtOutput {
                 let mut adts = ts::adts(a.data.len(), 3, 2).to_vec();
                 adts.extend_from_slice(&a.data);
                 mux.audio(pts, &adts, &mut self.pending);
-                self.queue(&mut s, a.pts, false);
+                self.queue(&mut s, a.pts);
             }
         }
         cv.notify_one();

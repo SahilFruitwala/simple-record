@@ -589,13 +589,21 @@ pub fn edit_in_preview(ui: &mut Ui, st: &mut State, preview: Rect) {
         }
     }
     if let Some((i, grip, d)) = changed {
-        let l = &mut st.settings.custom_scenes[ci].layers[i];
+        // Measured from where the drag began, so a snapped edge lets go once
+        // the pointer has moved past the snap distance (snapping the box
+        // each frame would hold it there through a slow drag).
+        let origin = match st.layer_drag {
+            Some((j, g, r, total)) if (j, g) == (i, grip) => (r, [total[0] + d[0], total[1] + d[1]]),
+            _ => (st.settings.custom_scenes[ci].layers[i].rect, d),
+        };
+        st.layer_drag = Some((i, grip, origin.0, origin.1));
         // Snap within 6 points of the preview.
         let snap = 6.0 / preview.width().max(preview.height()) as f64;
-        l.rect = drag_box(l.rect, grip, d, 0.02, snap);
+        st.settings.custom_scenes[ci].layers[i].rect = drag_box(origin.0, grip, origin.1, 0.02, snap);
         st.apply_scene();
     }
     if done {
+        st.layer_drag = None;
         let _ = st.settings.save();
     }
 }
