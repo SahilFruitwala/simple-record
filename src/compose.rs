@@ -696,7 +696,7 @@ mod tests {
         let (green, _p1) = solid(320, 180, [0, 255, 0, 255]);
         let (red, _p2) = solid(320, 180, [0, 0, 255, 255]);
         let (out, _p3) = solid(320, 180, [0, 0, 0, 255]);
-        let bg = Background { top: [200, 100, 50], bottom: [200, 100, 50] };
+        let bg = Background::gradient([200, 100, 50], [200, 100, 50]);
         let keyed = PipSpec { effects: Effects { chroma_key: Some(ChromaKey::default()), ..Default::default() }, ..Default::default() };
         let mut c = Compositor::new(320, 180, keyed.clone());
         c.set_background(bg);

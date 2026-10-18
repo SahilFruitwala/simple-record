@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use egui::{Align, Color32, CornerRadius, Layout, Margin, RichText, Ui, vec2};
 
 use super::theme::{self, BODY, SECONDARY};
+use super::widgets as w;
 use super::{Cmd, State};
 use crate::tcc::Status;
 
@@ -70,7 +71,7 @@ pub fn wanted(st: &mut State) -> bool {
     true
 }
 
-fn refresh(st: &mut State) -> Perms {
+pub(super) fn refresh(st: &mut State) -> Perms {
     match st.perms {
         Some((p, at)) if at.elapsed() < Duration::from_secs(1) => p,
         _ => {
@@ -97,38 +98,40 @@ fn status_pill(ui: &mut Ui, s: Status) {
 /// One permission: what it's for, its state, and how to grant it.
 /// `always_ask`: offer the prompt even when not granted (macOS reports
 /// Screen Recording only as granted or not, never as not asked yet).
+/// A required permission that is missing gets the window's primary button.
 #[allow(clippy::too_many_arguments)]
 fn row(ui: &mut Ui, title: &str, why: &str, s: Status, required: bool, always_ask: bool, ask: &mut dyn FnMut(), pane: &str) {
     let p = theme::pal(ui);
     egui::Frame::NONE.fill(p.sidebar).corner_radius(CornerRadius::same(10)).inner_margin(Margin::same(14)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(title).font(theme::semibold(BODY)));
-                    ui.label(RichText::new(if required { "required" } else { "optional" }).size(SECONDARY).color(p.secondary));
-                });
-                ui.add(egui::Label::new(RichText::new(why).size(SECONDARY + 1.0).color(p.secondary)).wrap());
+        ui.vertical(|ui| {
+            // Title and status on one line, the pill pinned to the right.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(title).font(theme::semibold(BODY)));
+                ui.label(RichText::new(if required { "required" } else { "optional" }).size(SECONDARY).color(p.secondary));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| status_pill(ui, s));
             });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                match offer(s) {
+            ui.add(egui::Label::new(RichText::new(why).size(SECONDARY + 1.0).color(p.secondary)).wrap());
+            if !matches!(offer(s), Offer::Done) {
+                ui.add_space(8.0);
+                let button = |ui: &mut Ui, label: &str| if required { w::primary_button(ui, label) } else { ui.button(label) };
+                ui.horizontal(|ui| match offer(s) {
                     Offer::Done => {}
                     Offer::Ask => {
-                        if ui.button("Allow…").clicked() {
+                        if button(ui, "Allow…").clicked() {
                             ask();
                         }
                     }
                     Offer::OpenSettings => {
-                        if ui.button("Open System Settings").on_hover_text("Turn Rec on in this list").clicked() {
+                        if button(ui, "Open System Settings").on_hover_text("Turn Rec on in this list").clicked() {
                             super::macos::open_url(pane);
                         }
-                        if always_ask && ui.button("Allow…").clicked() {
+                        if always_ask && ui.button("Ask Again").on_hover_text("Show the macOS prompt").clicked() {
                             ask();
                         }
                     }
-                }
-                status_pill(ui, s);
-            });
+                });
+            }
         });
     });
     ui.add_space(8.0);
@@ -170,9 +173,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             row(ui, "Camera", "To show your webcam in scenes.", perms.camera, false, false, &mut || crate::tcc::request_all(false, false, true, Duration::ZERO), CAMERA_PANE);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let label = if perms.screen == Status::Granted { "Continue" } else { "Continue without Screen Recording" };
-                let b = egui::Button::new(RichText::new(label).font(theme::semibold(BODY)).color(Color32::WHITE)).fill(theme::accent()).corner_radius(7).min_size(vec2(0.0, 30.0));
-                if ui.add(b).clicked() {
+                // The primary action is granting Screen Recording (above);
+                // going on without it is the secondary one.
+                let granted = perms.screen == Status::Granted;
+                let resp = if granted { w::primary_button(ui, "Continue") } else { ui.add(egui::Button::new("Continue without Screen Recording").min_size(vec2(0.0, 30.0))) };
+                if resp.clicked() {
                     st.settings.onboarded = true;
                     let _ = st.settings.save();
                     // Errors from before (no permission) are stale now.
@@ -180,7 +185,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
                 if perms.screen != Status::Granted {
                     ui.add_space(8.0);
-                    if ui.button("Restart Rec").on_hover_text("Screen Recording takes effect after a restart").clicked() {
+                    if ui.add(egui::Button::new("Restart Rec").min_size(vec2(0.0, 30.0))).on_hover_text("Screen Recording takes effect after a restart: use this once Rec is on in System Settings").clicked() {
                         st.settings.onboarded = true;
                         let _ = st.settings.save();
                         super::macos::relaunch();

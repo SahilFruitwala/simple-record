@@ -4,7 +4,7 @@
 //! so they show exactly what gets recorded.
 
 use crate::effects::{ChromaKey, Effects};
-use egui::{Align, Color32, CornerRadius, Rect, RichText, Sense, Stroke, Ui, vec2};
+use egui::{Color32, CornerRadius, Rect, RichText, Sense, Stroke, Ui, vec2};
 
 use super::State;
 use super::theme::{self, SECONDARY};
@@ -43,7 +43,7 @@ pub fn screen_rect(st: &State, preview: Rect) -> Option<Rect> {
 }
 
 /// Fill `rect` with a vertical gradient.
-fn gradient(ui: &Ui, rect: Rect, bg: Background) {
+pub(super) fn gradient(ui: &Ui, rect: Rect, bg: Background) {
     let c = |v: [u8; 3]| Color32::from_rgb(v[0], v[1], v[2]);
     let mut mesh = egui::Mesh::default();
     for (pos, col) in [(rect.left_top(), bg.top), (rect.right_top(), bg.top), (rect.right_bottom(), bg.bottom), (rect.left_bottom(), bg.bottom)] {
@@ -211,10 +211,12 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
                 }
                 let color = if !ok { p.tertiary } else if *sel { p.text } else { p.secondary };
                 let font = if *sel { theme::semibold(SECONDARY) } else { egui::FontId::proportional(SECONDARY) };
-                let galley = ui.painter().layout_no_wrap(label.clone(), font, color);
-                // Long custom names are cut to the tile.
+                // Long names end in an ellipsis (the full one is in the tooltip).
+                let mut job = egui::text::LayoutJob::simple_singleline(label.clone(), font, color);
+                job.wrap = egui::text::TextWrapping { max_width: tile_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                let galley = ui.painter().layout_job(job);
                 let text_rect = Rect::from_center_size(egui::pos2(rect.center().x, t.bottom() + 9.0), vec2(tile_w, 14.0));
-                ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_rect.center().x - galley.size().x.min(tile_w) / 2.0, text_rect.top()), galley, color);
+                ui.painter().galley(egui::pos2(text_rect.center().x - galley.size().x / 2.0, text_rect.top()), galley, color);
                 let resp = if *ok { resp.on_hover_text(tip.as_str()) } else { resp.on_hover_text("Start the recording with this scene's sources to switch to it live") };
                 if resp.clicked() && !sel {
                     picked = Some(match pick {
@@ -232,8 +234,10 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
                             s.custom_scenes.push(l);
                             ui.close();
                         }
-                        if ui.add_enabled(idle, egui::Button::new("Delete")).clicked() {
-                            delete_scene(st, s, ci);
+                        // Opens the scene and asks there (Delete Scene…).
+                        if ui.add_enabled(idle, egui::Button::new("Delete…")).clicked() {
+                            picked = Some(Pick::Custom(ci));
+                            w::ask_confirm(ui.ctx(), &format!("delete-scene-{ci}"));
                             ui.close();
                         }
                     });
@@ -344,10 +348,7 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.spacing_mut().button_padding.x = 4.0;
-            let eye = if l.visible { "●" } else { "○" };
-            if ui.add(egui::Button::new(eye).frame(false).min_size(vec2(18.0, 22.0))).on_hover_text(if l.visible { "Hide" } else { "Show" }).clicked() {
-                l.visible = !l.visible;
-            }
+            ui.add(w::Check::new(&mut l.visible, "")).on_hover_text(if l.visible { "Shown: click to hide" } else { "Hidden: click to show" });
             let label = l.content.label();
             let lw = (ui.available_width() - 3.0 * 26.0).max(40.0);
             let resp = ui.add_sized(vec2(lw, 22.0), egui::Button::selectable(sel, RichText::new(label).size(SECONDARY + 1.0)).truncate());
@@ -360,7 +361,7 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
             if ui.add_enabled(i > 0, egui::Button::new("↓").min_size(vec2(22.0, 22.0))).on_hover_text("Move down").clicked() {
                 action = Some((i, -1));
             }
-            if ui.add(egui::Button::new("✕").min_size(vec2(22.0, 22.0))).on_hover_text("Remove").clicked() {
+            if ui.add(egui::Button::new("×").min_size(vec2(22.0, 22.0))).on_hover_text("Remove this layer").clicked() {
                 action = Some((i, 0));
             }
         });
@@ -416,17 +417,39 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
             add = Some(Content::Color([0x30, 0x30, 0x3a]));
         }
         // Other displays, whole (each a capture stream of its own).
-        if st.displays.len() > 1 {
-            for n in 1..=st.displays.len() {
-                if n != s.display && ui.add_enabled(idle, egui::Button::new(format!("Display {n}")).small()).on_hover_text("Another display, whole").clicked() {
-                    add = Some(Content::Display(n));
-                }
+        let displays: Vec<usize> = (1..=st.displays.len()).filter(|n| *n != s.display).collect();
+        // A menu each (not a disabled scope: in a wrapping row that lays the
+        // label out one letter per line).
+        if !displays.is_empty() {
+            if idle {
+                ui.menu_button("Other display…", |ui| {
+                    for n in displays {
+                        if ui.button(format!("Display {n}")).clicked() {
+                            add = Some(Content::Display(n));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Another display, whole");
+            } else {
+                ui.add_enabled(false, egui::Button::new("Other display…").small());
             }
         }
         // Other cameras (each a capture session of its own).
-        for d in &st.cameras {
-            if s.camera.as_deref() != Some(d.id.as_str()) && ui.add_enabled(idle, egui::Button::new(&d.name).small()).on_hover_text("Another camera").clicked() {
-                add = Some(Content::Webcam { id: d.id.clone(), name: d.name.clone() });
+        let cams: Vec<_> = st.cameras.iter().filter(|d| s.camera.as_deref() != Some(d.id.as_str())).collect();
+        if !cams.is_empty() {
+            if idle {
+                ui.menu_button("Other camera…", |ui| {
+                    for d in cams {
+                        if ui.button(&d.name).clicked() {
+                            add = Some(Content::Webcam { id: d.id.clone(), name: d.name.clone() });
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("A second camera, besides the one chosen in Camera above");
+            } else {
+                ui.add_enabled(false, egui::Button::new("Other camera…").small());
             }
         }
         if let Some(c) = add {
@@ -472,12 +495,12 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
                 Err(e) => st.error = Some(format!("Could not import {}: {e}", f.display())),
             }
         }
-        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled(idle, egui::Button::new("Delete")).on_hover_text("Delete this custom scene").clicked() {
-                delete_scene(st, s, ci);
-            }
-        });
     });
+    w::divider(ui);
+    let name = s.custom_scenes[ci].name.clone();
+    if w::confirm_button(ui, &format!("delete-scene-{ci}"), "Delete Scene…", &format!("Delete “{name}”?"), "Delete", idle) {
+        delete_scene(st, s, ci);
+    }
     w::hint(ui, "Drag layers in the preview to move them; drag a corner to resize.");
 }
 
@@ -510,7 +533,7 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
             w::field(ui, "Color", LABEL_W, |ui| {
                 ui.color_edit_button_srgb(&mut t.color);
                 let mut boxed = t.background.is_some();
-                if ui.checkbox(&mut boxed, "Box").changed() {
+                if ui.add(w::Check::new(&mut boxed, "Box")).changed() {
                     t.background = boxed.then_some([20, 20, 28, 200]);
                 }
                 if let Some(bg) = &mut t.background {

@@ -222,10 +222,11 @@ pub fn camera_file_path(output: &std::path::Path) -> PathBuf {
 }
 
 /// Whether frames go through the compositor: a webcam, a scene other than
-/// the plain screen, or a canvas of another shape than the screen. The plain
+/// the plain screen, a canvas of another shape than the screen, or the
+/// screen inset on the background. The plain
 /// screen otherwise goes to the encoder as captured (no copies).
 pub fn composed(o: &Options) -> bool {
-    o.webcam.is_some() || o.scene != SceneSpec::Template(Scene::Screen) || o.screen_size != o.size
+    o.webcam.is_some() || o.scene != SceneSpec::Template(Scene::Screen) || o.screen_size != o.size || o.background.inset > 0.0
 }
 
 impl Session {

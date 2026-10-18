@@ -209,6 +209,8 @@ pub struct State {
     pub perms: Option<(onboarding::Perms, Instant)>,
     /// The welcome screen is up.
     pub onboarding: bool,
+    /// The Settings window's open tab.
+    pub settings_tab: ui::SettingsTab,
     /// A layer drag in progress: (layer, grip, its box when the drag
     /// began, the pointer's total movement as fractions of the frame).
     pub layer_drag: Option<(usize, crate::layout::Grip, [f64; 4], [f64; 2])>,
@@ -281,6 +283,11 @@ impl State {
 
     pub fn streaming(&self) -> bool {
         !self.stream_ids.is_empty()
+    }
+
+    /// Permissions as last read (at most once a second).
+    pub fn perms(&mut self) -> onboarding::Perms {
+        onboarding::refresh(self)
     }
 
     pub fn is_paused(&self) -> bool {
@@ -472,6 +479,7 @@ impl App {
             studio_applied: None,
             perms: None,
             onboarding: false,
+            settings_tab: Default::default(),
             layer_drag: None,
             display_points: vec![],
             region_select: None,
@@ -640,7 +648,7 @@ impl App {
 
     fn show_settings(&mut self, el: &ActiveEventLoop) {
         if self.settings_win.is_none() {
-            let w = self.open_window(el, "Rec Settings", (520.0, 820.0), (460.0, 480.0));
+            let w = self.open_window(el, "Rec Settings", (520.0, 600.0), (460.0, 420.0));
             self.settings_win = Some(w);
         }
         if let Some(w) = &self.settings_win {
@@ -671,6 +679,14 @@ impl App {
         o.scene = self.st.settings.scene_spec();
         o.mic_filters = self.st.settings.mic_filters;
         o.pip.effects = self.st.settings.camera_effects;
+        // The command line has the colours only; the screen's inset too.
+        o.background = self.st.settings.background;
+        // The mic is optional: without permission, record without it (the
+        // Audio card says so) rather than refuse to start.
+        if o.mic.is_some() && crate::tcc::mic_status() != crate::tcc::Status::Granted {
+            o.mic = None;
+            o.mic_warning = Some("Microphone not allowed: recording without it".into());
+        }
         // Fallbacks never block: say so once.
         let warning = [warning, o.mic_warning.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let warning = Some(warning).filter(|w| !w.is_empty());
@@ -906,7 +922,7 @@ impl App {
                 Err(e) => {
                     let msg = format!("{e:#}");
                     self.st.permissions_missing = msg.contains("missing permission");
-                    self.st.error = Some(format!("Preview unavailable: {msg}"));
+                    self.st.error = Some(permission_hint(&msg).unwrap_or_else(|| format!("Preview unavailable: {msg}")));
                 }
             }
             self.st.preview_settings = Some(self.st.settings.clone());
@@ -958,7 +974,9 @@ impl App {
             }
             Err(e) => {
                 eprintln!("rec: could not start recording: {e:#}");
-                self.st.error = Some(format!("Could not start recording: {e:#}"));
+                let msg = format!("{e:#}");
+                self.st.permissions_missing = msg.contains("missing permission");
+                self.st.error = Some(permission_hint(&msg).unwrap_or_else(|| format!("Could not start recording: {msg}")));
                 self.sync_preview();
             }
         }
@@ -1555,4 +1573,11 @@ pub fn run(start_recording: bool, settings: bool, window: Option<u32>) -> Result
     crate::logging::finish();
     r?;
     Ok(())
+}
+
+/// The GUI wording for a "missing permission(s)" error from the capture
+/// layer, whose own text names a command-line tool.
+fn permission_hint(msg: &str) -> Option<String> {
+    let list = msg.split("missing permission(s): ").nth(1)?.lines().next()?.trim();
+    Some(format!("Rec needs your permission for: {list}. Click Request Permissions, then turn Rec on in System Settings > Privacy & Security."))
 }
