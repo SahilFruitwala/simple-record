@@ -16,7 +16,10 @@ use crate::settings::{FPS, RESOLUTIONS};
 use crate::writer::{AudioLayout, Codec};
 
 const RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x30);
-const SIDEBAR_W: f32 = 304.0;
+/// The sidebar's width range: narrower cuts the scene tiles' names, wider
+/// leaves too little room for the preview in the smallest window.
+const SIDEBAR_MIN: f32 = 280.0;
+const SIDEBAR_MAX: f32 = 460.0;
 
 static DRAG: AtomicBool = AtomicBool::new(false);
 
@@ -118,8 +121,13 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
         .exact_size(68.0)
         .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::symmetric(16, 10)))
         .show(ui, |ui| controls(ui, st));
-    egui::Panel::right("sources")
-        .exact_size(SIDEBAR_W)
+    // Our own resize handle (below), not egui's: egui keeps the panel at the
+    // size of its very first frame, laid out before the window had its size.
+    let max_w = SIDEBAR_MAX.min(ui.max_rect().width() - 420.0).max(SIDEBAR_MIN);
+    let sidebar_w = st.settings.sidebar_width.clamp(SIDEBAR_MIN, max_w);
+    let panel = egui::Panel::right("sources")
+        .resizable(false)
+        .exact_size(sidebar_w)
         .frame(egui::Frame::NONE.fill(p.sidebar).stroke(Stroke::new(1.0, p.separator)))
         .show(ui, |ui| {
             // Lay the contents out in a child of exactly the panel's
@@ -131,8 +139,9 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
             egui::ScrollArea::vertical().auto_shrink(false).show(&mut inner, |ui| {
                 // 16 pt gutters; the floating scroll bar sits in the right one.
                 egui::Frame::NONE.inner_margin(Margin { left: 16, right: 16, top: 0, bottom: 16 }).show(ui, |ui| {
-                    ui.set_max_width(SIDEBAR_W - 32.0);
-                    ui.set_min_width(SIDEBAR_W - 32.0);
+                    let w = rect.width() - 32.0;
+                    ui.set_max_width(w);
+                    ui.set_min_width(w);
                     ui.spacing_mut().interact_size.y = 24.0;
                     ui.spacing_mut().button_padding = vec2(10.0, 4.0);
                     // Inert behind the welcome page: nothing to set up before permissions.
@@ -143,10 +152,34 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::same(16)))
         .show(ui, |ui| if st.onboarding { super::onboarding::show(ui, st) } else { preview(ui, st) });
+    sidebar_resize(ui, st, panel.response.rect, max_w);
     // Keyboard: ⌘, settings, ⌘W close (handled as hide by the app), space
     // does nothing (avoid accidental recordings).
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
         st.cmds.push(Cmd::ShowSettings);
+    }
+}
+
+/// Drag the sidebar's left edge to resize it (double-click: default width).
+/// The width is saved when the drag ends.
+fn sidebar_resize(ui: &mut Ui, st: &mut State, sidebar: egui::Rect, max_w: f32) {
+    let edge = egui::Rect::from_x_y_ranges(sidebar.left() - 3.0..=sidebar.left() + 3.0, sidebar.y_range());
+    let resp = ui.interact(edge, ui.id().with("sidebar-resize"), Sense::click_and_drag());
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        ui.painter().vline(sidebar.left(), sidebar.y_range(), Stroke::new(2.0, theme::accent()));
+    }
+    if resp.dragged() {
+        // The pointer, not the delta: clamping would make deltas drift.
+        if let Some(x) = resp.interact_pointer_pos().map(|p| p.x) {
+            st.settings.sidebar_width = (ui.max_rect().right() - x).clamp(SIDEBAR_MIN, max_w).round();
+        }
+    }
+    if resp.double_clicked() {
+        st.settings.sidebar_width = crate::settings::Settings::default().sidebar_width;
+    }
+    if resp.drag_stopped() || resp.double_clicked() {
+        let _ = st.settings.save();
     }
 }
 

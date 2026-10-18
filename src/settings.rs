@@ -135,6 +135,8 @@ pub struct Settings {
     pub stream_audio_kbps: u32,
     /// The welcome screen (permissions) has been through.
     pub onboarded: bool,
+    /// Width of the main window's sidebar, in points (dragged by its edge).
+    pub sidebar_width: f32,
     /// Global shortcuts; an action missing here has its default, None
     /// means none.
     pub hotkeys: BTreeMap<Action, Option<Combo>>,
@@ -201,6 +203,7 @@ impl Default for Settings {
             stream_cbr: true,
             stream_audio_kbps: 192,
             onboarded: false,
+            sidebar_width: 304.0,
             hotkeys: BTreeMap::new(),
             window: None,
         }
@@ -382,6 +385,7 @@ impl Settings {
             stream_audio_kbps: d.stream_audio_kbps,
             hotkeys: d.hotkeys.clone(),
             onboarded: d.onboarded,
+            sidebar_width: d.sidebar_width,
             mic_filters: d.mic_filters,
             ..self.clone()
         };

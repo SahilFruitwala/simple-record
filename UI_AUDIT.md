@@ -60,6 +60,11 @@ New, found and fixed during the retest:
 - **35** The scene tile's right-click Delete deleted without asking. It is now "Delete…": it opens the scene
   and shows the same confirmation as Delete Scene….
 
+- **36** (reported by you) The sidebar showed a resize cursor and highlight on its edge, but dragging did
+  nothing: egui panels are resizable by default, and this one was pinned with `exact_size(304)`. The edge now
+  really resizes it, from 280 to 460 pt, leaving at least 420 pt for the preview. The content follows the width,
+  the width is saved in the settings, and double-clicking the edge restores 304.
+
 Nothing found in the retest is still open. The welcome page (16) was not checked in the app.
 
 ## Bugs (broken or clipped)
