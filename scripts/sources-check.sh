@@ -29,10 +29,13 @@ PAGE='{"content": {"browser": {"url": "'$WORK'/page.html"}}, "rect": [0.5, 0, 0.
 KEYED='{"content": {"media": {"path": "'$WORK'/green.mp4", "looped": true}}, "rect": [0.6, 0.3, 0.3, 0.4], "fit": "cover", "effects": {"chroma_key": {"color": [0, 255, 0]}}}'
 scene video "$RED"
 scene page "$PAGE"
+scene video_page "$RED" "$PAGE"
+scene video_keyed "$RED" "$KEYED"
 scene all "$RED" "$PAGE" "$KEYED"
-# The RGB of an 8x8 patch around (x, y) at 3 s of recording $1.
+# The RGB of an 8x8 patch around (x, y) at 2.5 s of recording $1 (between
+# the test pattern's white flashes).
 rgb() {
-  ffmpeg -v error -ss 3 -i "$WORK/$1.mov" -frames:v 1 -vf "crop=8:8:$2:$3,scale=1:1" -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | tr -s ' ' | sed 's/^ //'
+  ffmpeg -v error -ss 2.5 -i "$WORK/$1.mov" -frames:v 1 -vf "crop=8:8:$2:$3,scale=1:1" -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | tr -s ' ' | sed 's/^ //'
 }
 # A coarse picture of the frame (4 rows of 8 patches), for diagnosis.
 grid() {
@@ -59,6 +62,10 @@ expect "video file" video 156 176 red
 expect "test pattern beside the video" video 496 176 pattern
 expect "web page" page 496 40 blue
 expect "test pattern beside the page" page 156 176 pattern
+expect "video beside a page" video_page 156 176 red
+expect "page beside a video" video_page 496 40 blue
+expect "video beside a keyed video" video_keyed 156 176 red
+expect "keyed video (pattern through keyed green)" video_keyed 476 176 pattern
 expect "video file under a page" all 156 176 red
 expect "web page beside a video" all 496 40 blue
 expect "chroma key (page through keyed green)" all 476 176 blue

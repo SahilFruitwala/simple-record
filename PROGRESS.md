@@ -1,5 +1,30 @@
 # PROGRESS
 
+## Logging, onboarding, HDR/SRT checks and the remaining OBS gaps (2026-10-18, later)
+
+Done in the Linux container, checked by CI on macOS 15 (build, clippy, `cargo test`, and a
+recording through the test pattern) and Linux (portable tests, SRT end to end). Not yet used
+interactively in the app.
+
+| Feature | Where | Verified |
+|---|---|---|
+| Log file (`~/Library/Logs/rec-rs/rec.log`, rotated), crash marker and banner, Help > Report a Problem (diagnostics folder, secrets removed) | `logging.rs`, `app/` | Unit tests: rotation, redaction, diagnostics folder |
+| First-run welcome screen: Screen Recording, microphone, camera; status, prompt, System Settings, restart | `app/onboarding.rs`, `tcc.rs` | Unit test of the offers; not seen on a fresh Mac yet |
+| HDR file is HEVC Main 10, BT.2020, PQ | `writer.rs` test | CI (macOS): ffprobe on a written file |
+| SRT with HEVC; against MediaMTX (publish over SRT, read back over RTSP) | `scripts/srt-e2e.sh` | CI (Linux) |
+| Chroma key and color correction (camera and any layer) | `effects.rs`, `compose.rs` | Key math: 4 unit tests; GPU: compositor test keys a green camera over the background |
+| More than one camera in a scene | `layout.rs`, `camera.rs`, `record.rs` | Compositor test (routing, main camera by ID); no second real camera tried |
+| Video file layers | `media.rs` | Decode test (every frame, BGRA); scene check in CI |
+| Web page layers | `browser.rs` | Scene check in CI (`scripts/sources-check.sh`) |
+| Per-app system audio (only some apps / all but some) | `appaudio.rs`, `screen.rs` | Selection logic and settings/CLI round trip; not tried with real apps |
+| Studio mode | `compose.rs`, `writer.rs`, `app/` | Compositor test of the side-by-side frame; UI not tried |
+| Destinations with their own encode | `live/mod.rs`, `settings.rs` | Live test: two destinations get 640x360 and 320x180 from the same frames |
+
+To check on a Mac: the welcome screen on a fresh user account; a green screen with the
+camera's chroma key; a second USB camera as a layer; a web page alert (e.g. a StreamElements
+URL) and a looping video; per-app audio with music in one app and a video in another; studio
+mode with Move transitions; YouTube plus Twitch with Twitch at 720p on its own encode.
+
 ## OBS gaps closed (2026-10-18): built and unit-tested on macOS, not yet used as an app
 
 Everything in the old Known gaps list, plus scene templates. This work was done in a Linux
