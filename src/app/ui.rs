@@ -128,7 +128,8 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
                     ui.set_min_width(SIDEBAR_W - 32.0);
                     ui.spacing_mut().interact_size.y = 24.0;
                     ui.spacing_mut().button_padding = vec2(10.0, 4.0);
-                    sources(ui, st)
+                    // Inert behind the welcome page: nothing to set up before permissions.
+                    ui.add_enabled_ui(!st.onboarding, |ui| sources(ui, st));
                 });
             });
         });
@@ -712,13 +713,17 @@ fn sources(ui: &mut Ui, st: &mut State) {
         }
         w::row(ui, "Frame", |ui| {
             let opts: Vec<(Canvas, String)> = Canvas::ALL.iter().map(|c| (*c, c.label().to_string())).collect();
-            ui.allocate_ui(vec2(120.0, 24.0), |ui| combo(ui, "canvas", &mut s.canvas, &opts, idle));
+            ui.allocate_ui(vec2(150.0, 24.0), |ui| combo(ui, "canvas", &mut s.canvas, &opts, idle));
         });
     });
 
     w::header(ui, Icon::Display, "Screen");
     w::card(ui, |ui| {
-        let displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
+        let mut displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
+        if displays.is_empty() {
+            let why = if st.permissions_missing { "Screen Recording not allowed" } else { "No display found" };
+            displays.push((s.display, why.to_string()));
+        }
         combo(ui, "display", &mut s.display, &displays, idle);
         // What to record on the display: all of it, one app's windows, or
         // one window.
@@ -1265,7 +1270,7 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
         ui.end_row();
         ui.label("Compressor");
         ui.add_enabled_ui(f.compressor, |ui| {
-            ui.horizontal_wrapped(|ui| {
+            ui.vertical(|ui| {
                 ui.add(egui::Slider::new(&mut f.comp_threshold_db, -40.0..=-5.0).suffix(" dB").step_by(1.0).text("threshold"));
                 ui.add(egui::Slider::new(&mut f.comp_ratio, 1.5..=10.0).step_by(0.5).text(": 1"));
                 ui.add(egui::Slider::new(&mut f.comp_makeup_db, 0.0..=18.0).suffix(" dB").step_by(1.0).text("makeup"));
@@ -1300,16 +1305,19 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
             ui.end_row();
             ui.label("");
             let c = s.live_config();
-            ui.label(
-                RichText::new(format!(
-                    "Up to {}x{} {} at {:.1} Mb/s (the frame keeps its shape, never above the recording size)",
-                    c.width,
-                    c.height,
-                    if c.hevc { "HEVC" } else { "H.264" },
-                    c.bitrate as f64 / 1e6
-                ))
-                .size(SECONDARY)
-                .color(theme::pal(ui).secondary),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "Up to {}x{} {} at {:.1} Mb/s (the frame keeps its shape, never above the recording size)",
+                        c.width,
+                        c.height,
+                        if c.hevc { "HEVC" } else { "H.264" },
+                        c.bitrate as f64 / 1e6
+                    ))
+                    .size(SECONDARY)
+                    .color(theme::pal(ui).secondary),
+                )
+                .wrap(),
             );
             ui.end_row();
             ui.label("Rate control");

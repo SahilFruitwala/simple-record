@@ -906,7 +906,7 @@ impl App {
                 Err(e) => {
                     let msg = format!("{e:#}");
                     self.st.permissions_missing = msg.contains("missing permission");
-                    self.st.error = Some(format!("Preview unavailable: {msg}"));
+                    self.st.error = Some(permission_hint(&msg).unwrap_or_else(|| format!("Preview unavailable: {msg}")));
                 }
             }
             self.st.preview_settings = Some(self.st.settings.clone());
@@ -958,7 +958,9 @@ impl App {
             }
             Err(e) => {
                 eprintln!("rec: could not start recording: {e:#}");
-                self.st.error = Some(format!("Could not start recording: {e:#}"));
+                let msg = format!("{e:#}");
+                self.st.permissions_missing = msg.contains("missing permission");
+                self.st.error = Some(permission_hint(&msg).unwrap_or_else(|| format!("Could not start recording: {msg}")));
                 self.sync_preview();
             }
         }
@@ -1555,4 +1557,11 @@ pub fn run(start_recording: bool, settings: bool, window: Option<u32>) -> Result
     crate::logging::finish();
     r?;
     Ok(())
+}
+
+/// The GUI wording for a "missing permission(s)" error from the capture
+/// layer, whose own text names a command-line tool.
+fn permission_hint(msg: &str) -> Option<String> {
+    let list = msg.split("missing permission(s): ").nth(1)?.lines().next()?.trim();
+    Some(format!("Rec needs your permission for: {list}. Click Request Permissions, then turn Rec on in System Settings > Privacy & Security."))
 }

@@ -211,10 +211,12 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
                 }
                 let color = if !ok { p.tertiary } else if *sel { p.text } else { p.secondary };
                 let font = if *sel { theme::semibold(SECONDARY) } else { egui::FontId::proportional(SECONDARY) };
-                let galley = ui.painter().layout_no_wrap(label.clone(), font, color);
-                // Long custom names are cut to the tile.
+                // Long names end in an ellipsis (the full one is in the tooltip).
+                let mut job = egui::text::LayoutJob::simple_singleline(label.clone(), font, color);
+                job.wrap = egui::text::TextWrapping { max_width: tile_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                let galley = ui.painter().layout_job(job);
                 let text_rect = Rect::from_center_size(egui::pos2(rect.center().x, t.bottom() + 9.0), vec2(tile_w, 14.0));
-                ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_rect.center().x - galley.size().x.min(tile_w) / 2.0, text_rect.top()), galley, color);
+                ui.painter().galley(egui::pos2(text_rect.center().x - galley.size().x / 2.0, text_rect.top()), galley, color);
                 let resp = if *ok { resp.on_hover_text(tip.as_str()) } else { resp.on_hover_text("Start the recording with this scene's sources to switch to it live") };
                 if resp.clicked() && !sel {
                     picked = Some(match pick {
