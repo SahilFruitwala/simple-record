@@ -974,7 +974,12 @@ impl App {
         if let Some((file, r)) = done {
             self.st.finishing = false;
             match r {
-                Ok(_) => self.st.last_file = Some(file),
+                Ok(stats) => {
+                    if let Some(c) = &stats.camera_file {
+                        eprintln!("rec: camera saved {}", c.display());
+                    }
+                    self.st.last_file = Some(file);
+                }
                 Err(e) => self.st.error = Some(format!("Recording failed: {e}")),
             }
         }

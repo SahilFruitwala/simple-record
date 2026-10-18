@@ -71,6 +71,9 @@ pub struct Settings {
     pub custom_scene: Option<usize>,
     /// Camera unique ID; None = system default.
     pub camera: Option<String>,
+    pub camera_resolution: crate::camera::CamRes,
+    /// Also save the webcam alone next to each recording.
+    pub camera_file: bool,
     pub mic_enabled: bool,
     /// Microphone unique ID; None = system default.
     pub mic: Option<String>,
@@ -142,6 +145,8 @@ impl Default for Settings {
             custom_scenes: vec![],
             custom_scene: None,
             camera: None,
+            camera_resolution: Default::default(),
+            camera_file: false,
             mic_enabled: true,
             mic: None,
             mic_name: None,
@@ -416,6 +421,10 @@ impl Settings {
         a.extend(["--transition-ms".into(), self.transition_ms.to_string()]);
         if spec.uses_cam() {
             a.extend(["--webcam".into(), self.camera.clone().unwrap_or_else(|| "default".into())]);
+            a.extend(["--camera-resolution".into(), value(self.camera_resolution)]);
+            if self.camera_file {
+                a.push("--camera-file".into());
+            }
         }
         if !self.mic_enabled {
             a.push("--no-mic".into());

@@ -174,6 +174,13 @@ pub struct RecordArgs {
     /// Scene transition length in milliseconds.
     #[arg(long, default_value_t = 400)]
     transition_ms: u32,
+    /// Webcam capture resolution (the largest the camera supports up to it).
+    #[arg(long, value_enum, default_value_t = camera::CamRes::P720)]
+    camera_resolution: camera::CamRes,
+    /// Also write the webcam alone to <output>-camera.mov, on the same
+    /// timeline (for editing the camera separately).
+    #[arg(long)]
+    camera_file: bool,
     /// Webcam overlay width as a fraction of the frame width.
     #[arg(long, default_value_t = 0.22)]
     pip_size: f64,
@@ -485,6 +492,8 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         mic,
         mic_warning,
         webcam,
+        cam_res: a.camera_resolution,
+        camera_file: a.camera_file,
         pip: PipSpec {
             size: a.pip_size.clamp(0.05, 0.9),
             place: match &a.pip_pos {
@@ -697,6 +706,12 @@ fn record(a: RecordArgs) -> Result<()> {
             stats.cam_latency_max * 1000.0,
             stats.cam_frames_in
         );
+    }
+    if let Some(c) = &stats.camera_file {
+        if !quiet {
+            eprintln!("rec: camera saved {} ({} frames)", c.display(), stats.camera_frames);
+        }
+        println!("{}", c.display());
     }
     println!("{}", out.display());
     Ok(())

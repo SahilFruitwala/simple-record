@@ -95,6 +95,9 @@ pub struct Options {
     /// Set when the requested mic isn't connected and the default is used.
     pub mic_warning: Option<String>,
     pub webcam: Option<Option<String>>,
+    pub cam_res: crate::camera::CamRes,
+    /// Also write the webcam alone to `<output>-camera.mov`.
+    pub camera_file: bool,
     pub pip: PipSpec,
     pub cursor: bool,
     pub clicks: bool,
@@ -189,6 +192,14 @@ fn capture_size(o: &Options) -> (usize, usize) {
     if o.test_pattern.is_none() && !sck && nw * nh > w * h { (nw, nh) } else { (w, h) }
 }
 
+/// `rec-….mov` -> `rec-…-camera.mov` (the webcam-only file).
+pub fn camera_file_path(output: &std::path::Path) -> PathBuf {
+    let stem = output.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    // QuickTime for ProRes; .mov keeps the camera file editable everywhere.
+    let ext = output.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "mov".into());
+    output.with_file_name(format!("{stem}-camera.{ext}"))
+}
+
 /// Whether frames go through the compositor: a webcam, a scene other than
 /// the plain screen, or a canvas of another shape than the screen. The plain
 /// screen otherwise goes to the encoder as captured (no copies).
@@ -251,6 +262,10 @@ impl Session {
         }
         sink.set_audio_offsets([sys_ms / 1000.0, o.mic_offset_ms / 1000.0]);
         sink.set_mic_filters(o.mic_filters);
+        if write && o.camera_file && o.webcam.is_some() {
+            let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::H264 };
+            sink.write_camera_file(&camera_file_path(&o.output), o.cam_res.size(), codec, o.fps)?;
+        }
         if let Some(l) = &o.live {
             l.begin_session(o.system_audio, o.mic.is_some(), o.gains_db);
             sink.set_live(l.clone());
@@ -337,13 +352,13 @@ impl Session {
     fn start_sources(&mut self, o: &Options, target: Option<screen::Target>, pixel_format: u32, cam: Option<Camera>) -> Result<()> {
         let mut cam = cam;
         if let Some(sel) = &o.webcam {
-            let reuse = cam.take_if(|c| Camera::resolve(sel.as_deref()).is_ok_and(|id| id == c.id));
+            let reuse = cam.take_if(|c| c.res == o.cam_res && Camera::resolve(sel.as_deref()).is_ok_and(|id| id == c.id));
             let c = match reuse {
                 Some(c) => {
                     c.retarget(self.shared.clone());
                     c
                 }
-                None => Camera::start(sel.as_deref(), self.shared.clone())?,
+                None => Camera::start(sel.as_deref(), o.cam_res, self.shared.clone())?,
             };
             // Start the file once the camera shows a picture and has had
             // time to settle its exposure, so it doesn't open on black or

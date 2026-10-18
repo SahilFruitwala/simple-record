@@ -668,6 +668,14 @@ fn sources(ui: &mut Ui, st: &mut State) {
         cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
         let uses_cam = s.scene_spec().uses_cam();
         combo(ui, "camera", &mut s.camera, &cams, idle && uses_cam);
+        if uses_cam {
+            w::row(ui, "Resolution", |ui| {
+                let opts: Vec<(crate::camera::CamRes, String)> = crate::camera::CamRes::ALL.iter().map(|r| (*r, r.label().to_string())).collect();
+                ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, "cam-res", &mut s.camera_resolution, &opts, idle));
+            });
+            w::row(ui, "Save camera separately", |ui| w::switch(ui, &mut s.camera_file, idle))
+                .on_hover_text("Also write the webcam alone to …-camera.mov, on the recording's timeline");
+        }
         if !uses_cam {
             w::hint(ui, "Pick a camera scene to use the webcam.");
         }

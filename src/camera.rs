@@ -160,6 +160,42 @@ define_class!(
     }
 );
 
+/// Webcam capture resolution.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CamRes {
+    #[default]
+    #[value(name = "720p")]
+    #[serde(rename = "720p")]
+    P720,
+    #[value(name = "1080p")]
+    #[serde(rename = "1080p")]
+    P1080,
+    #[value(name = "4k")]
+    #[serde(rename = "4k")]
+    P4k,
+}
+
+impl CamRes {
+    pub const ALL: [CamRes; 3] = [CamRes::P720, CamRes::P1080, CamRes::P4k];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CamRes::P720 => "720p",
+            CamRes::P1080 => "1080p",
+            CamRes::P4k => "4K",
+        }
+    }
+
+    pub fn size(self) -> (usize, usize) {
+        match self {
+            CamRes::P720 => (1280, 720),
+            CamRes::P1080 => (1920, 1080),
+            CamRes::P4k => (3840, 2160),
+        }
+    }
+}
+
 pub struct Camera {
     session: Retained<AVCaptureSession>,
     out: Retained<CameraOutput>,
@@ -167,6 +203,8 @@ pub struct Camera {
     pub name: String,
     /// The device's unique ID.
     pub id: String,
+    /// The resolution it was asked for.
+    pub res: CamRes,
     /// When it started: auto-exposure and white balance settle over the
     /// first second or two, so a fresh camera looks dark at first.
     pub started: std::time::Instant,
@@ -210,24 +248,34 @@ impl Camera {
         *self.out.ivars().shared.lock().unwrap() = shared;
     }
 
-    /// `sel`: None = first camera, else unique ID or name substring.
-    pub fn start(sel: Option<&str>, shared: Arc<Shared>) -> Result<Self> {
+    /// `sel`: None = first camera, else unique ID or name substring. The
+    /// largest of `res` and smaller presets the camera supports is used.
+    pub fn start(sel: Option<&str>, res: CamRes, shared: Arc<Shared>) -> Result<Self> {
         let dev = Self::device(sel)?;
         unsafe {
             let name = dev.localizedName().to_string();
             let session = AVCaptureSession::new();
             session.beginConfiguration();
-            if session.canSetSessionPreset(AVCaptureSessionPreset1280x720) {
-                session.setSessionPreset(AVCaptureSessionPreset1280x720);
-            } else {
-                session.setSessionPreset(AVCaptureSessionPresetHigh);
-            }
             let input = AVCaptureDeviceInput::deviceInputWithDevice_error(&dev)
                 .map_err(|e| anyhow!("camera {name}: {}", e.localizedDescription()))?;
             if !session.canAddInput(&input) {
                 bail!("cannot use camera {name}");
             }
             session.addInput(&input);
+            // With the device added, the session knows which presets it has.
+            let presets = [
+                (CamRes::P4k, AVCaptureSessionPreset3840x2160),
+                (CamRes::P1080, AVCaptureSessionPreset1920x1080),
+                (CamRes::P720, AVCaptureSessionPreset1280x720),
+            ];
+            match presets
+                .iter()
+                .filter(|(r, _)| r.size().1 <= res.size().1)
+                .find(|(_, p)| dev.supportsAVCaptureSessionPreset(p) && session.canSetSessionPreset(p))
+            {
+                Some((_, p)) => session.setSessionPreset(p),
+                None => session.setSessionPreset(AVCaptureSessionPresetHigh),
+            }
             let output = AVCaptureVideoDataOutput::new();
             output.setVideoSettings(Some(&dict(vec![(
                 cf_ns(kCVPixelBufferPixelFormatTypeKey),
@@ -247,7 +295,7 @@ impl Camera {
                 bail!("camera {name} failed to start");
             }
             let id = dev.uniqueID().to_string();
-            Ok(Camera { session, out: delegate, _queue: queue, name, id, started: std::time::Instant::now() })
+            Ok(Camera { session, out: delegate, _queue: queue, name, id, res, started: std::time::Instant::now() })
         }
     }
 
