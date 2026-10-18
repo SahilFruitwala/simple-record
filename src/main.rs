@@ -574,14 +574,17 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
             _ => !platforms.is_empty() && platforms.iter().all(|p| *p == live::Platform::YouTube),
         };
         // Every destination's limits: the smallest bitrate and size, HEVC
-        // only if all of them take it.
-        let presets: Vec<(u32, usize, bool)> = if platforms.is_empty() { vec![live::preset(live::Platform::Other, lh.min(h), a.fps.min(60), want_hevc)] } else {
-            platforms.iter().map(|p| live::preset(*p, lh.min(h), a.fps.min(60), want_hevc)).collect()
+        // only if all of them take it. Sizes are of the frame's short side
+        // (a 9:16 frame streams as 1080x1920 at "1080p").
+        let short = w.min(h);
+        let presets: Vec<(u32, usize, bool)> = if platforms.is_empty() { vec![live::preset(live::Platform::Other, lh.min(short), a.fps.min(60), want_hevc)] } else {
+            platforms.iter().map(|p| live::preset(*p, lh.min(short), a.fps.min(60), want_hevc)).collect()
         };
         let kbps = a.stream_bitrate.unwrap_or_else(|| presets.iter().map(|p| p.0).min().unwrap_or(6000));
         let max_h = presets.iter().map(|p| p.1).min().unwrap_or(lh);
         let hevc = presets.iter().all(|p| p.2);
-        let (lw, lh) = if lh.min(h) > max_h { (max_h * 16 / 9, max_h) } else { (lw.min(w), lh.min(h)) };
+        let box_h = lh.min(short).min(max_h);
+        let (lw, lh) = (even(lw as f64 * box_h as f64 / lh as f64), box_h);
         live.set_config(live::LiveConfig {
             width: lw,
             height: lh,

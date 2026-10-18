@@ -17,6 +17,30 @@ pub const RESOLUTIONS: [(&str, &str); 5] =
     [("720p", "720p"), ("1080p", "1080p"), ("1440p", "1440p"), ("4K", "4k"), ("Native", "native")];
 pub const FPS: [u32; 5] = [24, 25, 30, 50, 60];
 
+/// An extra stream destination (the first is `stream_dest`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamDest {
+    /// "youtube", "twitch" or "custom".
+    pub dest: String,
+    pub custom_url: String,
+    pub enabled: bool,
+}
+
+impl Default for StreamDest {
+    fn default() -> Self {
+        StreamDest { dest: "twitch".into(), custom_url: String::new(), enabled: true }
+    }
+}
+
+/// The ingest URL for a destination choice.
+pub fn dest_url(dest: &str, custom_url: &str) -> String {
+    match dest {
+        "custom" => custom_url.trim().to_string(),
+        d => crate::live::destination_url(d),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -31,6 +55,9 @@ pub struct Settings {
     pub bitrate_mbps: Option<f64>,
     /// 1-based display number.
     pub display: usize,
+    /// Record only this part of the display: [x, y, width, height] in
+    /// points from its top-left corner.
+    pub region: Option<[f64; 4]>,
     pub scene: Scene,
     /// Shape of the output frame.
     pub canvas: Canvas,
@@ -72,6 +99,8 @@ pub struct Settings {
     /// stream key lives in the Keychain, never here.
     pub stream_dest: String,
     pub stream_custom_url: String,
+    /// More destinations streamed at the same time, from the same encode.
+    pub stream_extra: Vec<StreamDest>,
     /// Live encode (replay buffer and streams).
     pub live_resolution: String,
     pub stream_bitrate_kbps: u32,
@@ -102,6 +131,7 @@ impl Default for Settings {
             fps: 60,
             bitrate_mbps: None,
             display: 1,
+            region: None,
             scene: Scene::Screen,
             canvas: Canvas::Source,
             background: Background::default(),
@@ -132,6 +162,7 @@ impl Default for Settings {
             replay_secs: 60,
             stream_dest: "youtube".into(),
             stream_custom_url: String::new(),
+            stream_extra: vec![],
             live_resolution: "1080p".into(),
             stream_bitrate_kbps: 6000,
             stream_bitrate_auto: true,
@@ -278,6 +309,7 @@ impl Settings {
             replay_secs: d.replay_secs,
             stream_dest: d.stream_dest.clone(),
             stream_custom_url: d.stream_custom_url.clone(),
+            stream_extra: d.stream_extra.clone(),
             live_resolution: d.live_resolution.clone(),
             stream_bitrate_kbps: d.stream_bitrate_kbps,
             stream_bitrate_auto: d.stream_bitrate_auto,
@@ -294,10 +326,16 @@ impl Settings {
     /// The stream destination URL (the YouTube and Twitch ingest URLs for
     /// those choices).
     pub fn stream_url(&self) -> String {
-        match self.stream_dest.as_str() {
-            "custom" => self.stream_custom_url.trim().to_string(),
-            d => crate::live::destination_url(d),
-        }
+        dest_url(&self.stream_dest, &self.stream_custom_url)
+    }
+
+    /// Every destination Go Live starts: the first one and the enabled
+    /// extras, without blanks or repeats.
+    pub fn stream_urls(&self) -> Vec<String> {
+        let mut urls = vec![self.stream_url()];
+        urls.extend(self.stream_extra.iter().filter(|d| d.enabled).map(|d| dest_url(&d.dest, &d.custom_url)));
+        let mut seen = std::collections::HashSet::new();
+        urls.into_iter().filter(|u| !u.is_empty() && seen.insert(u.clone())).collect()
     }
 
     /// The live encode these settings describe (sizes above the capture
@@ -311,13 +349,21 @@ impl Settings {
             "4k" => 2160,
             _ => 1080,
         };
-        let p = platform(&self.stream_url());
+        // Every destination's limits: the smallest bitrate and size, HEVC
+        // only if all of them take it.
+        let mut platforms: Vec<Platform> = self.stream_urls().iter().map(|u| platform(u)).collect();
+        if platforms.is_empty() {
+            platforms.push(Platform::Other);
+        }
         let hevc = match self.stream_codec.as_str() {
             "hevc" => true,
             "h264" => false,
-            _ => p == Platform::YouTube,
+            _ => platforms.iter().all(|p| *p == Platform::YouTube),
         };
-        let (kbps, height, hevc) = preset(p, height, self.fps.min(60), hevc);
+        let presets: Vec<(u32, usize, bool)> = platforms.iter().map(|p| preset(*p, height, self.fps.min(60), hevc)).collect();
+        let kbps = presets.iter().map(|p| p.0).min().unwrap_or(6000);
+        let height = presets.iter().map(|p| p.1).min().unwrap_or(height);
+        let hevc = presets.iter().all(|p| p.2);
         let bitrate = if self.stream_bitrate_auto { kbps } else { self.stream_bitrate_kbps.clamp(500, 80_000) };
         crate::live::LiveConfig {
             width: height * 16 / 9,
@@ -343,6 +389,8 @@ impl Settings {
         a.extend(["--display".into(), self.display.to_string()]);
         if let Some(w) = self.window {
             a.extend(["--window".into(), w.to_string()]);
+        } else if let Some([x, y, w, h]) = self.region {
+            a.extend(["--region".into(), format!("{},{},{},{}", x.round(), y.round(), w.round().max(16.0), h.round().max(16.0))]);
         }
         if let Some(c) = self.codec {
             a.extend(["--codec".into(), value(c)]);
@@ -439,6 +487,14 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--webcam", "default"]));
         assert!(args.windows(2).any(|w| w == ["--codec", "prores"]));
         assert!(args.windows(2).any(|w| w == ["--window", "42"]));
+        // A region applies to the display, not a window.
+        let r = Settings { region: Some([10.4, 20.0, 1280.0, 720.0]), ..Default::default() };
+        let args = r.record_args(None);
+        assert!(args.windows(2).any(|w| w == ["--region", "10,20,1280,720"]));
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        crate::parse_record_args(&refs).unwrap();
+        let rw = Settings { window: Some(3), ..r };
+        assert!(!rw.record_args(None).iter().any(|a| a == "--region"));
     }
 
     #[test]
@@ -519,6 +575,22 @@ mod tests {
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.hotkeys, s.hotkeys);
         assert_eq!(s.capture_key(), Settings::default().capture_key());
+    }
+
+    #[test]
+    fn several_destinations() {
+        let mut s = Settings { stream_dest: "youtube".into(), ..Default::default() };
+        assert_eq!(s.stream_urls().len(), 1);
+        assert!(s.live_config().hevc, "YouTube alone takes HEVC");
+        s.stream_extra.push(StreamDest::default());
+        s.stream_extra.push(StreamDest { dest: "custom".into(), custom_url: " ".into(), enabled: true });
+        s.stream_extra.push(StreamDest { dest: "youtube".into(), ..Default::default() });
+        let urls = s.stream_urls();
+        assert_eq!(urls.len(), 2, "blank and repeated destinations are skipped: {urls:?}");
+        let c = s.live_config();
+        assert!(!c.hevc && c.height <= 1080 && c.bitrate <= 6_000_000, "Twitch limits the shared encode: {c:?}");
+        s.stream_extra[0].enabled = false;
+        assert_eq!(s.stream_urls().len(), 1);
     }
 
     #[test]

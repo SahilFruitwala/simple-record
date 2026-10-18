@@ -79,7 +79,7 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
                 } else if st.preview.is_some() {
                     pill(ui, "PREVIEW", p.control, p.secondary);
                 }
-                if st.stream_status.as_ref().is_some_and(|s| s.live) {
+                if st.stream_statuses.iter().any(|s| s.live) {
                     ui.add_space(4.0);
                     pill(ui, "LIVE", RED, Color32::WHITE);
                 }
@@ -215,12 +215,78 @@ fn preview(ui: &mut Ui, st: &mut State) {
             ui.painter().rect_stroke(rect, r, Stroke::new(2.0, border), egui::StrokeKind::Outside);
         }
         let custom = st.settings.scene_id().1.is_some();
-        if live && custom {
+        if live && st.region_select.is_some() {
+            select_region(ui, st, rect);
+        } else if live && custom {
             super::scenes::edit_in_preview(ui, st, rect);
         } else if live && st.settings.scene.has_pip() {
             drag_overlay(ui, st, rect);
         }
     });
+}
+
+/// Pick the part of the display to record by dragging over the preview of
+/// the whole display. Esc cancels.
+fn select_region(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
+    let accent = theme::accent();
+    let Some(screen) = super::scenes::screen_rect(st, preview) else { return };
+    let painter = ui.painter_at(preview);
+    let shade = Color32::from_black_alpha(110);
+    let resp = ui.interact(screen, ui.id().with("region"), Sense::drag());
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    let start = st.region_select.as_ref().and_then(|r| r.1);
+    let current = resp.interact_pointer_pos().map(|p| p.clamp(screen.min, screen.max));
+    let sel = match (start, current) {
+        (Some(a), Some(b)) => Some(egui::Rect::from_two_pos(a, b)),
+        _ => None,
+    };
+    match sel {
+        Some(r) => {
+            // Shade around the selection.
+            for band in [
+                egui::Rect::from_min_max(preview.min, egui::pos2(preview.max.x, r.min.y)),
+                egui::Rect::from_min_max(egui::pos2(preview.min.x, r.max.y), preview.max),
+                egui::Rect::from_min_max(egui::pos2(preview.min.x, r.min.y), egui::pos2(r.min.x, r.max.y)),
+                egui::Rect::from_min_max(egui::pos2(r.max.x, r.min.y), egui::pos2(preview.max.x, r.max.y)),
+            ] {
+                painter.rect_filled(band, CornerRadius::ZERO, shade);
+            }
+            painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.5, accent), egui::StrokeKind::Outside);
+            let (pw, ph) = st.display_points.get(st.settings.display.max(1) - 1).copied().unwrap_or((screen.width() as f64, screen.height() as f64));
+            let label = format!("{:.0} × {:.0} pt", r.width() as f64 / screen.width() as f64 * pw, r.height() as f64 / screen.height() as f64 * ph);
+            painter.text(r.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(BODY), Color32::WHITE);
+        }
+        None => {
+            painter.rect_filled(preview, CornerRadius::ZERO, Color32::from_black_alpha(60));
+            let msg = "Drag over the screen to choose the area to record  ·  Esc cancels";
+            let galley = painter.layout_no_wrap(msg.into(), theme::semibold(BODY), Color32::WHITE);
+            let at = egui::pos2(preview.center().x - galley.size().x / 2.0, preview.top() + 14.0);
+            painter.rect_filled(egui::Rect::from_min_size(at - vec2(10.0, 6.0), galley.size() + vec2(20.0, 12.0)), CornerRadius::same(8), Color32::from_black_alpha(160));
+            painter.galley(at, galley, Color32::WHITE);
+        }
+    }
+    if resp.drag_started() {
+        if let Some(r) = st.region_select.as_mut() {
+            r.1 = current;
+        }
+    }
+    if resp.drag_stopped() {
+        if let Some(r) = sel.filter(|r| r.width() >= 8.0 && r.height() >= 8.0) {
+            let (pw, ph) = st.display_points.get(st.settings.display.max(1) - 1).copied().unwrap_or((1920.0, 1080.0));
+            let fx = |x: f32| ((x - screen.min.x) / screen.width()) as f64;
+            let fy = |y: f32| ((y - screen.min.y) / screen.height()) as f64;
+            st.settings.region = Some([(fx(r.min.x) * pw).round(), (fy(r.min.y) * ph).round(), ((fx(r.max.x) - fx(r.min.x)) * pw).round(), ((fy(r.max.y) - fy(r.min.y)) * ph).round()]);
+            st.region_select = None;
+            let _ = st.settings.save();
+        } else if let Some(r) = st.region_select.as_mut() {
+            r.1 = None;
+        }
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape))
+        && let Some((before, _)) = st.region_select.take()
+    {
+        st.settings.region = before;
+    }
 }
 
 /// Output-pixel frame the overlay geometry is computed in (any size with
@@ -569,6 +635,31 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 st.refresh_devices = true;
             }
         });
+        if s.window.is_none() {
+            w::row(ui, "Area", |ui| {
+                if st.region_select.is_some() {
+                    if ui.button("Cancel").clicked()
+                        && let Some((before, _)) = st.region_select.take()
+                    {
+                        s.region = before;
+                    }
+                    ui.label(RichText::new("Drag in the preview").size(SECONDARY).color(p.secondary));
+                } else {
+                    if s.region.is_some() && ui.add_enabled(idle, egui::Button::new("Whole")).on_hover_text("Record the entire display").clicked() {
+                        s.region = None;
+                    }
+                    if ui.add_enabled(idle, egui::Button::new(if s.region.is_some() { "Change…" } else { "Select…" })).on_hover_text("Record part of the display: drag over it in the preview").clicked() {
+                        st.region_select = Some((s.region, None));
+                        s.region = None;
+                    }
+                    let text = match s.region {
+                        Some([_, _, w, h]) => format!("{w:.0} × {h:.0} pt"),
+                        None => "Entire display".into(),
+                    };
+                    ui.label(RichText::new(text).size(SECONDARY).color(p.secondary));
+                }
+            });
+        }
     });
 
     w::header(ui, Icon::Camera, "Camera");
@@ -658,44 +749,44 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
 
     w::header(ui, Icon::Stream, "Stream");
     w::card(ui, |ui| {
-        let live = st.stream_id.is_some();
-        let dests: Vec<(String, String)> = STREAM_DESTS.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
-        combo(ui, "stream-dest", &mut s.stream_dest, &dests, !live);
-        if s.stream_dest == "custom" {
-            ui.add_enabled(
-                !live,
-                egui::TextEdit::singleline(&mut s.stream_custom_url)
-                    .hint_text("rtmp://… or https://…/whip")
-                    .margin(vec2(8.0, 4.0))
-                    .desired_width(f32::INFINITY),
-            );
-        }
-        // The key goes to the Keychain (per destination URL), never to settings.
-        let url = s.stream_url();
-        let has_key = if url == st.settings.stream_url() { st.has_stream_key() } else { false };
-        if has_key && st.stream_key_input.is_empty() {
-            w::row(ui, "Stream key", |ui| {
-                if ui.add_enabled(!live, egui::Button::new("Remove")).clicked() {
-                    st.delete_stream_key();
-                }
-                ui.label(RichText::new("In Keychain").size(SECONDARY).color(p.secondary));
-            });
-        } else {
+        let live = st.streaming();
+        let mut first = (s.stream_dest.clone(), s.stream_custom_url.clone());
+        destination(ui, st, 0, &mut first.0, &mut first.1, live);
+        (s.stream_dest, s.stream_custom_url) = first;
+        let mut remove = None;
+        for i in 0..s.stream_extra.len() {
+            w::divider(ui);
+            let d = &mut s.stream_extra[i];
             ui.horizontal(|ui| {
-                let bw = 52.0;
-                ui.add_sized(
-                    vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0),
-                    egui::TextEdit::singleline(&mut st.stream_key_input).password(true).margin(vec2(8.0, 4.0)).hint_text("Stream key"),
-                );
-                if ui.add_enabled(!st.stream_key_input.trim().is_empty(), egui::Button::new("Save").min_size(vec2(bw, 24.0))).clicked() {
-                    st.save_stream_key();
-                }
+                w::switch(ui, &mut d.enabled, !live).on_hover_text("Stream here too");
+                ui.label(RichText::new(format!("Also stream to ({})", i + 2)).size(SECONDARY).color(p.secondary));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add_enabled(!live, egui::Button::new("✕").small()).on_hover_text("Remove this destination").clicked() {
+                        remove = Some(i);
+                    }
+                });
             });
+            if d.enabled {
+                destination(ui, st, i + 1, &mut d.dest, &mut d.custom_url, live);
+            }
+        }
+        if let Some(i) = remove {
+            s.stream_extra.remove(i);
+            if st.stream_key_input.len() > i + 1 {
+                st.stream_key_input.remove(i + 1);
+            }
+        }
+        if !live && ui.small_button("+ Add destination").on_hover_text("Stream to several places at once from one encode").clicked() {
+            s.stream_extra.push(Default::default());
         }
         w::divider(ui);
-        let whip = url.starts_with("http");
-        let ready = !url.is_empty() && (has_key || whip);
-        let label = if live { "Stop Stream" } else { "Go Live" };
+        let urls = s.stream_urls();
+        let ready = !urls.is_empty() && urls.iter().all(|u| u.starts_with("http") || st.has_stream_key(u));
+        let label = match (live, urls.len()) {
+            (true, _) => "Stop Stream".to_string(),
+            (false, n) if n > 1 => format!("Go Live ({n} destinations)"),
+            _ => "Go Live".to_string(),
+        };
         let (fill, fg) = if live {
             (RED, Color32::WHITE)
         } else if ready {
@@ -706,22 +797,61 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         // Growable atoms on both sides center the label.
         let b = egui::Button::new((egui::Atom::grow(), RichText::new(label).font(theme::semibold(BODY)).color(fg), egui::Atom::grow())).fill(fill).corner_radius(7).min_size(vec2(ui.available_width(), 28.0));
         let resp = ui.add_enabled(live || ready, b);
-        let resp = if ready || live { resp } else { resp.on_disabled_hover_text("Save a stream key first") };
+        let resp = if ready || live { resp } else { resp.on_disabled_hover_text("Save a stream key for every destination first") };
         if resp.clicked() {
             st.cmds.push(Cmd::ToggleStream);
         }
-        if let Some(status) = &st.stream_status {
+        for status in &st.stream_statuses {
             let text = if status.live {
-                format!("{}  {:.1} Mb/s  {} dropped", crate::record::clock(status.duration), status.bitrate / 1e6, status.dropped_frames)
+                format!("{}  {}  {:.1} Mb/s  {} dropped", status.name, crate::record::clock(status.duration), status.bitrate / 1e6, status.dropped_frames)
             } else {
-                status.state.clone()
+                format!("{}  {}", status.name, status.state)
             };
-            ui.label(RichText::new(text).size(SECONDARY).color(if status.live { p.text } else { p.secondary }));
-        }
-        if let Some(e) = st.stream_status.as_ref().and_then(|s| (!s.live).then_some(s.error.as_ref()).flatten()) {
-            ui.add(egui::Label::new(RichText::new(e).size(SECONDARY).color(RED)).wrap());
+            ui.add(egui::Label::new(RichText::new(text).size(SECONDARY).color(if status.live { p.text } else { p.secondary })).truncate());
+            if let Some(e) = (!status.live).then_some(status.error.as_ref()).flatten() {
+                ui.add(egui::Label::new(RichText::new(e).size(SECONDARY).color(RED)).wrap());
+            }
         }
     });
+}
+
+/// One stream destination: service, URL (custom) and its key in the
+/// Keychain (per URL, never in the settings file).
+fn destination(ui: &mut Ui, st: &mut State, i: usize, dest: &mut String, custom_url: &mut String, live: bool) {
+    let p = theme::pal(ui);
+    let dests: Vec<(String, String)> = STREAM_DESTS.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
+    combo(ui, &format!("stream-dest-{i}"), dest, &dests, !live);
+    if dest == "custom" {
+        ui.add_enabled(
+            !live,
+            egui::TextEdit::singleline(custom_url)
+                .hint_text("rtmp://…, srt://… or https://…/whip")
+                .margin(vec2(8.0, 4.0))
+                .desired_width(f32::INFINITY),
+        );
+    }
+    let url = crate::settings::dest_url(dest, custom_url);
+    let has_key = st.has_stream_key(&url);
+    if has_key && st.key_input(i).is_empty() {
+        w::row(ui, "Stream key", |ui| {
+            if ui.add_enabled(!live, egui::Button::new("Remove")).clicked() {
+                st.delete_stream_key(&url);
+            }
+            ui.label(RichText::new("In Keychain").size(SECONDARY).color(p.secondary));
+        });
+    } else {
+        ui.horizontal(|ui| {
+            let bw = 52.0;
+            let hint = if url.starts_with("http") || url.starts_with("srt") { "Key or passphrase (optional)" } else { "Stream key" };
+            ui.add_sized(
+                vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0),
+                egui::TextEdit::singleline(st.key_input(i)).password(true).margin(vec2(8.0, 4.0)).hint_text(hint),
+            );
+            if ui.add_enabled(!st.key_input(i).trim().is_empty(), egui::Button::new("Save").min_size(vec2(bw, 24.0))).clicked() {
+                st.save_stream_key(i, &url);
+            }
+        });
+    }
 }
 
 pub fn settings_window(ui: &mut Ui, st: &mut State) {
@@ -942,7 +1072,7 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
     });
 
     section(ui, "LIVE ENCODE (REPLAY & STREAMING)");
-    let streaming = st.stream_id.is_some();
+    let streaming = st.streaming();
     ui.add_enabled_ui(!streaming, |ui| {
         grid(ui, "live", &mut |ui| {
             ui.label("Resolution");

@@ -158,10 +158,17 @@ struct Encoders {
 }
 
 /// Encode size: the frame fitted into the configured size, never larger
-/// than the frame (no upscaling), even dimensions.
+/// than the frame (no upscaling), even dimensions. The size is a landscape
+/// box; a portrait frame (a 9:16 canvas) fits it turned, so "1080p" is
+/// 1080x1920 for Shorts.
 fn enc_size(cfg: &LiveConfig, frame: &CVPixelBuffer) -> (usize, usize) {
     let (fw, fh) = (CVPixelBufferGetWidth(frame) as f64, CVPixelBufferGetHeight(frame) as f64);
-    let s = (cfg.width as f64 / fw).min(cfg.height as f64 / fh).min(1.0);
+    enc_size_for(cfg, fw, fh)
+}
+
+fn enc_size_for(cfg: &LiveConfig, fw: f64, fh: f64) -> (usize, usize) {
+    let (bw, bh) = if (fh > fw) == (cfg.height > cfg.width) { (cfg.width, cfg.height) } else { (cfg.height, cfg.width) };
+    let s = (bw as f64 / fw).min(bh as f64 / fh).min(1.0);
     (((fw * s).round() as usize).max(16) & !1, ((fh * s).round() as usize).max(16) & !1)
 }
 
@@ -618,6 +625,15 @@ pub fn start_output(url: &str, key: &str) -> Result<Box<dyn Output>> {
 mod tests {
     use super::*;
     use crate::util::*;
+
+    #[test]
+    fn portrait_frames_fit_the_box_turned() {
+        let cfg = LiveConfig { width: 1920, height: 1080, ..Default::default() };
+        assert_eq!(enc_size_for(&cfg, 1080.0, 1920.0), (1080, 1920));
+        assert_eq!(enc_size_for(&cfg, 2160.0, 3840.0), (1080, 1920));
+        assert_eq!(enc_size_for(&cfg, 3840.0, 2160.0), (1920, 1080));
+        assert_eq!(enc_size_for(&cfg, 1728.0, 1080.0), (1728, 1080));
+    }
 
     /// Feed `secs` of 30 fps frames and audio through the hub. Every whole
     /// second the frame is white and the audio beeps, like the test pattern.

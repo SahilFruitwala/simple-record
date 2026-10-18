@@ -523,6 +523,18 @@ impl Sink {
         self.audio_offset = offsets;
     }
 
+    /// The system audio offset (see `set_audio_offsets`).
+    pub fn system_offset(&self) -> f64 {
+        self.audio_offset[0]
+    }
+
+    /// Change the system audio offset mid-session (the output device
+    /// changed). The track stays continuous: a later offset is padded with
+    /// silence, an earlier one trimmed, like any timestamp jump.
+    pub fn set_system_offset(&mut self, secs: f64) {
+        self.audio_offset[0] = secs;
+    }
+
     /// Write at most `secs` of output (rounded to whole frames).
     pub fn limit_secs(&mut self, secs: Option<f64>) {
         self.limit = secs.map(|d| (d * self.fps as f64).round() as i64);

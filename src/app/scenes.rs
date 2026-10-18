@@ -29,6 +29,18 @@ fn env(st: &State, s: &Settings) -> Env {
     }
 }
 
+/// Where the screen shows in the preview (the scene's first screen
+/// layer), if it does.
+pub fn screen_rect(st: &State, preview: Rect) -> Option<Rect> {
+    let env = env(st, &st.settings);
+    let f = st.settings.scene_spec().resolve(&env);
+    let l = f.layers.iter().find(|l| l.content == Content::Screen)?;
+    let (r, _, _) = layout::place(env.screen_aspect * 1000.0, 1000.0, l.rect, l.fit);
+    let k = preview.width() as f64 / env.w;
+    let r = Rect::from_min_size(preview.min + vec2((r[0] * k) as f32, (r[1] * k) as f32), vec2((r[2] * k) as f32, (r[3] * k) as f32));
+    Some(r.intersect(preview))
+}
+
 /// Fill `rect` with a vertical gradient.
 fn gradient(ui: &Ui, rect: Rect, bg: Background) {
     let c = |v: [u8; 3]| Color32::from_rgb(v[0], v[1], v[2]);

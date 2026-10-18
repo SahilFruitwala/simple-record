@@ -168,6 +168,9 @@ pub struct Session {
     pub description: String,
 }
 
+/// How often the output device's latency is re-read while capturing.
+const LATENCY_POLL: Duration = Duration::from_secs(1);
+
 /// How long a freshly started camera needs before its exposure is close to
 /// settled (measured on a MacBook Pro camera: about 94% of the final
 /// brightness after 1.5 s, 98% after 2 s).
@@ -282,9 +285,26 @@ impl Session {
         let pacer_shared = shared.clone();
         let pacer_stop = stop.clone();
         let fps = o.fps;
+        // Follow the output device (switching to AirPods mid-recording
+        // changes how late system audio is heard) unless the offset is set.
+        let follow_latency = o.system_audio && o.system_offset_ms.is_none() && o.test_pattern.is_none();
         sess.pacer = Some(std::thread::spawn(move || {
             let period = Duration::from_secs_f64(1.0 / fps as f64 / 2.0);
+            let mut latency_checked = Instant::now();
             while !pacer_stop.load(Ordering::SeqCst) {
+                if follow_latency && latency_checked.elapsed() >= LATENCY_POLL {
+                    latency_checked = Instant::now();
+                    if let Some(l) = crate::outlatency::output_latency() {
+                        pacer_shared.with(|s| {
+                            if (s.system_offset() - l).abs() > 0.001 {
+                                if std::env::var_os("REC_DEBUG").is_some() {
+                                    eprintln!("rec: debug: output latency now {:.1} ms", l * 1000.0);
+                                }
+                                s.set_system_offset(l);
+                            }
+                        });
+                    }
+                }
                 let now = secs(host_now());
                 // Plain threads have no autorelease pool; without one every
                 // autoreleased CoreImage/AVFoundation object would leak.
