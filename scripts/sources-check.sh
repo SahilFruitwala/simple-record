@@ -21,7 +21,7 @@ scene() {
   local layers='{"content": "screen"}'
   for l in "$@"; do layers="$layers, $l"; done
   printf '{"name": "%s", "layers": [%s]}' "$name" "$layers" > "$WORK/$name.json"
-  "$REC" record -q --test-pattern --no-mic --no-system-audio -r 640x360 -f 30 --scene-file "$WORK/$name.json" -t 4 -o "$WORK/$name.mov" 2>"$WORK/$name.log" || { cat "$WORK/$name.log"; exit 1; }
+  REC_DEBUG_LAYERS=${DEBUG_LAYERS:-} "$REC" record -q --test-pattern --no-mic --no-system-audio -r 640x360 -f 30 --scene-file "$WORK/$name.json" -t 4 -o "$WORK/$name.mov" 2>"$WORK/$name.log" || { cat "$WORK/$name.log"; exit 1; }
   grep -v IOServiceMatching "$WORK/$name.log" || true
 }
 RED='{"content": {"media": {"path": "'$WORK'/red.mp4", "looped": true}}, "rect": [0, 0, 0.5, 1], "fit": "cover"}'
@@ -31,7 +31,7 @@ scene video "$RED"
 scene page "$PAGE"
 scene video_page "$RED" "$PAGE"
 scene video_keyed "$RED" "$KEYED"
-scene all "$RED" "$PAGE" "$KEYED"
+DEBUG_LAYERS=1 scene all "$RED" "$PAGE" "$KEYED"
 # The RGB of an 8x8 patch around (x, y) at 2.5 s of recording $1 (between
 # the test pattern's white flashes).
 rgb() {

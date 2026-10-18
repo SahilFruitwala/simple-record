@@ -497,6 +497,8 @@ impl Compositor {
     /// Draw a resolved frame.
     fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, extras: &[(&Source, Retained<CIImage>)], k: f64) -> Retained<CIImage> {
         let mut img = self.background_image(f.background);
+        // REC_DEBUG_LAYERS: each layer's source and placement, once a second.
+        let debug = std::env::var_os("REC_DEBUG_LAYERS").is_some_and(|v| !v.is_empty()) && (self.now * 1.0).fract() < 0.034;
         for l in &f.layers {
             if l.opacity <= 0.0 {
                 continue;
@@ -516,8 +518,16 @@ impl Compositor {
                     Some(unsafe { CIImage::imageWithColor(&ci_color(*c, 1.0)).imageByCroppingToRect(r) })
                 }
             };
+            if debug {
+                let e = src.as_ref().map(|s| unsafe { s.extent() });
+                eprintln!("rec: debug: t={:.2} {} rect {:?} source {:?}", self.now, l.content.label(), l.rect, e.map(|e| (e.origin.x, e.origin.y, e.size.width, e.size.height)));
+            }
             if let Some(src) = src {
                 let src = if l.effects.is_none() { src } else { self.filtered(src, &l.effects) };
+                if debug && !l.effects.is_none() {
+                    let e = unsafe { src.extent() };
+                    eprintln!("rec: debug:   filtered {:?}", (e.origin.x, e.origin.y, e.size.width, e.size.height));
+                }
                 img = self.place(l, &src, img, k);
             }
         }
