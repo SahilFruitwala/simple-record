@@ -53,3 +53,7 @@ objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfigurat
 
 [profile.release]
 debug = 1
+
+# Xcode 27 SwiftPM hides the Swift cryptokit symbols; see vendor/apple-cryptokit-rs/build.rs
+[patch.crates-io]
+apple-cryptokit-rs = { path = "vendor/apple-cryptokit-rs" }

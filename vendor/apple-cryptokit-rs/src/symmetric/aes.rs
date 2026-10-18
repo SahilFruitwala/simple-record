@@ -1,0 +1,391 @@
+use crate::error::{CryptoKitError, Result};
+use crate::symmetric::AuthenticatedCipher;
+
+// AES-GCM Swift FFI declarations
+extern "C" {
+    #[link_name = "aes_gcm_encrypt"]
+    fn swift_aes_gcm_encrypt(
+        key: *const u8,
+        key_len: i32,
+        nonce: *const u8,
+        nonce_len: i32,
+        plaintext: *const u8,
+        plaintext_len: i32,
+        ciphertext: *mut u8,
+        ciphertext_len: *mut i32,
+    ) -> i32;
+
+    #[link_name = "aes_gcm_decrypt"]
+    fn swift_aes_gcm_decrypt(
+        key: *const u8,
+        key_len: i32,
+        nonce: *const u8,
+        nonce_len: i32,
+        ciphertext: *const u8,
+        ciphertext_len: i32,
+        plaintext: *mut u8,
+        plaintext_len: *mut i32,
+    ) -> i32;
+
+    #[link_name = "aes_gcm_encrypt_with_aad"]
+    fn swift_aes_gcm_encrypt_with_aad(
+        key: *const u8,
+        key_len: i32,
+        nonce: *const u8,
+        nonce_len: i32,
+        plaintext: *const u8,
+        plaintext_len: i32,
+        aad: *const u8,
+        aad_len: i32,
+        ciphertext: *mut u8,
+        ciphertext_len: *mut i32,
+    ) -> i32;
+
+    #[link_name = "aes_gcm_decrypt_with_aad"]
+    fn swift_aes_gcm_decrypt_with_aad(
+        key: *const u8,
+        key_len: i32,
+        nonce: *const u8,
+        nonce_len: i32,
+        ciphertext: *const u8,
+        ciphertext_len: i32,
+        aad: *const u8,
+        aad_len: i32,
+        plaintext: *mut u8,
+        plaintext_len: *mut i32,
+    ) -> i32;
+
+    #[link_name = "generate_symmetric_key"]
+    fn swift_generate_symmetric_key(size_bits: i32, key_data: *mut u8) -> i32;
+
+    #[link_name = "generate_aes_gcm_nonce"]
+    fn swift_generate_aes_gcm_nonce(nonce_data: *mut u8) -> i32;
+}
+
+/// AES key
+#[derive(Clone)]
+pub struct AESKey {
+    pub(crate) bytes: Vec<u8>,
+}
+
+impl AESKey {
+    /// Create AES key from byte array
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        match bytes.len() {
+            16 | 24 | 32 => Ok(Self {
+                bytes: bytes.to_vec(),
+            }),
+            _ => Err(CryptoKitError::InvalidKey),
+        }
+    }
+
+    /// Generate random AES key
+    pub fn generate(size: AESKeySize) -> Result<Self> {
+        let len = match size {
+            AESKeySize::AES128 => 16,
+            AESKeySize::AES192 => 24,
+            AESKeySize::AES256 => 32,
+        };
+
+        unsafe {
+            let mut bytes = vec![0u8; len];
+            let result = swift_generate_symmetric_key(
+                (len * 8) as i32, // bits
+                bytes.as_mut_ptr(),
+            );
+
+            if result == 0 {
+                Ok(Self { bytes })
+            } else {
+                Err(CryptoKitError::KeyGenerationFailed)
+            }
+        }
+    }
+}
+
+/// AES key size
+#[derive(Debug, Clone, Copy)]
+pub enum AESKeySize {
+    AES128,
+    AES192,
+    AES256,
+}
+
+/// AES-GCM nonce
+#[derive(Clone)]
+pub struct AESGCMNonce {
+    pub(crate) bytes: [u8; 12],
+}
+
+impl AESGCMNonce {
+    /// Create nonce from byte array
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != 12 {
+            return Err(CryptoKitError::InvalidNonce);
+        }
+
+        let mut nonce_bytes = [0u8; 12];
+        nonce_bytes.copy_from_slice(bytes);
+        Ok(Self { bytes: nonce_bytes })
+    }
+
+    /// Generate random nonce
+    pub fn generate() -> Result<Self> {
+        unsafe {
+            let mut bytes = [0u8; 12];
+            let result = swift_generate_aes_gcm_nonce(bytes.as_mut_ptr());
+
+            if result == 0 {
+                Ok(Self { bytes })
+            } else {
+                Err(CryptoKitError::NonceGenerationFailed)
+            }
+        }
+    }
+}
+
+/// AES-GCM authenticated encryption implementation
+pub struct AesGcm;
+
+impl AuthenticatedCipher for AesGcm {
+    type Key = AESKey;
+    type Nonce = AESGCMNonce;
+
+    /// AES-GCM authentication tag size is 16 bytes
+    const TAG_SIZE: usize = 16;
+
+    fn seal_to(
+        key: &Self::Key,
+        nonce: &Self::Nonce,
+        plaintext: &[u8],
+        ciphertext: &mut [u8],
+    ) -> Result<usize> {
+        assert!(
+            ciphertext.len() >= plaintext.len() + Self::TAG_SIZE,
+            "Output buffer too small: {} < {}",
+            ciphertext.len(),
+            plaintext.len() + Self::TAG_SIZE
+        );
+
+        unsafe {
+            let mut ciphertext_len: i32 = 0;
+            let result = swift_aes_gcm_encrypt(
+                key.bytes.as_ptr(),
+                key.bytes.len() as i32,
+                nonce.bytes.as_ptr(),
+                nonce.bytes.len() as i32,
+                plaintext.as_ptr(),
+                plaintext.len() as i32,
+                ciphertext.as_mut_ptr(),
+                &mut ciphertext_len,
+            );
+
+            if result == 0 {
+                Ok(ciphertext_len as usize)
+            } else {
+                Err(CryptoKitError::EncryptionFailed)
+            }
+        }
+    }
+
+    fn open_to(
+        key: &Self::Key,
+        nonce: &Self::Nonce,
+        ciphertext: &[u8],
+        plaintext: &mut [u8],
+    ) -> Result<usize> {
+        if ciphertext.len() < Self::TAG_SIZE {
+            return Err(CryptoKitError::InvalidInput(
+                "Ciphertext too short".to_string(),
+            ));
+        }
+        assert!(
+            plaintext.len() >= ciphertext.len() - Self::TAG_SIZE,
+            "Output buffer too small: {} < {}",
+            plaintext.len(),
+            ciphertext.len() - Self::TAG_SIZE
+        );
+
+        unsafe {
+            let mut plaintext_len = 0i32;
+
+            let result = swift_aes_gcm_decrypt(
+                key.bytes.as_ptr(),
+                key.bytes.len() as i32,
+                nonce.bytes.as_ptr(),
+                nonce.bytes.len() as i32,
+                ciphertext.as_ptr(),
+                ciphertext.len() as i32,
+                plaintext.as_mut_ptr(),
+                &mut plaintext_len,
+            );
+
+            if result == 0 {
+                Ok(plaintext_len as usize)
+            } else {
+                Err(CryptoKitError::DecryptionFailed)
+            }
+        }
+    }
+
+    fn seal_to_with_aad(
+        key: &Self::Key,
+        nonce: &Self::Nonce,
+        plaintext: &[u8],
+        aad: &[u8],
+        ciphertext: &mut [u8],
+    ) -> Result<usize> {
+        assert!(
+            ciphertext.len() >= plaintext.len() + Self::TAG_SIZE,
+            "Output buffer too small: {} < {}",
+            ciphertext.len(),
+            plaintext.len() + Self::TAG_SIZE
+        );
+
+        unsafe {
+            let mut ciphertext_len = 0i32;
+
+            let result = swift_aes_gcm_encrypt_with_aad(
+                key.bytes.as_ptr(),
+                key.bytes.len() as i32,
+                nonce.bytes.as_ptr(),
+                nonce.bytes.len() as i32,
+                plaintext.as_ptr(),
+                plaintext.len() as i32,
+                aad.as_ptr(),
+                aad.len() as i32,
+                ciphertext.as_mut_ptr(),
+                &mut ciphertext_len,
+            );
+
+            if result == 0 {
+                Ok(ciphertext_len as usize)
+            } else {
+                Err(CryptoKitError::EncryptionFailed)
+            }
+        }
+    }
+
+    fn open_to_with_aad(
+        key: &Self::Key,
+        nonce: &Self::Nonce,
+        ciphertext: &[u8],
+        aad: &[u8],
+        plaintext: &mut [u8],
+    ) -> Result<usize> {
+        if ciphertext.len() < Self::TAG_SIZE {
+            return Err(CryptoKitError::InvalidInput(
+                "Ciphertext too short".to_string(),
+            ));
+        }
+        assert!(
+            plaintext.len() >= ciphertext.len() - Self::TAG_SIZE,
+            "Output buffer too small: {} < {}",
+            plaintext.len(),
+            ciphertext.len() - Self::TAG_SIZE
+        );
+
+        unsafe {
+            let mut plaintext_len = 0i32;
+
+            let result = swift_aes_gcm_decrypt_with_aad(
+                key.bytes.as_ptr(),
+                key.bytes.len() as i32,
+                nonce.bytes.as_ptr(),
+                nonce.bytes.len() as i32,
+                ciphertext.as_ptr(),
+                ciphertext.len() as i32,
+                aad.as_ptr(),
+                aad.len() as i32,
+                plaintext.as_mut_ptr(),
+                &mut plaintext_len,
+            );
+
+            if result == 0 {
+                Ok(plaintext_len as usize)
+            } else {
+                Err(CryptoKitError::DecryptionFailed)
+            }
+        }
+    }
+}
+
+/// Convenience function: AES-GCM encryption
+pub fn aes_gcm_encrypt(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::seal(&key, &nonce, plaintext)
+}
+pub fn aes_gcm_encrypt_to(
+    key: &[u8],
+    nonce: &[u8],
+    plaintext: &[u8],
+    ciphertext: &mut [u8],
+) -> Result<usize> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::seal_to(&key, &nonce, plaintext, ciphertext)
+}
+
+/// Convenience function: AES-GCM decryption
+pub fn aes_gcm_decrypt(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::open(&key, &nonce, ciphertext)
+}
+pub fn aes_gcm_decrypt_to(
+    key: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+    plaintext: &mut [u8],
+) -> Result<usize> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::open_to(&key, &nonce, ciphertext, plaintext)
+}
+
+/// Convenience function: AES-GCM encryption with AAD
+pub fn aes_gcm_encrypt_with_aad(
+    key: &[u8],
+    nonce: &[u8],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::seal_with_aad(&key, &nonce, plaintext, aad)
+}
+pub fn aes_gcm_encrypt_to_with_aad(
+    key: &[u8],
+    nonce: &[u8],
+    plaintext: &[u8],
+    aad: &[u8],
+    ciphertext: &mut [u8],
+) -> Result<usize> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::seal_to_with_aad(&key, &nonce, plaintext, aad, ciphertext)
+}
+
+/// Convenience function: AES-GCM decryption with AAD
+pub fn aes_gcm_decrypt_with_aad(
+    key: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::open_with_aad(&key, &nonce, ciphertext, aad)
+}
+pub fn aes_gcm_decrypt_to_with_aad(
+    key: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+    aad: &[u8],
+    plaintext: &mut [u8],
+) -> Result<usize> {
+    let key = AESKey::from_bytes(key)?;
+    let nonce = AESGCMNonce::from_bytes(nonce)?;
+    AesGcm::open_to_with_aad(&key, &nonce, ciphertext, aad, plaintext)
+}
