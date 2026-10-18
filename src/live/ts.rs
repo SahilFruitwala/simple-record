@@ -163,6 +163,7 @@ impl Muxer {
 
     /// A PES packet split into TS packets. The first carries the PCR and
     /// the random access flag when given.
+    #[allow(clippy::too_many_arguments)]
     fn pes(&mut self, pid: u16, stream_id: u8, pts: u64, pcr: Option<u64>, random_access: bool, payload: &[u8], out: &mut Vec<u8>) {
         let mut pes = Vec::with_capacity(payload.len() + 14);
         pes.extend_from_slice(&[0, 0, 1, stream_id]);

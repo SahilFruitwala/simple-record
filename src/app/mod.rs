@@ -194,8 +194,8 @@ pub struct State {
     /// Size in points of each display (for regions).
     pub display_points: Vec<(f64, f64)>,
     /// Picking a region in the preview: the region before (restored on
-    /// cancel) and where the drag started.
-    pub region_select: Option<(Option<[f64; 4]>, Option<egui::Pos2>)>,
+    /// cancel), and where the drag started and last was.
+    pub region_select: Option<(Option<[f64; 4]>, Option<egui::Pos2>, Option<egui::Pos2>)>,
     /// Camera aspect ratio from the running session (for drag hit-testing).
     pub cam_aspect: f64,
     pub permissions_missing: bool,

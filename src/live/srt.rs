@@ -276,7 +276,7 @@ impl Handshake {
 pub fn sid_bytes(s: &str) -> Vec<u8> {
     let mut b = s.as_bytes().to_vec();
     b.truncate(512);
-    while b.len() % 4 != 0 {
+    while !b.len().is_multiple_of(4) {
         b.push(0);
     }
     for w in b.chunks_mut(4) {

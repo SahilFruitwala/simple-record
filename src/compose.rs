@@ -672,6 +672,9 @@ impl Compositor {
             if l.style.is_plain() {
                 return placed.imageByCompositingOverImage(&under);
             }
+            // While a transition animates sizes, outlines are rebuilt every
+            // frame: at most 400 px across keeps that to a millisecond or two.
+            let k = if k < 1.0 { (400.0 / dw.max(dh)).min(1.0) } else { 1.0 };
             let d = self.decor(&l.style, dw.round().max(1.0) as usize, dh.round().max(1.0) as usize, k);
             let fade = |img: Retained<CIImage>| if alpha < 1.0 { faded(&img, alpha) } else { img };
             let mut img = under;
@@ -733,7 +736,7 @@ impl Compositor {
         let env = self.env();
         let cur = self.scene.resolve(&env);
         let progress = self.leaving.as_ref().map(|(_, start)| (t - start) / self.transition_secs.max(1e-3));
-        if progress.is_some_and(|p| p >= 1.0 || p < 0.0) {
+        if progress.is_some_and(|p| !(0.0..1.0).contains(&p)) {
             self.leaving = None;
         }
         let img = match (self.leaving.clone(), progress) {
@@ -751,6 +754,7 @@ impl Compositor {
                             a.imageByApplyingFilter_withInputParameters(&ns("CIDissolveTransition"), &params)
                         }
                     }
+                    // Below 1: decorations at reduced size (see `place`).
                     _ => self.draw(&layout::blend(&prev, &cur, p), screen.as_ref(), cam.as_ref(), &extras, 0.5),
                 }
             }

@@ -189,6 +189,9 @@ impl Pauses {
 
 type Pb = SendBox<CFRetained<CVPixelBuffer>>;
 
+/// Another display's frames: (display number, queue, current frame).
+type ExtraSource = (usize, VecDeque<(f64, Pb)>, Option<Pb>);
+
 /// Receives every emitted (composited) video frame, throttled to ~30 fps.
 pub type PreviewFn = std::sync::Arc<dyn Fn(CFRetained<CVPixelBuffer>) + Send + Sync>;
 
@@ -262,7 +265,7 @@ pub struct Sink {
     cam_q: VecDeque<(f64, Pb)>,
     cam_last: Option<Pb>,
     /// Other displays shown by the scene: (display number, queue, current).
-    extra: Vec<(usize, VecDeque<(f64, Pb)>, Option<Pb>)>,
+    extra: Vec<ExtraSource>,
     compositor: Option<Compositor>,
     /// Scales native-size screen frames to the output size.
     scaler: Option<crate::scale::FrameScaler>,

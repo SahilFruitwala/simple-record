@@ -234,10 +234,19 @@ fn select_region(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
     let shade = Color32::from_black_alpha(110);
     let resp = ui.interact(screen, ui.id().with("region"), Sense::drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-    let start = st.region_select.as_ref().and_then(|r| r.1);
+    // The pointer position isn't reported on the frame the drag ends: keep
+    // the last one.
     let current = resp.interact_pointer_pos().map(|p| p.clamp(screen.min, screen.max));
-    let sel = match (start, current) {
-        (Some(a), Some(b)) => Some(egui::Rect::from_two_pos(a, b)),
+    if let Some(r) = st.region_select.as_mut() {
+        if resp.drag_started() {
+            r.1 = current;
+        }
+        if current.is_some() {
+            r.2 = current;
+        }
+    }
+    let sel = match st.region_select.as_ref().map(|r| (r.1, r.2)) {
+        Some((Some(a), Some(b))) => Some(egui::Rect::from_two_pos(a, b)),
         _ => None,
     };
     match sel {
@@ -265,11 +274,6 @@ fn select_region(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
             painter.galley(at, galley, Color32::WHITE);
         }
     }
-    if resp.drag_started() {
-        if let Some(r) = st.region_select.as_mut() {
-            r.1 = current;
-        }
-    }
     if resp.drag_stopped() {
         if let Some(r) = sel.filter(|r| r.width() >= 8.0 && r.height() >= 8.0) {
             let (pw, ph) = st.display_points.get(st.settings.display.max(1) - 1).copied().unwrap_or((1920.0, 1080.0));
@@ -279,11 +283,11 @@ fn select_region(ui: &mut Ui, st: &mut State, preview: egui::Rect) {
             st.region_select = None;
             let _ = st.settings.save();
         } else if let Some(r) = st.region_select.as_mut() {
-            r.1 = None;
+            (r.1, r.2) = (None, None);
         }
     }
     if ui.input(|i| i.key_pressed(egui::Key::Escape))
-        && let Some((before, _)) = st.region_select.take()
+        && let Some((before, _, _)) = st.region_select.take()
     {
         st.settings.region = before;
     }
@@ -664,7 +668,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
             w::row(ui, "Area", |ui| {
                 if st.region_select.is_some() {
                     if ui.button("Cancel").clicked()
-                        && let Some((before, _)) = st.region_select.take()
+                        && let Some((before, _, _)) = st.region_select.take()
                     {
                         s.region = before;
                     }
@@ -674,7 +678,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
                         s.region = None;
                     }
                     if ui.add_enabled(idle, egui::Button::new(if s.region.is_some() { "Change…" } else { "Select…" })).on_hover_text("Record part of the display: drag over it in the preview").clicked() {
-                        st.region_select = Some((s.region, None));
+                        st.region_select = Some((s.region, None, None));
                         s.region = None;
                     }
                     let text = match s.region {

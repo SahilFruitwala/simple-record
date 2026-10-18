@@ -328,7 +328,7 @@ impl ScreenCapture {
                 Target::App(d, a) => SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
                     SCContentFilter::alloc(),
                     &d.display,
-                    &NSArray::from_retained_slice(&[a.app.clone()]),
+                    &NSArray::from_retained_slice(std::slice::from_ref(&a.app)),
                     &NSArray::new(),
                 ),
             };
