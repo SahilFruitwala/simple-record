@@ -139,8 +139,28 @@ impl MenuBar {
         }
     }
 
-    pub fn hotkey_unavailable(&self) {
-        self.hotkey.setTitle(&ns("Global hotkey ⇧⌘R unavailable"));
+    /// Show the recording and replay shortcuts on their items, and the
+    /// recording one (or that it is unavailable) in the info line.
+    pub fn set_shortcuts(&self, record: Option<crate::hotkey::Combo>, replay: Option<crate::hotkey::Combo>, record_ok: bool) {
+        use crate::hotkey::{CMD, CONTROL, OPTION, SHIFT};
+        for (it, combo) in [(&self.record, record), (&self.replay, replay)] {
+            let key = combo.and_then(|c| c.menu_key().map(|k| (k, c.mods)));
+            let (k, mods) = key.unwrap_or_default();
+            let mut mask = NSEventModifierFlags::empty();
+            for (bit, flag) in [(CMD, NSEventModifierFlags::Command), (SHIFT, NSEventModifierFlags::Shift), (OPTION, NSEventModifierFlags::Option), (CONTROL, NSEventModifierFlags::Control)] {
+                if mods & bit != 0 {
+                    mask |= flag;
+                }
+            }
+            it.setKeyEquivalent(&ns(&k));
+            it.setKeyEquivalentModifierMask(mask);
+        }
+        let title = match (record, record_ok) {
+            (Some(c), true) => format!("Global hotkey: {}", c.label()),
+            (Some(c), false) => format!("Global hotkey {} unavailable", c.label()),
+            (None, _) => "No recording hotkey (Settings → Shortcuts)".to_string(),
+        };
+        self.hotkey.setTitle(&ns(&title));
     }
 
     pub fn title(&self) -> Option<String> {

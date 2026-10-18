@@ -2,12 +2,14 @@
 //! The app turns them into the same `record` arguments the CLI takes, so
 //! both share one code path (`crate::prepare`).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::compose::{PipSpec, Place, Scene, Shape};
+use crate::hotkey::{Action, Combo};
 use crate::layout::{Background, Canvas, Layout, SceneSpec, Transition};
 use crate::writer::{AudioLayout, Codec};
 
@@ -81,6 +83,9 @@ pub struct Settings {
     pub keyframe_secs: f64,
     pub stream_cbr: bool,
     pub stream_audio_kbps: u32,
+    /// Global shortcuts; an action missing here has its default, None
+    /// means none.
+    pub hotkeys: BTreeMap<Action, Option<Combo>>,
     /// Window to record (ID from `rec-rs devices`); not persisted because
     /// window IDs change between launches.
     #[serde(skip)]
@@ -134,6 +139,7 @@ impl Default for Settings {
             keyframe_secs: 2.0,
             stream_cbr: true,
             stream_audio_kbps: 192,
+            hotkeys: BTreeMap::new(),
             window: None,
         }
     }
@@ -207,6 +213,23 @@ impl Settings {
         }
     }
 
+    /// The global shortcut for `a`, if any.
+    pub fn hotkey(&self, a: Action) -> Option<Combo> {
+        self.hotkeys.get(&a).copied().unwrap_or_else(|| a.default_combo())
+    }
+
+    /// Bind `combo` to `a`, taking it from any other action.
+    pub fn set_hotkey(&mut self, a: Action, combo: Option<Combo>) {
+        if let Some(c) = combo {
+            for other in Action::ALL {
+                if other != a && self.hotkey(other) == Some(c) {
+                    self.hotkeys.insert(other, None);
+                }
+            }
+        }
+        self.hotkeys.insert(a, combo);
+    }
+
     /// The scene these settings show.
     pub fn scene_spec(&self) -> SceneSpec {
         match self.custom_scene.and_then(|i| self.custom_scenes.get(i)) {
@@ -262,6 +285,7 @@ impl Settings {
             keyframe_secs: d.keyframe_secs,
             stream_cbr: d.stream_cbr,
             stream_audio_kbps: d.stream_audio_kbps,
+            hotkeys: d.hotkeys.clone(),
             ..self.clone()
         };
         (key, composed)
@@ -480,6 +504,21 @@ mod tests {
         // A missing index falls back to the template.
         let gone = Settings { custom_scene: Some(9), ..s };
         assert_eq!(gone.scene_spec(), SceneSpec::Template(gone.scene));
+    }
+
+    #[test]
+    fn hotkeys_default_and_move() {
+        let mut s = Settings::default();
+        assert_eq!(s.hotkey(Action::Record).map(|c| c.label()).as_deref(), Some("⇧⌘R"));
+        assert_eq!(s.hotkey(Action::Pause), None);
+        // Giving ⇧⌘R to pause takes it from recording.
+        let r = s.hotkey(Action::Record);
+        s.set_hotkey(Action::Pause, r);
+        assert_eq!(s.hotkey(Action::Pause), r);
+        assert_eq!(s.hotkey(Action::Record), None);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.hotkeys, s.hotkeys);
+        assert_eq!(s.capture_key(), Settings::default().capture_key());
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! The app: a main window (live preview, sources, record/pause, timer,
 //! level meters), a settings window and a menu bar item, in egui on wgpu
-//! with a transparent titlebar and Inter (the paper-rs look). ⇧⌘R toggles
-//! recording from anywhere; ⇧⌘S saves the replay buffer while it is on.
+//! with a transparent titlebar and Inter (the paper-rs look). Global
+//! shortcuts (⇧⌘R record and ⇧⌘S save replay by default) are set in
+//! Settings; ⇧⌘S is only held while the replay buffer is on.
 //!
 //! One live encode (`crate::live`) is attached to every capture session:
 //! it feeds the replay buffer and the streams, so they keep running across
@@ -44,12 +45,24 @@ pub enum Cmd {
     OpenFolder,
     SaveReplay,
     ToggleStream,
+    NextScene,
+    PrevScene,
     Quit,
 }
 
-/// Hotkey registration IDs.
-const HOTKEY_RECORD: u32 = 1;
-const HOTKEY_REPLAY: u32 = 2;
+impl Cmd {
+    fn for_action(a: crate::hotkey::Action) -> Cmd {
+        use crate::hotkey::Action;
+        match a {
+            Action::Record => Cmd::ToggleRecording,
+            Action::Pause => Cmd::TogglePause,
+            Action::SaveReplay => Cmd::SaveReplay,
+            Action::Stream => Cmd::ToggleStream,
+            Action::NextScene => Cmd::NextScene,
+            Action::PrevScene => Cmd::PrevScene,
+        }
+    }
+}
 
 static QUEUE: Mutex<Vec<Cmd>> = Mutex::new(Vec::new());
 static PROXY: OnceLock<Mutex<EventLoopProxy<()>>> = OnceLock::new();
@@ -150,7 +163,11 @@ pub struct State {
     pub windows: Vec<(u32, String)>,
     pub cameras: Vec<Device>,
     pub mics: Vec<Device>,
-    pub hotkey_ok: bool,
+    /// Shortcuts that could not be registered (another app owns them).
+    pub hotkey_failed: Vec<crate::hotkey::Action>,
+    /// The shortcut being recorded in Settings (global shortcuts are off
+    /// meanwhile, so the keys reach the window).
+    pub capturing_shortcut: Option<crate::hotkey::Action>,
     /// The preview frame as a native (IOSurface-backed) egui texture.
     pub preview_tex: Option<egui::TextureId>,
     /// Its size in pixels.
@@ -178,8 +195,6 @@ pub struct State {
     pub live: Arc<crate::live::Live>,
     /// Replay buffer (seconds held, bytes) when on.
     pub replay_stats: Option<(f64, usize)>,
-    /// ⇧⌘S is registered (it is only held while the replay buffer is on).
-    pub replay_hotkey: Option<bool>,
     replay_saves: Vec<std::thread::JoinHandle<Result<PathBuf>>>,
     pub stream_id: Option<u64>,
     pub stream_status: Option<crate::live::OutputStatus>,
@@ -308,6 +323,8 @@ struct App {
     main_visible: bool,
     st: State,
     menubar: Option<menubar::MenuBar>,
+    /// Global shortcuts registered now.
+    hotkeys: Vec<(crate::hotkey::Action, crate::hotkey::Combo)>,
     _main_menu: Option<objc2::rc::Retained<menubar::Target>>,
     scaler: preview::Scaler,
     /// Textures of the last preview frames (egui may still draw them).
@@ -362,7 +379,8 @@ impl App {
             windows: vec![],
             cameras: vec![],
             mics: vec![],
-            hotkey_ok: true,
+            hotkey_failed: vec![],
+            capturing_shortcut: None,
             preview_tex: None,
             preview_px: [0, 0],
             preview_aspect: 16.0 / 9.0,
@@ -378,7 +396,6 @@ impl App {
             cam_aspect: 16.0 / 9.0,
             live: crate::live::Live::new(),
             replay_stats: None,
-            replay_hotkey: None,
             replay_saves: vec![],
             stream_id: None,
             stream_status: None,
@@ -401,6 +418,7 @@ impl App {
             main_visible: true,
             st,
             menubar: None,
+            hotkeys: vec![],
             _main_menu: None,
             scaler: preview::Scaler::new(),
             preview_textures: Default::default(),
@@ -602,8 +620,7 @@ impl App {
         self.st.settings.replay_enabled || self.st.stream_id.is_some()
     }
 
-    /// Apply the replay and live-encode settings, and hold ⇧⌘S while the
-    /// replay buffer is on (it is "Save As" in most apps otherwise).
+    /// Apply the replay and live-encode settings.
     fn sync_live(&mut self) {
         let cfg = self.st.settings.live_config();
         if self.st.live.config() != cfg {
@@ -615,23 +632,65 @@ impl App {
             self.st.live.set_replay(want);
         }
         self.st.replay_stats = self.st.live.replay_stats();
-        match (want.is_some(), self.st.replay_hotkey.is_some()) {
-            (true, false) => {
-                let ok = crate::hotkey::register(HOTKEY_REPLAY, crate::hotkey::KEY_S, crate::hotkey::CMD | crate::hotkey::SHIFT, || {
-                    push(Cmd::SaveReplay)
-                });
-                if let Err(code) = ok {
-                    eprintln!("rec: could not register ⇧⌘S (error {code}); use the Save Replay button");
-                }
-                self.st.replay_hotkey = Some(ok.is_ok());
-            }
-            (false, true) => {
-                crate::hotkey::unregister(HOTKEY_REPLAY);
-                self.st.replay_hotkey = None;
-            }
-            _ => {}
-        }
         self.st.stream_status = self.st.stream_id.and_then(|id| self.st.live.statuses().into_iter().find(|(i, _)| *i == id).map(|(_, s)| s));
+    }
+
+    /// Register the global shortcuts the settings ask for. Save Replay is
+    /// only held while the replay buffer is on (⇧⌘S is "Save As" in most
+    /// apps), and none while a shortcut is being recorded.
+    fn sync_hotkeys(&mut self) {
+        use crate::hotkey::Action;
+        let s = &self.st.settings;
+        let want: Vec<(Action, crate::hotkey::Combo)> = Action::ALL
+            .into_iter()
+            .filter(|a| self.st.capturing_shortcut.is_none() && (*a != Action::SaveReplay || s.replay_enabled))
+            .filter_map(|a| s.hotkey(a).map(|c| (a, c)))
+            .collect();
+        if want == self.hotkeys {
+            return;
+        }
+        for (a, _) in self.hotkeys.drain(..) {
+            crate::hotkey::unregister(a.id());
+        }
+        self.st.hotkey_failed.clear();
+        for (a, c) in &want {
+            let cmd = Cmd::for_action(*a);
+            if let Err(code) = crate::hotkey::register(a.id(), c.key, c.mods, move || push(cmd)) {
+                eprintln!("rec: could not register {} for {} (error {code}); another app may own it", c.label(), a.label());
+                self.st.hotkey_failed.push(*a);
+            }
+        }
+        self.hotkeys = want;
+        if let Some(m) = &self.menubar {
+            m.set_shortcuts(s.hotkey(Action::Record), s.hotkey(Action::SaveReplay), !self.st.hotkey_failed.contains(&Action::Record));
+        }
+    }
+
+    /// Show the next (`step` 1) or previous (-1) scene of the gallery that
+    /// the running session can show.
+    fn cycle_scene(&mut self, step: i32) {
+        let s = &self.st.settings;
+        let mut all: Vec<(Scene, Option<usize>)> = Scene::ALL.iter().map(|x| (*x, None)).collect();
+        all.extend((0..s.custom_scenes.len()).map(|i| (Scene::Screen, Some(i))));
+        let n = all.len() as i32;
+        let cur = all.iter().position(|x| *x == s.scene_id()).unwrap_or(0) as i32;
+        for k in 1..n {
+            let (scene, custom) = all[(cur + step * k).rem_euclid(n) as usize];
+            let mut next = s.clone();
+            next.scene = scene;
+            next.custom_scene = custom;
+            if self.st.can_switch_live(&next.scene_spec()) {
+                let name = match custom {
+                    Some(i) => next.custom_scenes[i].name.clone(),
+                    None => scene.label().to_string(),
+                };
+                self.st.settings = next;
+                let _ = self.st.settings.save();
+                self.st.apply_scene();
+                self.st.notice = Some((format!("Scene: {name}"), Instant::now()));
+                return;
+            }
+        }
     }
 
     fn save_replay(&mut self) {
@@ -817,6 +876,8 @@ impl App {
             Cmd::OpenFolder => macos::open_folder(&self.st.settings.output_dir),
             Cmd::SaveReplay => self.save_replay(),
             Cmd::ToggleStream => self.toggle_stream(),
+            Cmd::NextScene => self.cycle_scene(1),
+            Cmd::PrevScene => self.cycle_scene(-1),
             Cmd::Quit => self.quit(el),
         }
     }
@@ -856,6 +917,7 @@ impl App {
             push(Cmd::SaveReplay);
         }
         self.sync_live();
+        self.sync_hotkeys();
         let cmds: Vec<Cmd> = std::mem::take(&mut *QUEUE.lock().unwrap());
         let ui_cmds = std::mem::take(&mut self.st.cmds);
         for c in cmds.into_iter().chain(ui_cmds) {
@@ -1033,16 +1095,8 @@ impl ApplicationHandler for App {
             return;
         }
         let mtm = objc2::MainThreadMarker::new().expect("main thread");
-        let mb = menubar::MenuBar::new(mtm);
-        let ok = crate::hotkey::register(HOTKEY_RECORD, crate::hotkey::KEY_R, crate::hotkey::CMD | crate::hotkey::SHIFT, || {
-            push(Cmd::ToggleRecording)
-        });
-        if let Err(code) = ok {
-            eprintln!("rec: could not register ⇧⌘R (error {code}); use the menu or the window instead");
-            mb.hotkey_unavailable();
-            self.st.hotkey_ok = false;
-        }
-        self.menubar = Some(mb);
+        self.menubar = Some(menubar::MenuBar::new(mtm));
+        self.sync_hotkeys();
         self._main_menu = Some(menubar::install_main_menu(mtm));
         macos::set_dock_icon();
         if std::env::var_os("REC_GUI_HIDDEN").is_some() {
@@ -1053,7 +1107,10 @@ impl ApplicationHandler for App {
         if self.start_recording {
             push(Cmd::ToggleRecording);
         }
-        eprintln!("rec: app running (⇧⌘R toggles recording)");
+        match self.st.settings.hotkey(crate::hotkey::Action::Record) {
+            Some(c) => eprintln!("rec: app running ({} toggles recording)", c.label()),
+            None => eprintln!("rec: app running"),
+        }
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, _: ()) {

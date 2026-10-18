@@ -8,6 +8,7 @@ use super::theme::{self, BODY, SECONDARY, TOOLBAR_H, TRAFFIC_LIGHTS_W};
 use super::widgets::{self as w, Icon};
 use super::{Cmd, Meter, State};
 use crate::compose::{self, Corner, Place, Shape};
+use crate::hotkey::{Action, Combo};
 use crate::layout::{Background, Canvas, Transition};
 use crate::settings::Settings;
 use crate::settings::{FPS, RESOLUTIONS};
@@ -97,8 +98,10 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
                     if ui.button("Settings…").on_hover_text("Output, codec, resolution, audio (⌘,)").clicked() {
                         st.cmds.push(Cmd::ShowSettings);
                     }
-                    if !st.hotkey_ok {
-                        ui.label(RichText::new("⇧⌘R unavailable").color(p.secondary));
+                    if st.hotkey_failed.contains(&Action::Record)
+                        && let Some(c) = st.settings.hotkey(Action::Record)
+                    {
+                        ui.label(RichText::new(format!("{} unavailable", c.label())).color(p.secondary));
                     }
                 });
             });
@@ -403,7 +406,8 @@ fn controls(ui: &mut Ui, st: &mut State) {
         } else {
             painter.circle_filled(c, 16.0, RED);
         }
-        let tip = if recording { "Stop recording (⇧⌘R)" } else { "Start recording (⇧⌘R)" };
+        let key = st.settings.hotkey(Action::Record).map(|c| format!(" ({})", c.label())).unwrap_or_default();
+        let tip = format!("{} recording{key}", if recording { "Stop" } else { "Start" });
         if resp.on_hover_text(tip).clicked() && !st.finishing {
             st.cmds.push(Cmd::ToggleRecording);
         }
@@ -639,9 +643,10 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         if let Some((held, bytes)) = st.replay_stats {
             w::divider(ui);
             ui.horizontal(|ui| {
-                let tip = match st.replay_hotkey {
-                    Some(true) => "Save the buffer to an MP4 without stopping (⇧⌘S)",
-                    _ => "Save the buffer to an MP4 without stopping (⇧⌘S unavailable)",
+                let tip = match st.settings.hotkey(Action::SaveReplay) {
+                    Some(c) if st.hotkey_failed.contains(&Action::SaveReplay) => format!("Save the buffer to an MP4 without stopping ({} unavailable)", c.label()),
+                    Some(c) => format!("Save the buffer to an MP4 without stopping ({})", c.label()),
+                    None => "Save the buffer to an MP4 without stopping".to_string(),
                 };
                 if ui.add_enabled(held > 0.0, egui::Button::new("Save Replay")).on_hover_text(tip).clicked() {
                     st.cmds.push(Cmd::SaveReplay);
@@ -749,6 +754,62 @@ pub fn settings_window(ui: &mut Ui, st: &mut State) {
                 }
             });
         });
+}
+
+/// Global shortcuts: click one, then press the keys (Esc cancels, ⌫ clears).
+fn shortcuts(ui: &mut Ui, st: &mut State, s: &mut Settings) {
+    let p = theme::pal(ui);
+    if let Some(a) = st.capturing_shortcut {
+        let events = ui.input(|i| i.events.clone());
+        for e in events {
+            let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = e else { continue };
+            let k = physical_key.unwrap_or(key);
+            let bare = !(modifiers.ctrl || modifiers.alt || modifiers.mac_cmd || modifiers.command || modifiers.shift);
+            if k == egui::Key::Escape && bare {
+                st.capturing_shortcut = None;
+                break;
+            }
+            if matches!(k, egui::Key::Backspace | egui::Key::Delete) && bare {
+                s.set_hotkey(a, None);
+                st.capturing_shortcut = None;
+                break;
+            }
+            if let Some(c) = Combo::from_key(k.name(), modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.mac_cmd || modifiers.command) {
+                s.set_hotkey(a, Some(c));
+                st.capturing_shortcut = None;
+                break;
+            }
+        }
+    }
+    egui::Grid::new("shortcuts").num_columns(2).spacing(vec2(12.0, 6.0)).min_col_width(110.0).show(ui, |ui| {
+        for a in Action::ALL {
+            ui.label(a.label());
+            ui.horizontal(|ui| {
+                let capturing = st.capturing_shortcut == Some(a);
+                let text = if capturing {
+                    "Press keys…".to_string()
+                } else {
+                    s.hotkey(a).map(|c| c.label()).unwrap_or_else(|| "None".into())
+                };
+                let b = egui::Button::selectable(capturing, RichText::new(text).monospace()).min_size(vec2(110.0, 22.0));
+                if ui.add(b).on_hover_text("Click, then press the shortcut (Esc cancels, ⌫ clears)").clicked() {
+                    st.capturing_shortcut = if capturing { None } else { Some(a) };
+                }
+                if s.hotkey(a).is_some() && ui.small_button("✕").on_hover_text("No shortcut").clicked() {
+                    s.set_hotkey(a, None);
+                }
+                if st.hotkey_failed.contains(&a) {
+                    ui.label(RichText::new("in use by another app").size(SECONDARY).color(RED));
+                } else if a == Action::SaveReplay && s.hotkey(a).is_some() {
+                    ui.label(RichText::new("while the replay buffer is on").size(SECONDARY).color(p.secondary));
+                }
+            });
+            ui.end_row();
+        }
+    });
+    if s.hotkeys.values().any(|_| true) && ui.small_button("Restore default shortcuts").clicked() {
+        s.hotkeys.clear();
+    }
 }
 
 fn settings_form(ui: &mut Ui, st: &mut State) {
@@ -933,6 +994,9 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
     if streaming {
         ui.label(RichText::new("Stop the stream to change the live encode.").size(SECONDARY).color(theme::pal(ui).secondary));
     }
+
+    section(ui, "SHORTCUTS");
+    shortcuts(ui, st, &mut s);
 
     section(ui, "CAMERA");
     grid(ui, "cam", &mut |ui| {
