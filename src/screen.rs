@@ -15,6 +15,7 @@ use objc2_foundation::{NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObj
 use objc2_screen_capture_kit::*;
 use dispatch2::DispatchQueue;
 
+use crate::appaudio::{AppAudio, Pick};
 use crate::record::Shared;
 use crate::util::*;
 use crate::writer::AudioKind;
@@ -207,6 +208,8 @@ pub struct ScreenConfig {
 pub struct Ivars {
     shared: Arc<Shared>,
     extra: Option<crate::layout::Source>,
+    /// Only the sound is wanted (a per-app audio stream).
+    audio_only: bool,
 }
 
 define_class!(
@@ -234,8 +237,8 @@ define_class!(
 );
 
 impl ScreenOutput {
-    fn create(shared: Arc<Shared>, extra: Option<crate::layout::Source>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(Ivars { shared, extra });
+    fn create(shared: Arc<Shared>, extra: Option<crate::layout::Source>, audio_only: bool) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(Ivars { shared, extra, audio_only });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -247,7 +250,7 @@ impl ScreenOutput {
         }
         let shared = &self.ivars().shared;
         if kind == SCStreamOutputType::Screen {
-            if !frame_complete(sb) {
+            if self.ivars().audio_only || !frame_complete(sb) {
                 return;
             }
             let Some(pb) = (unsafe { sb.image_buffer() }) else { return };
@@ -363,7 +366,7 @@ impl ScreenCapture {
                 }
             }
 
-            let output = ScreenOutput::create(shared, cfg.extra.clone());
+            let output = ScreenOutput::create(shared, cfg.extra.clone(), false);
             let delegate = ProtocolObject::from_ref(&*output);
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, Some(delegate));
             let out_proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);
@@ -386,6 +389,55 @@ impl ScreenCapture {
             wait_err(|b| stream.startCaptureWithCompletionHandler(Some(b)))
                 .context("starting screen capture")?;
             Ok(ScreenCapture { stream, _output: output, _queues: vec![vq, aq, mq] })
+        }
+    }
+
+    /// System audio of the apps `sel` picks, as a stream of its own (the
+    /// picture's filter stays as it is). `display`: the one captured, else
+    /// the main one. None when `sel` picks no running app (silence).
+    pub fn start_audio(display: Option<&SCDisplay>, sel: &AppAudio, shared: Arc<Shared>) -> Result<Option<Self>> {
+        unsafe {
+            let content = shareable_content()?;
+            let display = match display {
+                Some(d) => Retained::retain(d as *const SCDisplay as *mut SCDisplay).unwrap(),
+                None => content.displays().firstObject().ok_or_else(|| anyhow!("no display"))?,
+            };
+            let apps: Vec<Retained<SCRunningApplication>> = content.applications().iter().collect();
+            let ids: Vec<String> = apps.iter().map(|a| a.bundleIdentifier().to_string()).collect();
+            let me = std::process::id() as i32;
+            let own = apps.iter().position(|a| a.processID() == me);
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let chosen = |v: &[usize]| NSArray::from_retained_slice(&v.iter().map(|&i| apps[i].clone()).collect::<Vec<_>>());
+            let filter = match sel.pick(&ids, own) {
+                Pick::Include(v) if v.is_empty() => return Ok(None),
+                Pick::Include(v) => SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(SCContentFilter::alloc(), &display, &chosen(&v), &NSArray::new()),
+                Pick::Exclude(v) => SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(SCContentFilter::alloc(), &display, &chosen(&v), &NSArray::new()),
+                Pick::Everything => SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &NSArray::new()),
+            };
+            // The smallest picture, once a second: only the sound is used.
+            let conf = SCStreamConfiguration::new();
+            conf.setWidth(2);
+            conf.setHeight(2);
+            conf.setMinimumFrameInterval(CMTime::new(1, 1));
+            conf.setQueueDepth(3);
+            conf.setCapturesAudio(true);
+            conf.setSampleRate(48000);
+            conf.setChannelCount(2);
+            conf.setExcludesCurrentProcessAudio(true);
+            let output = ScreenOutput::create(shared, None, true);
+            let delegate = ProtocolObject::from_ref(&*output);
+            let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, Some(delegate));
+            let out_proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);
+            let vq = DispatchQueue::new("rec.appaudio.video", None);
+            let aq = DispatchQueue::new("rec.appaudio", None);
+            stream
+                .addStreamOutput_type_sampleHandlerQueue_error(out_proto, SCStreamOutputType::Screen, Some(&vq))
+                .map_err(|e| anyhow!("add screen output: {}", e.localizedDescription()))?;
+            stream
+                .addStreamOutput_type_sampleHandlerQueue_error(out_proto, SCStreamOutputType::Audio, Some(&aq))
+                .map_err(|e| anyhow!("add audio output: {}", e.localizedDescription()))?;
+            wait_err(|b| stream.startCaptureWithCompletionHandler(Some(b))).context("starting app audio capture")?;
+            Ok(Some(ScreenCapture { stream, _output: output, _queues: vec![vq, aq] }))
         }
     }
 

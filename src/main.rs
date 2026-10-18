@@ -1,4 +1,5 @@
 mod app;
+mod appaudio;
 mod browser;
 mod camera;
 mod compose;
@@ -303,6 +304,13 @@ pub struct RecordArgs {
     /// Microphone gain in the mix track (dB).
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     mic_gain: f32,
+    /// System audio of these apps only (comma-separated bundle IDs, e.g.
+    /// com.spotify.client,com.google.Chrome).
+    #[arg(long, value_name = "IDS", conflicts_with = "audio_except")]
+    audio_apps: Option<String>,
+    /// System audio of every app but these (comma-separated bundle IDs).
+    #[arg(long, value_name = "IDS")]
+    audio_except: Option<String>,
     /// Microphone: cut rumble below 80 Hz.
     #[arg(long)]
     low_cut: bool,
@@ -567,6 +575,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         },
         transition: a.transition,
         transition_secs: a.transition_ms.min(3000) as f64 / 1000.0,
+        app_audio: appaudio::AppAudio::from_args(a.audio_apps.as_deref(), a.audio_except.as_deref()),
         mic_filters: filters::MicFilters {
             low_cut: a.low_cut,
             denoise: a.denoise,
@@ -956,6 +965,13 @@ mod tests {
         let a = parse_record_args(&["--gate", "--low-cut", "--compressor"]).unwrap();
         assert_eq!((a.gate, a.compressor, a.low_cut), (Some(-45.0), Some(-20.0), true));
         assert_eq!(parse_record_args(&["--gate", "-50"]).unwrap().gate, Some(-50.0));
+    }
+
+    #[test]
+    fn app_audio_options() {
+        let a = parse_record_args(&["--audio-apps", "com.spotify.client,com.google.Chrome"]).unwrap();
+        assert_eq!(appaudio::AppAudio::from_args(a.audio_apps.as_deref(), a.audio_except.as_deref()).apps().len(), 2);
+        assert!(parse_record_args(&["--audio-apps", "a", "--audio-except", "b"]).is_err());
     }
 
     #[test]

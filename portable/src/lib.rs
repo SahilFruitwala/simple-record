@@ -1,6 +1,8 @@
 //! The app's platform-independent modules, as they are in `src/`.
 #![allow(dead_code)]
 
+#[path = "../../src/appaudio.rs"]
+pub mod appaudio;
 #[path = "../../src/effects.rs"]
 pub mod effects;
 #[path = "../../src/filters.rs"]

@@ -1,5 +1,6 @@
 //! egui layout of the main window and the settings window.
 
+use crate::appaudio::AppAudio;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
@@ -480,6 +481,49 @@ fn overlay_controls(ui: &mut Ui, s: &mut Settings) {
     ui.add_space(2.0);
 }
 
+/// Which apps' sound system audio records: all, only some, or all but some.
+fn app_audio(ui: &mut Ui, st: &State, sel: &mut AppAudio, idle: bool) {
+    let mut mode = match sel {
+        AppAudio::All => 0,
+        AppAudio::Only(_) => 1,
+        AppAudio::Except(_) => 2,
+    };
+    let modes = [(0, "All apps".to_string()), (1, "Only these apps".to_string()), (2, "All apps except".to_string())];
+    if combo(ui, "app-audio", &mut mode, &modes, idle) {
+        let apps = sel.apps().to_vec();
+        *sel = match mode {
+            1 => AppAudio::Only(apps),
+            2 => AppAudio::Except(apps),
+            _ => AppAudio::All,
+        };
+    }
+    let Some(list) = sel.apps_mut() else { return };
+    // Running apps with windows, and any chosen app that isn't running.
+    let mut apps: Vec<(String, String)> = st.apps.clone();
+    for id in list.iter() {
+        if !apps.iter().any(|(b, _)| b == id) {
+            apps.push((id.clone(), format!("{id} (not running)")));
+        }
+    }
+    egui::ScrollArea::vertical().id_salt("app-audio-list").max_height(140.0).show(ui, |ui| {
+        for (id, name) in &apps {
+            let mut on = list.contains(id);
+            if ui.add_enabled(idle, egui::Checkbox::new(&mut on, name.as_str())).on_hover_text(id.as_str()).changed() {
+                if on {
+                    list.push(id.clone());
+                } else {
+                    list.retain(|x| x != id);
+                }
+            }
+        }
+    });
+    if matches!(sel, AppAudio::Only(v) if v.is_empty()) {
+        w::hint(ui, "Pick the apps to hear; with none, system audio is silent.");
+    } else {
+        w::hint(ui, "Apps started after recording begins aren't picked up until it restarts.");
+    }
+}
+
 fn controls(ui: &mut Ui, st: &mut State) {
     let p = theme::pal(ui);
     let recording = st.recording.is_some();
@@ -740,6 +784,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
     w::header(ui, Icon::Audio, "Audio");
     w::card(ui, |ui| {
         w::row(ui, "System audio", |ui| w::switch(ui, &mut s.system_audio, idle));
+        if s.system_audio {
+            app_audio(ui, st, &mut s.app_audio, idle);
+        }
         w::divider(ui);
         w::row(ui, "Microphone", |ui| w::switch(ui, &mut s.mic_enabled, idle));
         let mics = mic_options(st, &s);

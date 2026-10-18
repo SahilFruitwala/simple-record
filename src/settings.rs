@@ -90,6 +90,8 @@ pub struct Settings {
     pub mic_gain_db: f32,
     /// Noise suppression, gate, compressor, low-cut (applied live).
     pub mic_filters: crate::filters::MicFilters,
+    /// Which apps' sound system audio records.
+    pub app_audio: crate::appaudio::AppAudio,
     /// The camera's color correction and chroma key (applied live).
     pub camera_effects: crate::effects::Effects,
     pub pip_size: f64,
@@ -166,6 +168,7 @@ impl Default for Settings {
             system_gain_db: 0.0,
             mic_gain_db: 0.0,
             mic_filters: Default::default(),
+            app_audio: Default::default(),
             camera_effects: Default::default(),
             pip_size: PipSpec::default().size,
             pip_place: PipSpec::default().place,
@@ -470,6 +473,12 @@ impl Settings {
         if !self.system_audio {
             a.push("--no-system-audio".into());
         }
+        match &self.app_audio {
+            a_ if a_.is_all() => {}
+            crate::appaudio::AppAudio::Only(v) => a.extend(["--audio-apps".into(), v.join(",")]),
+            crate::appaudio::AppAudio::Except(v) => a.extend(["--audio-except".into(), v.join(",")]),
+            crate::appaudio::AppAudio::All => {}
+        }
         a.extend(["--audio-tracks".into(), value(self.audio_tracks)]);
         a.extend(["--system-gain".into(), format!("{}", self.system_gain_db)]);
         a.extend(["--mic-gain".into(), format!("{}", self.mic_gain_db)]);
@@ -561,6 +570,16 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--region"));
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         crate::parse_record_args(&refs).unwrap();
+        // Some apps' sound only, or all but some.
+        let only = Settings { app_audio: crate::appaudio::AppAudio::Only(vec!["com.spotify.client".into(), "com.google.Chrome".into()]), ..Default::default() };
+        let args = only.record_args(None);
+        assert!(args.windows(2).any(|w| w == ["--audio-apps", "com.spotify.client,com.google.Chrome"]));
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        crate::parse_record_args(&refs).unwrap();
+        let except = Settings { app_audio: crate::appaudio::AppAudio::Except(vec!["com.apple.Music".into()]), ..Default::default() };
+        assert!(except.record_args(None).windows(2).any(|w| w == ["--audio-except", "com.apple.Music"]));
+        let none = Settings { app_audio: crate::appaudio::AppAudio::Except(vec![]), ..Default::default() };
+        assert!(!none.record_args(None).iter().any(|a| a.starts_with("--audio-")));
     }
 
     #[test]

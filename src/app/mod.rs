@@ -647,6 +647,7 @@ impl App {
         o.live = Some(self.st.live.clone());
         o.scene = self.st.settings.scene_spec();
         o.mic_filters = self.st.settings.mic_filters;
+        o.pip.effects = self.st.settings.camera_effects;
         // Fallbacks never block: say so once.
         let warning = [warning, o.mic_warning.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let warning = Some(warning).filter(|w| !w.is_empty());

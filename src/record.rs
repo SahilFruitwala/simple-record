@@ -120,6 +120,8 @@ pub struct Options {
     pub transition_secs: f64,
     /// Microphone filters.
     pub mic_filters: crate::filters::MicFilters,
+    /// Which apps' sound system audio records.
+    pub app_audio: crate::appaudio::AppAudio,
     /// System audio offset in ms; None = the output device's latency.
     pub system_offset_ms: Option<f64>,
     /// Microphone offset in ms.
@@ -170,6 +172,8 @@ pub struct Session {
     /// session has.
     extra_screens: Vec<ScreenCapture>,
     extra_cams: Vec<Camera>,
+    /// System audio of some apps only (a stream of its own).
+    app_audio: Option<ScreenCapture>,
     media: Vec<crate::media::MediaSource>,
     /// Stops this session's web pages (they run on the main thread).
     browser_stop: Arc<AtomicBool>,
@@ -314,6 +318,7 @@ impl Session {
             screen: None,
             extra_screens: vec![],
             extra_cams: vec![],
+            app_audio: None,
             media: vec![],
             browser_stop: Arc::new(AtomicBool::new(false)),
             sources: vec![],
@@ -429,6 +434,19 @@ impl Session {
             }
             (None, Some(target)) => {
                 self.description = target.describe();
+                // Some apps' sound only: from a stream of its own, so the
+                // picture's filter stays as it is.
+                let per_app = o.system_audio && !o.app_audio.is_all();
+                if per_app {
+                    let display = match &target {
+                        screen::Target::Display(d, _) | screen::Target::App(d, _) => Some(d.display.clone()),
+                        screen::Target::Window(_) => None,
+                    };
+                    self.app_audio = ScreenCapture::start_audio(display.as_deref(), &o.app_audio, self.shared.clone())?;
+                    if self.app_audio.is_none() {
+                        eprintln!("rec: warning: none of the apps chosen for system audio is running; system audio is silent");
+                    }
+                }
                 let (cw, ch) = capture_size(o);
                 let cfg = ScreenConfig {
                     target,
@@ -438,7 +456,7 @@ impl Session {
                     pixel_format,
                     cursor: o.cursor,
                     clicks: o.clicks,
-                    system_audio: o.system_audio,
+                    system_audio: o.system_audio && !per_app,
                     mic: sck_mic,
                     extra: None,
                     hdr: o.hdr,
@@ -517,6 +535,9 @@ impl Session {
         let err = self.screen.take().and_then(|s| s.stop().err());
         for s in self.extra_screens.drain(..) {
             let _ = s.stop();
+        }
+        if let Some(a) = self.app_audio.take() {
+            let _ = a.stop();
         }
         for c in self.extra_cams.drain(..) {
             c.stop();
