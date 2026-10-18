@@ -2,10 +2,8 @@
 
 ## Pull requests
 
-This repository is a fork. All pull requests must target the fork itself:
-`SahilFruitwala/rec-rs`, base branch `main`.
+This is a standalone repository (not a fork): `SahilFruitwala/simple-record`, base branch `main`.
 
-- Never open a pull request against the upstream (parent) repository.
-- When creating a PR with any tool, set the base owner/repo explicitly to
-  `SahilFruitwala/rec-rs`; do not rely on defaults, which can point at the parent.
-- Do not add an `upstream` remote for pushing; `origin` is the fork.
+- Open pull requests only against `SahilFruitwala/simple-record`.
+- Never open a pull request against `michaelshimeles/rec-rs` (the project this code originally came from).
+- Do not add a remote for `michaelshimeles/rec-rs`; `origin` is `SahilFruitwala/simple-record`.
