@@ -258,6 +258,8 @@ pub enum Content {
     /// A video file (its picture; played from the start when capture
     /// starts, then looped or held on its last frame).
     Media { path: String, looped: bool },
+    /// A web page (or a local HTML file), laid out at the layer's size.
+    Browser { url: String },
 }
 
 /// A source with a capture of its own, besides the main screen and camera.
@@ -269,6 +271,8 @@ pub enum Source {
     Camera(String),
     /// A video file, by path.
     Media(String),
+    /// A web page, by address.
+    Browser(String),
 }
 
 impl Content {
@@ -284,6 +288,7 @@ impl Content {
             Content::Text(t) => format!("Text “{}”", t.text),
             Content::Color(_) => "Color".into(),
             Content::Webcam { name, .. } => format!("Camera {name}"),
+            Content::Browser { url } => format!("Web {}", url.split("://").last().unwrap_or(url)),
             Content::Media { path, .. } => {
                 let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned());
                 format!("Video {}", name.unwrap_or_default())
@@ -297,6 +302,7 @@ impl Content {
             Content::Display(n) => Some(Source::Display(*n)),
             Content::Webcam { id, .. } => Some(Source::Camera(id.clone())),
             Content::Media { path, .. } => Some(Source::Media(path.clone())),
+            Content::Browser { url } => Some(Source::Browser(url.clone())),
             _ => None,
         }
     }
@@ -910,6 +916,26 @@ mod tests {
         assert!(matches!(f.layers[0].content, Content::Color(_)));
         assert!(matches!(f.layers[1].content, Content::Text(_)));
         assert!(f.layers[1].rect[2] < f.layers[0].rect[2]);
+    }
+
+    /// The scene file format (as `scripts/sources-check.sh` writes it).
+    #[test]
+    fn scene_file_format() {
+        let json = r#"{
+          "name": "Sources",
+          "layers": [
+            {"content": "screen"},
+            {"content": {"media": {"path": "/t/red.mp4", "looped": true}}, "rect": [0, 0, 0.5, 1], "fit": "cover"},
+            {"content": {"browser": {"url": "/t/page.html"}}, "rect": [0.5, 0, 0.5, 1], "fit": "cover"},
+            {"content": {"media": {"path": "/t/green.mp4", "looped": true}}, "rect": [0.6, 0.3, 0.3, 0.4], "fit": "cover",
+             "effects": {"chroma_key": {"color": [0, 255, 0]}}}
+          ]
+        }"#;
+        let l: Layout = serde_json::from_str(json).unwrap();
+        assert_eq!(l.layers.len(), 4);
+        assert_eq!(l.layers[2].content, Content::Browser { url: "/t/page.html".into() });
+        assert!(l.layers[3].effects.chroma_key.is_some() && l.layers[1].effects.is_none());
+        assert_eq!(SceneSpec::Custom(l).sources(), vec![Source::Media("/t/green.mp4".into()), Source::Media("/t/red.mp4".into()), Source::Browser("/t/page.html".into())]);
     }
 
     #[test]

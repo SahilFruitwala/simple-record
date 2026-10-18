@@ -100,6 +100,15 @@ fn thumb(ui: &Ui, rect: Rect, f: &Frame, fw: f64, screen_aspect: f64) {
                 let body = Rect::from_center_size(c + vec2(0.0, u * 0.33), vec2(u * 0.6, u * 0.4));
                 painter.rect_filled(body.intersect(er), CornerRadius::same((u * 0.2).min(255.0) as u8), Color32::from_rgb(0x3d, 0x8b, 0xff).gamma_multiply(alpha));
             }
+            Content::Browser { .. } => {
+                painter.rect_filled(er, cr, Color32::from_rgb(0xf5, 0xf6, 0xf8).gamma_multiply(alpha));
+                // A globe.
+                let u = er.width().min(er.height()) * 0.28;
+                let stroke = Stroke::new((u * 0.12).clamp(0.5, 1.5), Color32::from_rgb(0x3d, 0x8b, 0xff).gamma_multiply(alpha));
+                painter.circle_stroke(er.center(), u, stroke);
+                painter.hline((er.center().x - u)..=(er.center().x + u), er.center().y, stroke);
+                painter.vline(er.center().x, (er.center().y - u)..=(er.center().y + u), stroke);
+            }
             Content::Media { .. } => {
                 painter.rect_filled(er, cr, Color32::from_rgb(0x2b, 0x2f, 0x3a).gamma_multiply(alpha));
                 // A play button.
@@ -373,6 +382,9 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
         {
             add = Some(Content::Media { path: f.to_string_lossy().into_owned(), looped: true });
         }
+        if ui.add_enabled(idle, egui::Button::new("Web page").small()).on_hover_text("A web page: alerts, chat, a countdown…").clicked() {
+            add = Some(Content::Browser { url: "https://".into() });
+        }
         if ui.small_button("Text").clicked() {
             add = Some(Content::Text(TextSpec::default()));
         }
@@ -497,6 +509,27 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
             w::field(ui, "Color", LABEL_W, |ui| {
                 ui.color_edit_button_srgb(c);
             });
+        }
+        Content::Browser { url } => {
+            // Applied on Return or leaving the field: a new address restarts
+            // capture.
+            w::field(ui, "Address", LABEL_W, |ui| {
+                let id = ui.id().with("browser-url");
+                let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| url.clone());
+                let resp = ui.add(egui::TextEdit::singleline(&mut text).margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY).hint_text("https://…"));
+                if resp.lost_focus() {
+                    *url = text.trim().to_string();
+                    ui.data_mut(|d| d.remove::<String>(id));
+                } else if resp.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(id, text));
+                } else {
+                    ui.data_mut(|d| d.remove::<String>(id));
+                }
+            });
+            if crate::browser::parse_url(url).is_none() {
+                w::hint(ui, "Enter a web address (https://…) or an HTML file's path, then press Return.");
+            }
+            w::hint(ui, "Laid out at the layer's size; pages without a background are transparent.");
         }
         Content::Media { path, looped } => {
             w::field(ui, "File", LABEL_W, |ui| {

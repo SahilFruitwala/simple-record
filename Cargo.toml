@@ -20,7 +20,7 @@ objc2-core-graphics = "0.3"
 objc2-core-image = { version = "0.3", features = ["objc2-core-video", "objc2-core-graphics", "objc2-core-foundation", "objc2-metal"] }
 objc2-core-media = { version = "0.3", features = ["objc2-core-video", "dispatch2", "block2", "objc2-core-audio-types"] }
 objc2-core-video = { version = "0.3", features = ["objc2-core-graphics", "objc2-io-surface", "objc2-metal"] }
-objc2-foundation = "0.3"
+objc2-foundation = { version = "0.3", features = ["block2"] }
 objc2-io-surface = "0.3"
 objc2-quartz-core = "0.3"
 objc2-screen-capture-kit = { version = "0.3", features = ["block2", "dispatch2", "objc2-core-media", "objc2-core-graphics", "objc2-core-foundation", "objc2-av-foundation"] }
@@ -49,6 +49,7 @@ ctr = { version = "0.9", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 sha1 = "0.10"
 aes-kw = "0.2"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKSnapshotConfiguration", "WKNavigationDelegate", "block2", "objc2-app-kit", "objc2-core-foundation"] }
 
 [profile.release]
 debug = 1

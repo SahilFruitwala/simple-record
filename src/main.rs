@@ -1,4 +1,5 @@
 mod app;
+mod browser;
 mod camera;
 mod compose;
 mod effects;

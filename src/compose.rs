@@ -500,7 +500,7 @@ impl Compositor {
                 Content::Screen => screen.cloned(),
                 Content::Camera => cam.cloned(),
                 Content::Webcam { id, .. } if self.main_cam.as_ref() == Some(id) => cam.cloned(),
-                Content::Display(_) | Content::Webcam { .. } | Content::Media { .. } => {
+                Content::Display(_) | Content::Webcam { .. } | Content::Media { .. } | Content::Browser { .. } => {
                     let want = l.content.source();
                     extras.iter().find(|(s, _)| Some(*s) == want.as_ref()).map(|(_, i)| i.clone())
                 }

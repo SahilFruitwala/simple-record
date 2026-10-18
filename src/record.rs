@@ -171,6 +171,8 @@ pub struct Session {
     extra_screens: Vec<ScreenCapture>,
     extra_cams: Vec<Camera>,
     media: Vec<crate::media::MediaSource>,
+    /// Stops this session's web pages (they run on the main thread).
+    browser_stop: Arc<AtomicBool>,
     sources: Vec<Source>,
     synth: Option<Synth>,
     cam: Option<Camera>,
@@ -313,6 +315,7 @@ impl Session {
             extra_screens: vec![],
             extra_cams: vec![],
             media: vec![],
+            browser_stop: Arc::new(AtomicBool::new(false)),
             sources: vec![],
             synth: None,
             cam: None,
@@ -445,11 +448,9 @@ impl Session {
             (None, None) => bail!("internal: no capture target"),
         }
         // Other displays in the scene: whole, at most the frame's size, no
-        // audio. Other cameras: at the main camera's resolution.
-        if o.test_pattern.is_some() {
-            return Ok(());
-        }
-        let wanted = o.scene.sources();
+        // audio (not with the test pattern: they need Screen Recording).
+        // Other cameras: at the main camera's resolution.
+        let wanted: Vec<Source> = o.scene.sources().into_iter().filter(|s| o.test_pattern.is_none() || !matches!(s, Source::Display(_))).collect();
         let displays = if wanted.iter().any(|s| matches!(s, Source::Display(_))) { screen::displays()? } else { vec![] };
         for src in wanted {
             match &src {
@@ -486,6 +487,16 @@ impl Session {
                         continue;
                     }
                 },
+                Source::Browser(url) => {
+                    // Laid out at the layer's size in the frame.
+                    let (w, h) = o.size;
+                    let r = o.scene.layers().iter().find(|l| l.visible && l.content == Content::Browser { url: url.clone() }).map_or([0.0, 0.0, 1.0, 1.0], |l| l.rect);
+                    let size = ((r[2] * w as f64).round() as usize, (r[3] * h as f64).round() as usize);
+                    if let Err(e) = crate::browser::start(url, size.0, size.1, src.clone(), &self.shared, self.browser_stop.clone()) {
+                        eprintln!("rec: warning: {e:#}; its layer stays empty");
+                        continue;
+                    }
+                }
                 Source::Media(path) => {
                     let looped = o.scene.layers().iter().any(|l| l.content == Content::Media { path: path.clone(), looped: true });
                     match crate::media::MediaSource::start(path, looped, src.clone(), self.shared.clone()) {
@@ -513,6 +524,7 @@ impl Session {
         for mut m in self.media.drain(..) {
             m.stop();
         }
+        self.browser_stop.store(true, Ordering::SeqCst);
         if let Some(mut s) = self.synth.take() {
             s.stop();
         }
@@ -654,6 +666,17 @@ impl Session {
     }
 }
 
+/// Run the main thread's run loop for `d` (timers, WebKit); elsewhere,
+/// sleep.
+fn pump_main(d: Duration) {
+    if objc2::MainThreadMarker::new().is_some() {
+        let until = objc2_foundation::NSDate::dateWithTimeIntervalSinceNow(d.as_secs_f64());
+        objc2_foundation::NSRunLoop::currentRunLoop().runUntilDate(&until);
+    } else {
+        std::thread::sleep(d);
+    }
+}
+
 /// CLI recording: run until Ctrl-C/SIGTERM, `rec stop`, duration, or error.
 pub fn run(o: Options, target: Option<screen::Target>) -> Result<Stats> {
     unsafe {
@@ -713,7 +736,8 @@ pub fn run(o: Options, target: Option<screen::Target>) -> Result<Stats> {
     let mut warned_no_frames = false;
     let mut saves: Vec<std::thread::JoinHandle<Result<PathBuf>>> = vec![];
     while !STOP.load(Ordering::SeqCst) && !sess.failed() {
-        std::thread::sleep(Duration::from_millis(20));
+        // The main run loop, for web page layers.
+        pump_main(Duration::from_millis(20));
         // Requests wait for the first frame (the timeline starts there).
         if sess.has_frames() && PAUSE_REQ.swap(false, Ordering::SeqCst) && sess.pause() && !o.quiet {
             eprint!("\r\x1b[2Krec: paused (`rec-rs resume` to continue)\n");
