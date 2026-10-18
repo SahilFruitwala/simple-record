@@ -190,6 +190,10 @@ pub struct Live {
     cfg: Mutex<LiveConfig>,
     active: AtomicBool,
     next_id: Mutex<u64>,
+    /// Destinations with an encode of their own (another size, bitrate or
+    /// codec): each a pipeline like this one with that one output, fed the
+    /// same frames and audio. By output ID.
+    children: Mutex<Vec<(u64, Arc<Live>)>>,
 }
 
 impl Default for Live {
@@ -213,6 +217,7 @@ impl Default for Live {
             cfg: Mutex::new(LiveConfig::default()),
             active: AtomicBool::new(false),
             next_id: Mutex::new(1),
+            children: Mutex::new(vec![]),
         }
     }
 }
@@ -222,9 +227,13 @@ impl Live {
         Arc::new(Live::default())
     }
 
-    /// Something consumes the encode (replay buffer or a stream).
+    /// Something consumes an encode (replay buffer or a stream).
     pub fn active(&self) -> bool {
-        self.active.load(Ordering::Relaxed)
+        self.active.load(Ordering::Relaxed) || self.children.lock().unwrap().iter().any(|(_, c)| c.active())
+    }
+
+    fn children(&self) -> Vec<Arc<Live>> {
+        self.children.lock().unwrap().iter().map(|(_, c)| c.clone()).collect()
     }
 
     /// Call without holding the hub lock (lock order: encoders, then hub).
@@ -274,6 +283,9 @@ impl Live {
     /// A capture session starts: which audio sources it delivers, and their
     /// gains in the mix (dB).
     pub fn begin_session(&self, system: bool, mic: bool, gains_db: [f32; 2]) {
+        for c in self.children() {
+            c.begin_session(system, mic, gains_db);
+        }
         let mut e = self.enc.lock().unwrap();
         e.sources = [system, mic];
         e.gains_db = gains_db;
@@ -283,7 +295,10 @@ impl Live {
 
     /// One composited output frame at host time `t` (seconds).
     pub fn video(&self, frame: &CVPixelBuffer, t: f64, fps: u32) {
-        if !self.active() {
+        for c in self.children() {
+            c.video(frame, t, fps);
+        }
+        if !self.active.load(Ordering::Relaxed) {
             return;
         }
         let cfg = self.config();
@@ -390,7 +405,12 @@ impl Live {
 
     /// Captured audio (decoded to stereo f32) of `kind` at host time `pts`.
     pub fn audio(&self, kind: AudioKind, pts: f64, rate: f64, frames: Vec<[f32; 2]>) {
-        if !self.active() {
+        for c in self.children() {
+            if c.active() {
+                c.audio(kind, pts, rate, frames.clone());
+            }
+        }
+        if !self.active.load(Ordering::Relaxed) {
             return;
         }
         let mixed = {
@@ -521,7 +541,34 @@ impl Live {
         id
     }
 
+    /// A stream with an encode of its own (`cfg`), or on the shared one.
+    pub fn add_output_with(&self, cfg: Option<LiveConfig>, o: Box<dyn Output>) -> u64 {
+        let Some(cfg) = cfg else { return self.add_output(o) };
+        let id = {
+            let mut n = self.next_id.lock().unwrap();
+            *n += 1;
+            *n
+        };
+        let child = Live::new();
+        child.set_config(cfg);
+        {
+            let e = self.enc.lock().unwrap();
+            child.begin_session(e.sources[0], e.sources[1], e.gains_db);
+        }
+        child.add_output(o);
+        self.children.lock().unwrap().push((id, child));
+        id
+    }
+
     pub fn remove_output(&self, id: u64) {
+        let child = {
+            let mut c = self.children.lock().unwrap();
+            c.iter().position(|(i, _)| *i == id).map(|i| c.remove(i).1)
+        };
+        if let Some(c) = child {
+            c.stop_all();
+            return;
+        }
         let removed = {
             let mut hub = self.hub.lock().unwrap();
             let i = hub.outputs.iter().position(|(i, _)| *i == id);
@@ -534,10 +581,17 @@ impl Live {
     }
 
     pub fn statuses(&self) -> Vec<(u64, OutputStatus)> {
-        self.hub.lock().unwrap().outputs.iter().map(|(i, o)| (*i, o.status())).collect()
+        let mut v: Vec<(u64, OutputStatus)> = self.hub.lock().unwrap().outputs.iter().map(|(i, o)| (*i, o.status())).collect();
+        for (id, c) in self.children.lock().unwrap().iter() {
+            v.extend(c.statuses().into_iter().map(|(_, s)| (*id, s)));
+        }
+        v
     }
 
     pub fn stop_all(&self) {
+        for (_, c) in std::mem::take(&mut *self.children.lock().unwrap()) {
+            c.stop_all();
+        }
         let outs = std::mem::take(&mut self.hub.lock().unwrap().outputs);
         for (_, mut o) in outs {
             o.stop();
@@ -753,6 +807,47 @@ mod tests {
         let audio: Vec<f64> = got.iter().filter(|p| !p.0).map(|p| p.1).collect();
         let worst = audio.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max);
         assert!(worst < 1024.0 / 48000.0 + 0.001, "audio gap {worst}");
+    }
+
+    /// Video sizes a destination got.
+    struct Sizes(Arc<Mutex<Vec<(i32, i32)>>>);
+
+    impl Output for Sizes {
+        fn packet(&mut self, p: &Packet, _f: &Formats) {
+            if let Packet::Video(v) = p {
+                let d = unsafe { objc2_core_media::CMVideoFormatDescriptionGetDimensions(&v.format.0) };
+                self.0.lock().unwrap().push((d.width, d.height));
+            }
+        }
+        fn status(&self) -> OutputStatus {
+            OutputStatus { name: "sizes".into(), ..Default::default() }
+        }
+        fn stop(&mut self) {}
+    }
+
+    /// A destination with an encode of its own gets its size; the shared
+    /// encode is unchanged, and stopping one leaves the other.
+    #[test]
+    fn destinations_with_their_own_encode() {
+        let live = Live::new();
+        live.set_config(LiveConfig { width: 640, height: 360, bitrate: 1_000_000, keyframe_secs: 1.0, ..Default::default() });
+        live.begin_session(true, false, [0.0, 0.0]);
+        let (shared, own) = (Arc::new(Mutex::new(vec![])), Arc::new(Mutex::new(vec![])));
+        live.add_output(Box::new(Sizes(shared.clone())));
+        let small = LiveConfig { width: 320, height: 180, bitrate: 500_000, keyframe_secs: 1.0, ..Default::default() };
+        let id = live.add_output_with(Some(small), Box::new(Sizes(own.clone())));
+        assert!(live.active());
+        assert_eq!(live.statuses().len(), 2);
+        feed(&live, 2.0, 8000.0);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let (a, b) = (shared.lock().unwrap().clone(), own.lock().unwrap().clone());
+        assert!(a.len() > 40 && a.iter().all(|d| *d == (640, 360)), "shared: {} frames, {:?}", a.len(), a.first());
+        assert!(b.len() > 40 && b.iter().all(|d| *d == (320, 180)), "own: {} frames, {:?}", b.len(), b.first());
+        live.remove_output(id);
+        assert_eq!(live.statuses().len(), 1);
+        assert!(live.active(), "the shared encode keeps going");
+        live.stop_all();
+        assert!(!live.active());
     }
 
     #[test]

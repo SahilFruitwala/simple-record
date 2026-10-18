@@ -918,6 +918,22 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
             });
             if d.enabled {
                 destination(ui, st, i + 1, &mut d.dest, &mut d.custom_url, live);
+                // Its own size and bitrate (a second hardware encode), e.g.
+                // 720p for Twitch beside 1440p for YouTube.
+                w::row(ui, "Own encode", |ui| w::switch(ui, &mut d.own_encode, !live)).on_hover_text("Encode separately for this destination (its own size and bitrate) instead of sharing the first one's");
+                if d.own_encode {
+                    ui.horizontal(|ui| {
+                        let sizes: Vec<(String, String)> = ["720p", "1080p", "1440p", "4k"].iter().map(|r| (r.to_string(), r.to_uppercase())).collect();
+                        ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, &format!("dest-res-{i}"), &mut d.resolution, &sizes, !live));
+                        let mut auto = d.bitrate_kbps == 0;
+                        if ui.add_enabled(!live, egui::Checkbox::new(&mut auto, "Auto bitrate")).changed() {
+                            d.bitrate_kbps = if auto { 0 } else { 6000 };
+                        }
+                        if !auto {
+                            ui.add_enabled(!live, egui::DragValue::new(&mut d.bitrate_kbps).range(500..=80_000).speed(50).suffix(" kb/s"));
+                        }
+                    });
+                }
             }
         }
         if let Some(i) = remove {
@@ -926,7 +942,7 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
                 st.stream_key_input.remove(i + 1);
             }
         }
-        if !live && ui.small_button("+ Add destination").on_hover_text("Stream to several places at once from one encode").clicked() {
+        if !live && ui.small_button("+ Add destination").on_hover_text("Stream to several places at once (from one encode, or each its own)").clicked() {
             s.stream_extra.push(Default::default());
         }
         w::divider(ui);

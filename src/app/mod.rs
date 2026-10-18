@@ -865,9 +865,9 @@ impl App {
         // The encode is set for all destinations before the first starts.
         self.sync_live();
         let mut errors = vec![];
-        for url in self.st.settings.stream_urls() {
+        for (url, own) in self.st.settings.stream_targets() {
             match crate::live::resolve_destination(&url).and_then(|(url, key)| crate::live::start_output(&url, &key)) {
-                Ok(o) => self.st.stream_ids.push(self.st.live.add_output(o)),
+                Ok(o) => self.st.stream_ids.push(self.st.live.add_output_with(own, o)),
                 Err(e) => errors.push(format!("{e:#}")),
             }
         }

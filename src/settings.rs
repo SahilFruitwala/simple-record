@@ -25,11 +25,18 @@ pub struct StreamDest {
     pub dest: String,
     pub custom_url: String,
     pub enabled: bool,
+    /// An encode of its own (else the shared one, which then also
+    /// respects this destination's limits).
+    pub own_encode: bool,
+    /// Its own encode: "720p", "1080p", "1440p" or "4k".
+    pub resolution: String,
+    /// Its own encode's video bitrate; 0: the platform's recommendation.
+    pub bitrate_kbps: u32,
 }
 
 impl Default for StreamDest {
     fn default() -> Self {
-        StreamDest { dest: "twitch".into(), custom_url: String::new(), enabled: true }
+        StreamDest { dest: "twitch".into(), custom_url: String::new(), enabled: true, own_encode: false, resolution: "1080p".into(), bitrate_kbps: 0 }
     }
 }
 
@@ -391,30 +398,48 @@ impl Settings {
     /// Every destination Go Live starts: the first one and the enabled
     /// extras, without blanks or repeats.
     pub fn stream_urls(&self) -> Vec<String> {
-        let mut urls = vec![self.stream_url()];
-        urls.extend(self.stream_extra.iter().filter(|d| d.enabled).map(|d| dest_url(&d.dest, &d.custom_url)));
-        let mut seen = std::collections::HashSet::new();
-        urls.into_iter().filter(|u| !u.is_empty() && seen.insert(u.clone())).collect()
+        self.stream_targets().into_iter().map(|(u, _)| u).collect()
     }
 
-    /// The live encode these settings describe (sizes above the capture
-    /// are clamped to it by the encoder): the platform's limits, codec and
-    /// recommended bitrate unless set by hand.
+    /// Every destination Go Live starts, and its own encode if it has one
+    /// (None: the shared encode, `live_config`).
+    pub fn stream_targets(&self) -> Vec<(String, Option<crate::live::LiveConfig>)> {
+        let mut out = vec![(self.stream_url(), None)];
+        for d in self.stream_extra.iter().filter(|d| d.enabled) {
+            let url = dest_url(&d.dest, &d.custom_url);
+            let own = d.own_encode.then(|| self.encode_for(&[url.clone()], &d.resolution, &self.stream_codec, (d.bitrate_kbps > 0).then_some(d.bitrate_kbps)));
+            out.push((url, own));
+        }
+        let mut seen = std::collections::HashSet::new();
+        out.into_iter().filter(|(u, _)| !u.is_empty() && seen.insert(u.clone())).collect()
+    }
+
+    /// The shared live encode (replay buffer, and destinations without
+    /// their own): the platforms' limits, codec and recommended bitrate
+    /// unless set by hand. Sizes above the capture are clamped to it by
+    /// the encoder.
     pub fn live_config(&self) -> crate::live::LiveConfig {
+        let urls: Vec<String> = self.stream_targets().into_iter().filter(|(_, own)| own.is_none()).map(|(u, _)| u).collect();
+        let bitrate = (!self.stream_bitrate_auto).then_some(self.stream_bitrate_kbps);
+        self.encode_for(&urls, &self.live_resolution, &self.stream_codec, bitrate)
+    }
+
+    /// An encode for these destinations: every one's limits (the smallest
+    /// bitrate and size, HEVC only if all take it). `bitrate_kbps`: by hand,
+    /// else the platforms' recommendation.
+    fn encode_for(&self, urls: &[String], resolution: &str, codec: &str, bitrate_kbps: Option<u32>) -> crate::live::LiveConfig {
         use crate::live::{Platform, platform, preset};
-        let height = match self.live_resolution.as_str() {
+        let height = match resolution {
             "720p" => 720,
             "1440p" => 1440,
             "4k" => 2160,
             _ => 1080,
         };
-        // Every destination's limits: the smallest bitrate and size, HEVC
-        // only if all of them take it.
-        let mut platforms: Vec<Platform> = self.stream_urls().iter().map(|u| platform(u)).collect();
+        let mut platforms: Vec<Platform> = urls.iter().map(|u| platform(u)).collect();
         if platforms.is_empty() {
             platforms.push(Platform::Other);
         }
-        let hevc = match self.stream_codec.as_str() {
+        let hevc = match codec {
             "hevc" => true,
             "h264" => false,
             _ => platforms.iter().all(|p| *p == Platform::YouTube),
@@ -423,7 +448,7 @@ impl Settings {
         let kbps = presets.iter().map(|p| p.0).min().unwrap_or(6000);
         let height = presets.iter().map(|p| p.1).min().unwrap_or(height);
         let hevc = presets.iter().all(|p| p.2);
-        let bitrate = if self.stream_bitrate_auto { kbps } else { self.stream_bitrate_kbps.clamp(500, 80_000) };
+        let bitrate = bitrate_kbps.map_or(kbps, |b| b.clamp(500, 80_000));
         crate::live::LiveConfig {
             width: height * 16 / 9,
             height,
@@ -687,12 +712,25 @@ mod tests {
         assert_eq!(s.stream_urls().len(), 1);
         assert!(s.live_config().hevc, "YouTube alone takes HEVC");
         s.stream_extra.push(StreamDest::default());
-        s.stream_extra.push(StreamDest { dest: "custom".into(), custom_url: " ".into(), enabled: true });
+        s.stream_extra.push(StreamDest { dest: "custom".into(), custom_url: " ".into(), ..Default::default() });
         s.stream_extra.push(StreamDest { dest: "youtube".into(), ..Default::default() });
         let urls = s.stream_urls();
         assert_eq!(urls.len(), 2, "blank and repeated destinations are skipped: {urls:?}");
         let c = s.live_config();
         assert!(!c.hevc && c.height <= 1080 && c.bitrate <= 6_000_000, "Twitch limits the shared encode: {c:?}");
+        // Twitch with an encode of its own: the shared one is YouTube's
+        // again, and Twitch's follows its limits and the size asked.
+        s.stream_extra[0].own_encode = true;
+        s.stream_extra[0].resolution = "720p".into();
+        let t = s.stream_targets();
+        assert_eq!(t.len(), 2);
+        assert!(t[0].1.is_none());
+        let own = t[1].1.clone().expect("its own encode");
+        assert!(own.height == 720 && !own.hevc && own.bitrate <= 6_000_000, "{own:?}");
+        let shared = s.live_config();
+        assert!(shared.hevc && shared.height == 1080, "{shared:?}");
+        s.stream_extra[0].bitrate_kbps = 3000;
+        assert_eq!(s.stream_targets()[1].1.as_ref().unwrap().bitrate, 3_000_000);
         s.stream_extra[0].enabled = false;
         assert_eq!(s.stream_urls().len(), 1);
     }
