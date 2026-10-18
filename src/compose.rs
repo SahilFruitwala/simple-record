@@ -9,7 +9,9 @@ use objc2_core_foundation::{CFRetained, CGAffineTransform, CGPoint, CGRect, CGSi
 use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
 use objc2_core_image::{CIColor, CIContext, CIFilter, CIImage, CIVector};
 use objc2_core_video::CVPixelBuffer;
+use objc2_foundation::NSData;
 
+use crate::effects::{self, ChromaKey, Effects};
 use crate::layout::{self, Background, Content, Env, Frame, Placed, SceneSpec, Style, TextSpec, Transition};
 use crate::util::*;
 
@@ -173,7 +175,14 @@ pub struct Compositor {
     cam_aspect: f64,
     /// Aspect ratio of the last screen frame (the frame's until one arrives).
     screen_aspect: f64,
+    /// Chroma key lookup tables, most recent last.
+    cubes: Vec<(ChromaKey, Retained<NSData>)>,
+    /// sRGB, which the tables are indexed in (whatever the output is in).
+    srgb: CFRetained<CGColorSpace>,
 }
+
+/// Chroma keys kept (a few layers keying different colors).
+const CUBE_CACHE: usize = 4;
 
 /// Decorations kept for reuse (a few layers, plus a transition's sizes).
 const DECOR_CACHE: usize = 12;
@@ -213,7 +222,6 @@ impl Compositor {
             let cs = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).expect("sRGB colorspace");
             Compositor {
                 ctx,
-                cs,
                 w: width as f64,
                 h: height as f64,
                 pip,
@@ -228,6 +236,9 @@ impl Compositor {
                 texts: vec![],
                 cam_aspect: 16.0 / 9.0,
                 screen_aspect: width as f64 / height.max(1) as f64,
+                cubes: vec![],
+                srgb: cs.clone(),
+                cs,
             }
         }
     }
@@ -387,6 +398,47 @@ impl Compositor {
         }
     }
 
+    fn cube(&mut self, k: &ChromaKey) -> Retained<NSData> {
+        if let Some(i) = self.cubes.iter().position(|(c, _)| c == k) {
+            let hit = self.cubes.remove(i);
+            self.cubes.push(hit);
+        } else {
+            let floats = effects::chroma_cube(k, effects::CUBE_SIZE);
+            let bytes: Vec<u8> = floats.iter().flat_map(|f| f.to_ne_bytes()).collect();
+            if self.cubes.len() >= CUBE_CACHE {
+                self.cubes.remove(0);
+            }
+            self.cubes.push((*k, NSData::with_bytes(&bytes)));
+        }
+        self.cubes.last().unwrap().1.clone()
+    }
+
+    /// `img` through a layer's filters: the key, then color correction.
+    fn filtered(&mut self, img: Retained<CIImage>, e: &Effects) -> Retained<CIImage> {
+        let mut img = img;
+        unsafe {
+            if let Some(k) = &e.chroma_key {
+                let data = self.cube(k);
+                let cs: Retained<objc2::runtime::AnyObject> = Retained::retain(&*self.srgb as *const CGColorSpace as *mut objc2::runtime::AnyObject).unwrap();
+                let params = dict(vec![
+                    (&*ns("inputCubeDimension"), num_i(effects::CUBE_SIZE as i64)),
+                    (&*ns("inputCubeData"), obj(&*data)),
+                    (&*ns("inputColorSpace"), cs),
+                ]);
+                img = img.imageByApplyingFilter_withInputParameters(&ns("CIColorCubeWithColorSpace"), &params);
+            }
+            if e.has_color() {
+                let params = dict(vec![
+                    (&*ns("inputBrightness"), num_f(e.brightness.clamp(-1.0, 1.0))),
+                    (&*ns("inputContrast"), num_f(e.contrast.clamp(0.0, 4.0))),
+                    (&*ns("inputSaturation"), num_f(e.saturation.clamp(0.0, 4.0))),
+                ]);
+                img = img.imageByApplyingFilter_withInputParameters(&ns("CIColorControls"), &params);
+            }
+        }
+        img
+    }
+
     /// Draw `l` showing `src` over `under`.
     fn place(&mut self, l: &Placed, src: &CIImage, under: Retained<CIImage>, k: f64) -> Retained<CIImage> {
         unsafe {
@@ -448,6 +500,7 @@ impl Compositor {
                 }
             };
             if let Some(src) = src {
+                let src = if l.effects.is_none() { src } else { self.filtered(src, &l.effects) };
                 img = self.place(l, &src, img, k);
             }
         }
@@ -504,28 +557,68 @@ impl Compositor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use objc2_core_video::*;
+
+    /// A `w`x`h` frame of one BGRA color (and the pool it came from).
+    fn solid(w: usize, h: usize, bgra: [u8; 4]) -> (CFRetained<CVPixelBuffer>, CFRetained<CVPixelBufferPool>) {
+        let pb = crate::util::make_pool(w, h, PIX_BGRA);
+        let mut buf = std::ptr::null_mut();
+        unsafe {
+            CVPixelBufferPool::create_pixel_buffer(None, &pb, std::ptr::NonNull::from(&mut buf));
+            let b: CFRetained<CVPixelBuffer> = CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap());
+            CVPixelBufferLockBaseAddress(&b, CVPixelBufferLockFlags(0));
+            let base = CVPixelBufferGetBaseAddress(&b) as *mut u8;
+            let stride = CVPixelBufferGetBytesPerRow(&b);
+            for y in 0..h {
+                for x in 0..w {
+                    std::ptr::copy_nonoverlapping(bgra.as_ptr(), base.add(y * stride + x * 4), 4);
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(&b, CVPixelBufferLockFlags(0));
+            (b, pb)
+        }
+    }
+
+    /// The BGR of pixel (x, y).
+    fn pixel(b: &CVPixelBuffer, x: usize, y: usize) -> [u8; 3] {
+        unsafe {
+            CVPixelBufferLockBaseAddress(b, CVPixelBufferLockFlags::ReadOnly);
+            let base = CVPixelBufferGetBaseAddress(b) as *const u8;
+            let p = base.add(y * CVPixelBufferGetBytesPerRow(b) + x * 4);
+            let v = [*p, *p.add(1), *p.add(2)];
+            CVPixelBufferUnlockBaseAddress(b, CVPixelBufferLockFlags::ReadOnly);
+            v
+        }
+    }
+
+    /// The camera keyed out over the background, and color correction.
+    #[test]
+    fn chroma_key_and_color_correction() {
+        let (green, _p1) = solid(320, 180, [0, 255, 0, 255]);
+        let (red, _p2) = solid(320, 180, [0, 0, 255, 255]);
+        let (out, _p3) = solid(320, 180, [0, 0, 0, 255]);
+        let bg = Background { top: [200, 100, 50], bottom: [200, 100, 50] };
+        let keyed = PipSpec { effects: Effects { chroma_key: Some(ChromaKey::default()), ..Default::default() }, ..Default::default() };
+        let mut c = Compositor::new(320, 180, keyed.clone());
+        c.set_background(bg);
+        c.set_scene(SceneSpec::Template(Scene::Cam), false);
+        c.render(0.0, None, Some(&green), &[], &out);
+        let [b, g, r] = pixel(&out, 160, 90);
+        assert!(r > 180 && (80..=120).contains(&g) && b < 70, "the background shows through: {:?}", [b, g, r]);
+        // The key leaves other colors alone.
+        c.render(0.1, None, Some(&red), &[], &out);
+        let [b, g, r] = pixel(&out, 160, 90);
+        assert!(r > 220 && g < 30 && b < 30, "red kept: {:?}", [b, g, r]);
+        // No saturation: red goes gray.
+        c.set_pip(PipSpec { effects: Effects { saturation: 0.0, ..Default::default() }, ..keyed });
+        c.render(0.2, None, Some(&red), &[], &out);
+        let [b, g, r] = pixel(&out, 160, 90);
+        assert!(r.abs_diff(g) < 8 && g.abs_diff(b) < 8 && r > 20, "gray: {:?}", [b, g, r]);
+    }
+
     /// Bake an overlay with CoreImage and read pixels back.
     #[test]
     fn renders_overlay_with_border_into_the_frame() {
-        use objc2_core_video::*;
-        let solid = |w: usize, h: usize, bgra: [u8; 4]| {
-            let pb = crate::util::make_pool(w, h, PIX_BGRA);
-            let mut buf = std::ptr::null_mut();
-            unsafe {
-                CVPixelBufferPool::create_pixel_buffer(None, &pb, std::ptr::NonNull::from(&mut buf));
-                let b: CFRetained<CVPixelBuffer> = CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap());
-                CVPixelBufferLockBaseAddress(&b, CVPixelBufferLockFlags(0));
-                let base = CVPixelBufferGetBaseAddress(&b) as *mut u8;
-                let stride = CVPixelBufferGetBytesPerRow(&b);
-                for y in 0..h {
-                    for x in 0..w {
-                        std::ptr::copy_nonoverlapping(bgra.as_ptr(), base.add(y * stride + x * 4), 4);
-                    }
-                }
-                CVPixelBufferUnlockBaseAddress(&b, CVPixelBufferLockFlags(0));
-                (b, pb)
-            }
-        };
         let (screen, _p1) = solid(640, 360, [0, 0, 0, 255]);
         let (cam, _p2) = solid(320, 180, [0, 0, 255, 255]); // red
         let (out, _p3) = solid(640, 360, [0, 255, 0, 255]);
@@ -543,14 +636,7 @@ mod tests {
         c.render(0.0, Some(&screen), Some(&cam), &[], &out);
         let [x, y, w, h] = overlay_rect(&pip, 640.0, 360.0, c.cam_aspect());
         assert_eq!([x, y, w, h], [240.0, 10.0, 160.0, 160.0]);
-        let px = |px: usize, py: usize| unsafe {
-            CVPixelBufferLockBaseAddress(&out, CVPixelBufferLockFlags::ReadOnly);
-            let base = CVPixelBufferGetBaseAddress(&out) as *const u8;
-            let p = base.add(py * CVPixelBufferGetBytesPerRow(&out) + px * 4);
-            let v = [*p, *p.add(1), *p.add(2)];
-            CVPixelBufferUnlockBaseAddress(&out, CVPixelBufferLockFlags::ReadOnly);
-            v
-        };
+        let px = |x: usize, y: usize| pixel(&out, x, y);
         let red = |v: [u8; 3]| v[2] > 200 && v[1] < 40 && v[0] < 40;
         let white = |v: [u8; 3]| v.iter().all(|&c| c > 200);
         let black = |v: [u8; 3]| v.iter().all(|&c| c < 30);

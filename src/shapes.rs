@@ -3,6 +3,7 @@
 //! shadows. Plain geometry on the CPU, shared by the compositor and the
 //! app's preview; tested without a GPU.
 
+use crate::effects::Effects;
 use crate::layout::Style;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
@@ -110,6 +111,8 @@ pub struct PipSpec {
     pub border_color: [u8; 3],
     pub shadow: bool,
     pub mirror: bool,
+    /// The camera's picture filters (a camera layer's own replace them).
+    pub effects: Effects,
 }
 
 impl Default for PipSpec {
@@ -123,6 +126,7 @@ impl Default for PipSpec {
             border_color: [255, 255, 255],
             shadow: false,
             mirror: true,
+            effects: Effects::default(),
         }
     }
 }

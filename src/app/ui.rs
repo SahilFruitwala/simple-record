@@ -474,6 +474,7 @@ fn overlay_controls(ui: &mut Ui, s: &mut Settings) {
     w::divider(ui);
     w::row(ui, "Shadow", |ui| w::switch(ui, &mut s.pip_shadow, true));
     w::row(ui, "Mirror", |ui| w::switch(ui, &mut s.mirror, true));
+    super::scenes::effects_controls(ui, &mut s.camera_effects, LABEL_W, "camera-fx", "");
     w::divider(ui);
     w::hint(ui, "Drag the camera in the preview to move it; it snaps to corners.");
     ui.add_space(2.0);

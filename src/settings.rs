@@ -90,6 +90,8 @@ pub struct Settings {
     pub mic_gain_db: f32,
     /// Noise suppression, gate, compressor, low-cut (applied live).
     pub mic_filters: crate::filters::MicFilters,
+    /// The camera's color correction and chroma key (applied live).
+    pub camera_effects: crate::effects::Effects,
     pub pip_size: f64,
     pub pip_place: Place,
     pub pip_shape: Shape,
@@ -164,6 +166,7 @@ impl Default for Settings {
             system_gain_db: 0.0,
             mic_gain_db: 0.0,
             mic_filters: Default::default(),
+            camera_effects: Default::default(),
             pip_size: PipSpec::default().size,
             pip_place: PipSpec::default().place,
             pip_shape: PipSpec::default().shape,
@@ -259,6 +262,7 @@ impl Settings {
             border_color: self.pip_border_color,
             shadow: self.pip_shadow,
             mirror: self.mirror,
+            effects: self.camera_effects,
         }
     }
 
@@ -325,6 +329,7 @@ impl Settings {
             pip_border_color: d.pip_border_color,
             pip_shadow: d.pip_shadow,
             mirror: d.mirror,
+            camera_effects: d.camera_effects,
             // Scenes switch live (their look too), as long as the camera is
             // on for all of them.
             scene: if spec.uses_cam() { Scene::ScreenCam } else { Scene::Screen },

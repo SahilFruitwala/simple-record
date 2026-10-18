@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::effects::Effects;
 use crate::shapes::{PipSpec, Shape, overlay_rect, same_aspect};
 
 /// Built-in scene templates. Switchable live while the webcam runs.
@@ -280,6 +281,7 @@ pub struct Placed {
     /// Flip horizontally (a webcam, like a mirror).
     pub mirror: bool,
     pub opacity: f64,
+    pub effects: Effects,
 }
 
 /// Vertical gradient (a solid color when both ends are equal).
@@ -343,6 +345,9 @@ pub struct Layer {
     /// Mirror the webcam (camera layers; follows the overlay setting).
     pub mirror: bool,
     pub visible: bool,
+    /// Color correction and chroma key. On a camera layer, none means the
+    /// camera's own (the settings').
+    pub effects: Effects,
 }
 
 impl Default for Layer {
@@ -354,6 +359,7 @@ impl Default for Layer {
             style: Style::default(),
             mirror: true,
             visible: true,
+            effects: Effects::default(),
         }
     }
 }
@@ -431,13 +437,15 @@ impl Layout {
                     style: l.style,
                     mirror: false,
                     opacity: a as f64 / 255.0,
+                    effects: Effects::default(),
                 });
                 let pad = (rect[3] * 0.18).round();
                 let inner = [rect[0] + pad, rect[1] + pad, (rect[2] - 2.0 * pad).max(2.0), (rect[3] - 2.0 * pad).max(2.0)];
-                layers.push(Placed { content: l.content.clone(), rect: inner, fit: Fit::Contain, style: Style::default(), mirror: false, opacity: 1.0 });
+                layers.push(Placed { content: l.content.clone(), rect: inner, fit: Fit::Contain, style: Style::default(), mirror: false, opacity: 1.0, effects: l.effects });
                 continue;
             }
-            layers.push(Placed { content: l.content.clone(), rect, fit: l.fit, style: l.style, mirror, opacity: 1.0 });
+            let effects = if l.content == Content::Camera && l.effects.is_none() { env.pip.effects } else { l.effects };
+            layers.push(Placed { content: l.content.clone(), rect, fit: l.fit, style: l.style, mirror, opacity: 1.0, effects });
         }
         Frame { background: self.background.unwrap_or(env.background), layers }
     }
@@ -457,6 +465,8 @@ impl Layout {
                     fit: p.fit,
                     style: p.style,
                     visible: true,
+                    // A camera keeps following the camera's filters.
+                    effects: Effects::default(),
                 }
             })
             .collect();
@@ -478,8 +488,8 @@ impl Scene {
             border_color: pip.border_color,
             ..Style::rounded(radius, r[2], r[3])
         };
-        let screen = |r: [f64; 4], style: Style| Placed { content: Content::Screen, rect: r, fit: Fit::Contain, style, mirror: false, opacity: 1.0 };
-        let cam = |r: [f64; 4], fit: Fit, style: Style| Placed { content: Content::Camera, rect: r, fit, style, mirror: pip.mirror, opacity: 1.0 };
+        let screen = |r: [f64; 4], style: Style| Placed { content: Content::Screen, rect: r, fit: Fit::Contain, style, mirror: false, opacity: 1.0, effects: Effects::default() };
+        let cam = |r: [f64; 4], fit: Fit, style: Style| Placed { content: Content::Camera, rect: r, fit, style, mirror: pip.mirror, opacity: 1.0, effects: pip.effects };
         let overlay = || {
             let r = overlay_rect(pip, w, h, env.cam_aspect);
             cam(r, Fit::Cover, pip.style())
@@ -619,6 +629,7 @@ pub fn blend(a: &Frame, b: &Frame, t: f64) -> Frame {
                     fit: if half { p.fit } else { l.fit },
                     mirror: if half { p.mirror } else { l.mirror },
                     opacity: lerp(p.opacity, l.opacity, t),
+                    effects: if half { p.effects } else { l.effects },
                     content: l.content.clone(),
                 });
             }

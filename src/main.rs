@@ -1,6 +1,7 @@
 mod app;
 mod camera;
 mod compose;
+mod effects;
 mod filters;
 mod hotkey;
 mod layout;
@@ -193,6 +194,22 @@ pub struct RecordArgs {
     /// timeline (for editing the camera separately).
     #[arg(long)]
     camera_file: bool,
+    /// Key out the webcam's background color (green screen): a hex color,
+    /// green when none is given.
+    #[arg(long, value_name = "COLOR", num_args = 0..=1, default_missing_value = "00ff00")]
+    chroma_key: Option<String>,
+    /// Chroma key: how far from the key color is removed, 0 to 1.
+    #[arg(long, default_value_t = 0.4)]
+    key_similarity: f64,
+    /// Webcam brightness, -1 to 1.
+    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+    camera_brightness: f64,
+    /// Webcam contrast, 0 to 2 (1: unchanged).
+    #[arg(long, default_value_t = 1.0)]
+    camera_contrast: f64,
+    /// Webcam saturation, 0 (gray) to 2 (1: unchanged).
+    #[arg(long, default_value_t = 1.0)]
+    camera_saturation: f64,
     /// Webcam overlay width as a fraction of the frame width.
     #[arg(long, default_value_t = 0.22)]
     pip_size: f64,
@@ -523,6 +540,15 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
             border_color: parse_hex(&a.pip_border_color)?,
             shadow: a.pip_shadow,
             mirror: !a.no_mirror,
+            effects: effects::Effects {
+                brightness: a.camera_brightness.clamp(-1.0, 1.0),
+                contrast: a.camera_contrast.clamp(0.0, 2.0),
+                saturation: a.camera_saturation.clamp(0.0, 2.0),
+                chroma_key: match &a.chroma_key {
+                    Some(c) => Some(effects::ChromaKey { color: parse_hex(c)?, similarity: a.key_similarity.clamp(0.0, 1.0), ..Default::default() }),
+                    None => None,
+                },
+            },
         },
         cursor: !a.no_cursor,
         clicks: a.clicks,
@@ -928,6 +954,16 @@ mod tests {
         let a = parse_record_args(&["--gate", "--low-cut", "--compressor"]).unwrap();
         assert_eq!((a.gate, a.compressor, a.low_cut), (Some(-45.0), Some(-20.0), true));
         assert_eq!(parse_record_args(&["--gate", "-50"]).unwrap().gate, Some(-50.0));
+    }
+
+    #[test]
+    fn camera_effect_options() {
+        let a = parse_record_args(&["--chroma-key", "--camera-brightness", "-0.1"]).unwrap();
+        assert_eq!(a.chroma_key.as_deref(), Some("00ff00"));
+        assert_eq!(a.camera_brightness, -0.1);
+        let a = parse_record_args(&["--chroma-key", "0000ff", "--key-similarity", "0.3"]).unwrap();
+        assert_eq!(parse_hex(a.chroma_key.as_deref().unwrap()).unwrap(), [0, 0, 255]);
+        assert!(parse_record_args(&[]).unwrap().chroma_key.is_none());
     }
 
     #[test]

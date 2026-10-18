@@ -3,6 +3,7 @@
 //! preview. Thumbnails are drawn from the same layouts the compositor uses,
 //! so they show exactly what gets recorded.
 
+use crate::effects::{ChromaKey, Effects};
 use egui::{Align, Color32, CornerRadius, Rect, RichText, Sense, Stroke, Ui, vec2};
 
 use super::State;
@@ -487,6 +488,50 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
         });
     }
     shape_controls(ui, &mut l.style, LABEL_W);
+    if !matches!(l.content, Content::Text(_) | Content::Color(_)) {
+        let hint = if l.content == Content::Camera { "Off: the camera's filters (Sources > Camera)." } else { "" };
+        effects_controls(ui, &mut l.effects, LABEL_W, "layer-fx", hint);
+    }
+}
+
+/// Color correction and chroma key, folded away until opened.
+pub(super) fn effects_controls(ui: &mut Ui, e: &mut Effects, label_w: f32, id: &str, hint: &str) {
+    let title = if e.is_none() { "Filters".to_string() } else { "Filters (on)".to_string() };
+    egui::CollapsingHeader::new(title).id_salt(id).show(ui, |ui| {
+        let slider = |ui: &mut Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>| {
+            w::field(ui, label, label_w, |ui| {
+                ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(40.0);
+                ui.add(egui::Slider::new(v, range).show_value(false));
+            });
+        };
+        slider(ui, "Brightness", &mut e.brightness, -0.5..=0.5);
+        slider(ui, "Contrast", &mut e.contrast, 0.5..=1.5);
+        slider(ui, "Saturation", &mut e.saturation, 0.0..=2.0);
+        if e.has_color() && ui.small_button("Reset colors").clicked() {
+            *e = Effects { chroma_key: e.chroma_key, ..Default::default() };
+        }
+        let mut keyed = e.chroma_key.is_some();
+        w::row(ui, "Chroma key", |ui| w::switch(ui, &mut keyed, true)).on_hover_text("Remove a green (or other color) screen behind you");
+        if keyed != e.chroma_key.is_some() {
+            e.chroma_key = keyed.then(ChromaKey::default);
+        }
+        if let Some(k) = &mut e.chroma_key {
+            w::field(ui, "Key color", label_w, |ui| {
+                ui.color_edit_button_srgb(&mut k.color);
+                for (c, name) in [([0, 255, 0], "Green"), ([0, 0, 255], "Blue")] {
+                    if ui.small_button(name).clicked() {
+                        k.color = c;
+                    }
+                }
+            });
+            slider(ui, "Similarity", &mut k.similarity, 0.05..=0.8);
+            slider(ui, "Smoothness", &mut k.smoothness, 0.01..=0.3);
+            slider(ui, "Spill", &mut k.spill, 0.01..=0.5);
+        }
+        if !hint.is_empty() && e.is_none() {
+            w::hint(ui, hint);
+        }
+    });
 }
 
 /// Outline: shape, roundness, border and shadow.
