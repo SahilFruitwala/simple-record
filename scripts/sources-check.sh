@@ -31,7 +31,14 @@ scene video "$RED"
 scene page "$PAGE"
 scene video_page "$RED" "$PAGE"
 scene video_keyed "$RED" "$KEYED"
-DEBUG_LAYERS=1 scene all "$RED" "$PAGE" "$KEYED"
+scene all "$RED" "$PAGE" "$KEYED"
+# Narrowing down (temporary).
+SAT='{"content": {"media": {"path": "'$WORK'/green.mp4", "looped": true}}, "rect": [0.6, 0.3, 0.3, 0.4], "fit": "cover", "effects": {"saturation": 0.0}}'
+PLAIN='{"content": {"media": {"path": "'$WORK'/green.mp4", "looped": true}}, "rect": [0.6, 0.3, 0.3, 0.4], "fit": "cover"}'
+scene page_keyed "$PAGE" "$KEYED"
+scene all_plain "$RED" "$PAGE" "$PLAIN"
+scene all_sat "$RED" "$PAGE" "$SAT"
+scene keyed_first "$KEYED" "$RED" "$PAGE"
 # The RGB of an 8x8 patch around (x, y) at 2.5 s of recording $1 (between
 # the test pattern's white flashes).
 rgb() {
@@ -69,4 +76,5 @@ expect "keyed video (pattern through keyed green)" video_keyed 476 176 pattern
 expect "video file under a page" all 156 176 red
 expect "web page beside a video" all 496 40 blue
 expect "chroma key (page through keyed green)" all 476 176 blue
+for n in page_keyed all_plain all_sat keyed_first; do grid $n; done
 exit $fail
