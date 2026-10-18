@@ -162,6 +162,11 @@ pub struct State {
     pub refresh_devices: bool,
     /// Overlay last sent to the running session.
     pip_applied: Option<crate::compose::PipSpec>,
+    /// Scene and look (background, transition) last sent to it.
+    scene_applied: Option<crate::layout::SceneSpec>,
+    look_applied: Option<(crate::layout::Background, crate::layout::Transition, u32)>,
+    /// Width / height of the screen source (for scene thumbnails).
+    pub screen_aspect: f64,
     /// Camera aspect ratio from the running session (for drag hit-testing).
     pub cam_aspect: f64,
     pub permissions_missing: bool,
@@ -247,6 +252,34 @@ impl State {
         }
     }
 
+    /// Send the scene and its look to the running session if they changed:
+    /// scene switches are live (with the transition), in the preview and
+    /// the file.
+    pub fn apply_scene(&mut self) {
+        let Some(sess) = self.recording.as_ref().or(self.preview.as_ref()) else {
+            self.scene_applied = None;
+            self.look_applied = None;
+            return;
+        };
+        let spec = self.settings.scene_spec();
+        if self.scene_applied.as_ref() != Some(&spec) && sess.set_scene(spec.clone()) {
+            self.scene_applied = Some(spec);
+        }
+        let s = &self.settings;
+        let look = (s.background, s.transition, s.transition_ms);
+        if self.look_applied != Some(look) {
+            sess.set_look(look.0, look.1, look.2 as f64 / 1000.0);
+            self.look_applied = Some(look);
+        }
+    }
+
+    /// The running session was started with the current scene and look.
+    fn scene_started(&mut self) {
+        let s = &self.settings;
+        self.scene_applied = Some(s.scene_spec());
+        self.look_applied = Some((s.background, s.transition, s.transition_ms));
+    }
+
     /// Whether the running session can switch to `scene` live.
     pub fn can_switch_live(&self, scene: Scene) -> bool {
         let cam_running = self.recording.as_ref().is_some_and(|s| s.camera_name().is_some());
@@ -278,7 +311,11 @@ struct App {
 }
 
 fn load_devices(st: &mut State) {
-    st.displays = crate::screen::displays()
+    let ds = crate::screen::displays();
+    if let Some(d) = ds.as_ref().ok().and_then(|ds| ds.get(st.settings.display.max(1) - 1).or(ds.first())) {
+        st.screen_aspect = d.pixels.0 as f64 / d.pixels.1.max(1) as f64;
+    }
+    st.displays = ds
         .map(|ds| {
             ds.iter()
                 .enumerate()
@@ -323,6 +360,9 @@ impl App {
             refresh_devices: false,
             permissions_missing: false,
             pip_applied: None,
+            scene_applied: None,
+            look_applied: None,
+            screen_aspect: 16.0 / 10.0,
             cam_aspect: 16.0 / 9.0,
             live: crate::live::Live::new(),
             replay_stats: None,
@@ -636,6 +676,7 @@ impl App {
             match self.options(None).and_then(|(o, t)| Session::start_with_camera(&o, t, false, Some(cb), cam)) {
                 Ok(s) => {
                     self.st.pip_applied = Some(self.st.settings.pip_spec());
+                    self.st.scene_started();
                     self.st.preview = Some(s);
                     self.st.permissions_missing = false;
                 }
@@ -687,6 +728,7 @@ impl App {
             Ok(sess) => {
                 let _ = std::fs::write(record::pidfile_path(), format!("{}\n{}\n", std::process::id(), file.display()));
                 self.st.pip_applied = Some(self.st.settings.pip_spec());
+                self.st.scene_started();
                 self.st.recording = Some(sess);
                 record::PAUSE_REQ.store(false, Ordering::SeqCst);
                 record::RESUME_REQ.store(false, Ordering::SeqCst);
@@ -857,6 +899,7 @@ impl App {
         }
         self.sync_preview();
         self.st.apply_pip();
+        self.st.apply_scene();
         let clock = self.st.clock();
         let view = menubar::View {
             recording: self.st.recording.is_some(),

@@ -9,7 +9,8 @@ use anyhow::{Result, bail};
 
 use crate::camera::{self, Camera, Mic};
 use crate::synth::Synth;
-use crate::compose::{Compositor, PipSpec, Scene};
+use crate::compose::{Compositor, PipSpec};
+use crate::layout::{Background, Scene, SceneSpec, Transition};
 use crate::screen::{self, ScreenCapture, ScreenConfig};
 use crate::tcc::{self, Status};
 use crate::util::*;
@@ -76,7 +77,12 @@ extern "C" fn on_signal(_: libc::c_int) {
 
 pub struct Options {
     pub output: PathBuf,
+    /// Output (canvas) size.
     pub size: (usize, usize),
+    /// The screen's shape fitted in the canvas (never above `native`): the
+    /// size the screen is captured at when it isn't captured natively.
+    /// Equal to `size` unless the canvas has another shape.
+    pub screen_size: (usize, usize),
     /// The capture target's native pixel size. Larger targets are captured
     /// at this size and scaled with `scale::FrameScaler` (ScreenCaptureKit's
     /// own downscale is soft).
@@ -100,8 +106,12 @@ pub struct Options {
     /// Gain in dB for [system, mic] in the mix track.
     pub gains_db: [f32; 2],
     pub mic_backend: MicBackend,
-    /// Initial scene (only Screen without a webcam).
-    pub scene: Scene,
+    /// Initial scene.
+    pub scene: SceneSpec,
+    /// Behind scene layers that don't cover the frame.
+    pub background: Background,
+    pub transition: Transition,
+    pub transition_secs: f64,
     /// System audio offset in ms; None = the output device's latency.
     pub system_offset_ms: Option<f64>,
     /// Microphone offset in ms.
@@ -164,13 +174,21 @@ pub struct Session {
 const CAMERA_SETTLE_SECS: f64 = 2.0;
 
 /// Size ScreenCaptureKit delivers: the native size when it is larger than
-/// the output (scaled down here with a high-quality filter), else the output
-/// size. `REC_SCALER=sck` keeps ScreenCaptureKit's own scaling.
+/// the screen's place in the output (scaled down here with a high-quality
+/// filter), else that size. `REC_SCALER=sck` keeps ScreenCaptureKit's own
+/// scaling.
 fn capture_size(o: &Options) -> (usize, usize) {
-    let (w, h) = o.size;
+    let (w, h) = o.screen_size;
     let (nw, nh) = o.native;
     let sck = std::env::var("REC_SCALER").as_deref() == Ok("sck");
     if o.test_pattern.is_none() && !sck && nw * nh > w * h { (nw, nh) } else { (w, h) }
+}
+
+/// Whether frames go through the compositor: a webcam, a scene other than
+/// the plain screen, or a canvas of another shape than the screen. The plain
+/// screen otherwise goes to the encoder as captured (no copies).
+pub fn composed(o: &Options) -> bool {
+    o.webcam.is_some() || o.scene != SceneSpec::Template(Scene::Screen) || o.screen_size != o.size
 }
 
 impl Session {
@@ -193,12 +211,21 @@ impl Session {
         // BGRA for the compositor, and for a window, whose transparent
         // rounded corners are filled before encoding (420v has no alpha).
         let window = matches!(target, Some(screen::Target::Window(_)));
-        let pixel_format = if o.webcam.is_some() || window { PIX_BGRA } else { PIX_420V };
+        let composed = composed(o);
+        let pixel_format = if composed || window { PIX_BGRA } else { PIX_420V };
         let spec = VideoSpec { width: w, height: h, fps: o.fps, codec: o.codec, bitrate: o.bitrate, pixel_format };
-        let compositor = o.webcam.as_ref().map(|_| Compositor::new(w, h, o.pip.clone()));
+        let compositor = composed.then(|| {
+            let mut c = Compositor::new(w, h, o.pip.clone());
+            c.set_background(o.background);
+            c.set_transition(o.transition, o.transition_secs);
+            c.set_scene(o.scene.clone(), false);
+            c
+        });
         let path = write.then_some(o.output.as_path());
-        let mut sink = Sink::new(path, &spec, o.system_audio, o.mic.is_some(), o.audio_layout, o.gains_db, compositor, o.scene, preview)?;
-        if capture_size(o) != (w, h)
+        let mut sink = Sink::new(path, &spec, o.system_audio, o.mic.is_some(), o.audio_layout, o.gains_db, compositor, preview)?;
+        // Composed scenes draw the screen at sizes of their own: the scaler
+        // takes it there from whatever size it is captured at.
+        if (composed || capture_size(o) != (w, h))
             && let Some(sc) = crate::scale::FrameScaler::new(w, h)
         {
             sink.set_scaler(sc);
@@ -285,7 +312,6 @@ impl Session {
     }
 
     fn start_sources(&mut self, o: &Options, target: Option<screen::Target>, pixel_format: u32, cam: Option<Camera>) -> Result<()> {
-        let (w, h) = o.size;
         let mut cam = cam;
         if let Some(sel) = &o.webcam {
             let reuse = cam.take_if(|c| Camera::resolve(sel.as_deref()).is_ok_and(|id| id == c.id));
@@ -316,7 +342,8 @@ impl Session {
         }
         match (o.test_pattern, target) {
             (Some(noise), _) => {
-                self.synth = Some(Synth::start(w, h, o.fps, pixel_format, noise, o.system_audio, self.shared.clone()));
+                let (sw, sh) = o.screen_size;
+                self.synth = Some(Synth::start(sw, sh, o.fps, pixel_format, noise, o.system_audio, self.shared.clone()));
                 self.description = format!("test pattern{}", if noise { " (noise)" } else { "" });
             }
             (None, Some(target)) => {
@@ -409,13 +436,20 @@ impl Session {
         self.shared.with(|s| s.set_pip(pip));
     }
 
+    /// Change the scene background and transition live.
+    pub fn set_look(&self, background: Background, transition: Transition, secs: f64) {
+        self.shared.with(|s| s.set_look(background, transition, secs));
+    }
+
     pub fn cam_aspect(&self) -> Option<f64> {
         let mut a = None;
         self.shared.with(|s| a = s.cam_aspect());
         a
     }
 
-    pub fn set_scene(&self, scene: Scene) -> bool {
+    /// Switch scenes live (with the transition); false if this session
+    /// can't show it (see `Sink::set_scene`).
+    pub fn set_scene(&self, scene: SceneSpec) -> bool {
         let mut ok = false;
         self.shared.with(|s| ok = s.set_scene(scene));
         ok

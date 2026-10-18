@@ -2,6 +2,7 @@ mod app;
 mod camera;
 mod compose;
 mod hotkey;
+mod layout;
 mod live;
 mod mixer;
 mod outlatency;
@@ -148,11 +149,30 @@ pub struct RecordArgs {
     /// Overlay a webcam (optionally: unique ID or name substring).
     #[arg(short, long, visible_alias = "cam", value_name = "DEVICE", num_args = 0..=1, default_missing_value = "")]
     webcam: Option<String>,
-    /// Scene: screen, screen-cam (picture-in-picture) or cam (webcam full
-    /// frame). Default: screen-cam with a webcam, else screen. A camera
-    /// scene turns the webcam on.
+    /// Scene template: screen, screen-cam (picture-in-picture), cam
+    /// (webcam full frame), presenter, side-by-side, cam-screen, split,
+    /// reaction or vertical. Default: screen-cam with a webcam, else
+    /// screen. A camera scene turns the webcam on.
     #[arg(long, value_enum)]
     scene: Option<compose::Scene>,
+    /// A custom scene: a JSON layout (the app's Scenes > Custom export).
+    #[arg(long, value_name = "FILE", conflicts_with = "scene")]
+    scene_file: Option<PathBuf>,
+    /// Shape of the output frame: source (the screen's own shape), 16:9,
+    /// 9:16 (Shorts/Reels), 1:1 or 4:5. A preset resolution names the
+    /// short side (1080p of 9:16 is 1080x1920).
+    #[arg(long, value_enum, default_value_t = layout::Canvas::Source)]
+    canvas: layout::Canvas,
+    /// Background behind scene layers: a hex color, or two (top,bottom)
+    /// for a gradient.
+    #[arg(long, value_name = "RRGGBB[,RRGGBB]")]
+    background: Option<String>,
+    /// How live scene switches animate.
+    #[arg(long, value_enum, default_value_t = layout::Transition::Move)]
+    transition: layout::Transition,
+    /// Scene transition length in milliseconds.
+    #[arg(long, default_value_t = 400)]
+    transition_ms: u32,
     /// Webcam overlay width as a fraction of the frame width.
     #[arg(long, default_value_t = 0.22)]
     pip_size: f64,
@@ -288,6 +308,47 @@ fn parse_size(s: &str, native: (usize, usize)) -> Result<(usize, usize)> {
     Ok((even(nw * k), even(nh * k)))
 }
 
+/// Output size for a canvas of a fixed shape (`aspect` = width / height):
+/// a preset names the short side (1080p of 9:16 is 1080x1920), WxH is the
+/// largest frame of that shape inside it.
+fn canvas_size(s: &str, aspect: f64, native: (usize, usize)) -> Result<(usize, usize)> {
+    let lower = s.to_lowercase();
+    let short = match lower.as_str() {
+        "720p" => 720.0,
+        "1080p" => 1080.0,
+        "1440p" => 1440.0,
+        "4k" | "2160p" | "uhd" => 2160.0,
+        "native" => native.0.min(native.1).max(2) as f64,
+        _ => {
+            let Some((w, h)) = lower.split_once('x') else {
+                bail!("bad --resolution {s:?}: use 720p/1080p/1440p/4k/native/WxH")
+            };
+            let (bw, bh) = (w.trim().parse::<usize>()? as f64, h.trim().parse::<usize>()? as f64);
+            let (w, h) = if bw / bh > aspect { (bh * aspect, bh) } else { (bw, bw / aspect) };
+            return Ok((even(w), even(h)));
+        }
+    };
+    Ok(if aspect >= 1.0 { (even(short * aspect), even(short)) } else { (even(short), even(short / aspect)) })
+}
+
+/// The largest frame with the source's shape inside a `w`x`h` canvas,
+/// never larger than the source (even sizes).
+fn fit_inside(native: (usize, usize), w: usize, h: usize) -> (usize, usize) {
+    let (nw, nh) = ((native.0 & !1).max(2) as f64, (native.1 & !1).max(2) as f64);
+    let k = (w as f64 / nw).min(h as f64 / nh).min(1.0);
+    (even(nw * k).min(w), even(nh * k).min(h))
+}
+
+fn parse_background(s: &str) -> Result<layout::Background> {
+    let mut parts = s.split(',').map(str::trim);
+    let top = parse_hex(parts.next().unwrap_or_default())?;
+    let bottom = match parts.next() {
+        Some(b) => parse_hex(b)?,
+        None => top,
+    };
+    Ok(layout::Background { top, bottom })
+}
+
 /// The live encode's bounding box for a preset or WxH (the encoder fits the
 /// frame inside it, keeping its aspect ratio).
 fn live_box(s: &str) -> Result<(usize, usize)> {
@@ -388,13 +449,20 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         }))
     };
     let mut webcam = a.webcam.map(|s| if s.is_empty() || s == "default" { None } else { Some(s) });
-    let scene = a.scene.unwrap_or(if webcam.is_some() { compose::Scene::ScreenCam } else { compose::Scene::Screen });
+    let scene = match &a.scene_file {
+        Some(f) => {
+            let text = std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("--scene-file {}: {e}", f.display()))?;
+            layout::SceneSpec::Custom(serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("--scene-file {}: {e}", f.display()))?)
+        }
+        None => layout::SceneSpec::Template(a.scene.unwrap_or(if webcam.is_some() { compose::Scene::ScreenCam } else { compose::Scene::Screen })),
+    };
     if scene.uses_cam() && webcam.is_none() {
         webcam = Some(None);
     }
     let mut opts = record::Options {
         output: a.output.unwrap_or_else(default_output),
         size: (0, 0),
+        screen_size: (0, 0),
         native: (0, 0),
         fps: a.fps,
         codec: Codec::H264,
@@ -425,6 +493,12 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         gains_db: [a.system_gain, a.mic_gain],
         mic_backend: if a.test_pattern { record::MicBackend::Avcapture } else { a.mic_backend },
         scene,
+        background: match &a.background {
+            Some(b) => parse_background(b)?,
+            None => layout::Background::default(),
+        },
+        transition: a.transition,
+        transition_secs: a.transition_ms.min(3000) as f64 / 1000.0,
         system_offset_ms: a.system_audio_offset_ms,
         mic_offset_ms: a.mic_offset_ms,
         write: !a.no_record,
@@ -464,7 +538,10 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
             (Some(screen::Target::Display(d, None)), native)
         }
     };
-    let (w, h) = parse_size(&a.resolution, native)?;
+    let (w, h) = match a.canvas.aspect() {
+        Some(aspect) => canvas_size(&a.resolution, aspect, native)?,
+        None => parse_size(&a.resolution, native)?,
+    };
     let codec = a.codec.unwrap_or(if w * h > 1920 * 1080 { Codec::Hevc } else { Codec::H264 });
     // Bits per pixel per frame tuned for screen content (sharp text).
     let bpp = match codec {
@@ -481,6 +558,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         bail!("ProRes needs a .mov output");
     }
     opts.size = (w, h);
+    opts.screen_size = if a.canvas.aspect().is_some() { fit_inside(native, w, h) } else { (w, h) };
     opts.native = (native.0 & !1, native.1 & !1);
     if a.no_record && a.replay.is_none() && a.stream.is_empty() {
         bail!("--no-record needs --replay or --stream");
@@ -740,5 +818,27 @@ mod tests {
         let a = parse_record_args(&["--scene", "cam"]).unwrap();
         assert_eq!(a.scene, Some(compose::Scene::Cam));
         assert!(parse_record_args(&["--scene", "nope"]).is_err());
+        for s in ["presenter", "side-by-side", "cam-screen", "split", "reaction", "vertical"] {
+            assert!(parse_record_args(&["--scene", s]).is_ok(), "{s}");
+        }
+        let a = parse_record_args(&["--canvas", "9:16", "--transition", "fade", "--background", "101010,303030"]).unwrap();
+        assert_eq!(a.canvas, layout::Canvas::Portrait);
+        assert_eq!(a.transition, layout::Transition::Fade);
+        assert_eq!(parse_background(a.background.as_deref().unwrap()).unwrap(), layout::Background { top: [16; 3], bottom: [48; 3] });
+        assert!(parse_record_args(&["--scene", "cam", "--scene-file", "x.json"]).is_err());
+    }
+
+    #[test]
+    fn canvas_sizes() {
+        let native = (3456, 2234);
+        assert_eq!(canvas_size("1080p", 9.0 / 16.0, native).unwrap(), (1080, 1920));
+        assert_eq!(canvas_size("1080p", 16.0 / 9.0, native).unwrap(), (1920, 1080));
+        assert_eq!(canvas_size("4k", 1.0, native).unwrap(), (2160, 2160));
+        assert_eq!(canvas_size("720p", 0.8, native).unwrap(), (720, 900));
+        assert_eq!(canvas_size("1000x1000", 16.0 / 9.0, native).unwrap(), (1000, 562));
+        // The screen inside a portrait canvas: full width, its own shape.
+        assert_eq!(fit_inside(native, 1080, 1920), (1080, 698));
+        // Never larger than the source.
+        assert_eq!(fit_inside((1280, 800), 3840, 2160), (1280, 800));
     }
 }

@@ -8,6 +8,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::compose::{PipSpec, Place, Scene, Shape};
+use crate::layout::{Background, Canvas, Transition};
 use crate::writer::{AudioLayout, Codec};
 
 pub const RESOLUTIONS: [(&str, &str); 5] =
@@ -29,6 +30,12 @@ pub struct Settings {
     /// 1-based display number.
     pub display: usize,
     pub scene: Scene,
+    /// Shape of the output frame.
+    pub canvas: Canvas,
+    /// Behind scene layers that don't cover the frame.
+    pub background: Background,
+    pub transition: Transition,
+    pub transition_ms: u32,
     /// Camera unique ID; None = system default.
     pub camera: Option<String>,
     pub mic_enabled: bool,
@@ -87,6 +94,10 @@ impl Default for Settings {
             bitrate_mbps: None,
             display: 1,
             scene: Scene::Screen,
+            canvas: Canvas::Source,
+            background: Background::default(),
+            transition: Transition::Move,
+            transition_ms: 400,
             camera: None,
             mic_enabled: true,
             mic: None,
@@ -190,6 +201,11 @@ impl Settings {
         }
     }
 
+    /// The scene these settings show.
+    pub fn scene_spec(&self) -> crate::layout::SceneSpec {
+        crate::layout::SceneSpec::Template(self.scene)
+    }
+
     /// The settings that need a new capture session when they change. The
     /// overlay's look and position are applied live instead.
     pub fn capture_key(&self) -> Settings {
@@ -203,6 +219,12 @@ impl Settings {
             pip_border_color: d.pip_border_color,
             pip_shadow: d.pip_shadow,
             mirror: d.mirror,
+            // Scenes switch live (their look too), as long as the camera is
+            // on for all of them.
+            scene: if self.scene.uses_cam() { Scene::ScreenCam } else { Scene::Screen },
+            background: d.background,
+            transition: d.transition,
+            transition_ms: d.transition_ms,
             preview_low_power: d.preview_low_power,
             replay_enabled: d.replay_enabled,
             replay_secs: d.replay_secs,
@@ -282,6 +304,11 @@ impl Settings {
             a.extend(["-o".into(), o.to_string_lossy().into_owned()]);
         }
         a.extend(["--scene".into(), value(self.scene)]);
+        a.extend(["--canvas".into(), value(self.canvas)]);
+        let hex = |c: [u8; 3]| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+        a.extend(["--background".into(), format!("{},{}", hex(self.background.top), hex(self.background.bottom))]);
+        a.extend(["--transition".into(), value(self.transition)]);
+        a.extend(["--transition-ms".into(), self.transition_ms.to_string()]);
         if self.scene.uses_cam() {
             a.extend(["--webcam".into(), self.camera.clone().unwrap_or_else(|| "default".into())]);
         }
@@ -393,6 +420,13 @@ mod tests {
         assert_eq!(a.capture_key(), b.capture_key());
         let c = Settings { fps: 30, ..a.clone() };
         assert_ne!(a.capture_key(), c.capture_key());
+        // Camera scenes switch live; turning the camera on restarts.
+        let d = Settings { scene: Scene::SideBySide, ..a.clone() };
+        let e = Settings { scene: Scene::Reaction, transition: Transition::Fade, ..a.clone() };
+        assert_eq!(d.capture_key(), e.capture_key());
+        assert_ne!(a.capture_key(), d.capture_key());
+        let f = Settings { canvas: Canvas::Portrait, ..a.clone() };
+        assert_ne!(a.capture_key(), f.capture_key());
     }
 
     #[test]

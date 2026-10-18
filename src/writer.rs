@@ -24,7 +24,8 @@ use objc2_core_video::{
 };
 use objc2_foundation::NSURL;
 
-use crate::compose::{Compositor, Scene};
+use crate::compose::Compositor;
+use crate::layout::{Scene, SceneSpec};
 use crate::mixer::Mixer;
 use crate::util::*;
 
@@ -224,7 +225,6 @@ pub struct Sink {
     /// Next slot on the output timeline (real slots minus paused ones).
     out_slot: i64,
     pauses: Pauses,
-    scene: Scene,
     /// Stop writing after this many output slots (exact `--duration`).
     limit: Option<i64>,
     /// Output-timeline position (seconds) where each audio stem continues.
@@ -249,8 +249,9 @@ pub struct Sink {
     corner_fill: Option<crate::compose::CornerFill>,
     /// Hold the start until the camera is ready (see `wait_for_camera`).
     cam_gate: Option<CamGate>,
-    /// Output-size buffers for scaled screen frames fed to the compositor.
-    scaled_pool: Option<CFRetained<CVPixelBufferPool>>,
+    /// Buffers for screen frames scaled to the size the scene draws them
+    /// at, fed to the compositor (see `Compositor::screen_target`).
+    scaled_pool: Option<((usize, usize), CFRetained<CVPixelBufferPool>)>,
     /// Output size and pixel format (for a pool created later).
     out_spec: (usize, usize, u32),
     pub stats: Stats,
@@ -336,7 +337,6 @@ impl Sink {
         layout: AudioLayout,
         gains_db: [f32; 2],
         compositor: Option<Compositor>,
-        scene: Scene,
         preview: Option<PreviewFn>,
     ) -> Result<Self> {
         let out = match path {
@@ -360,7 +360,6 @@ impl Sink {
             next_slot: 0,
             out_slot: 0,
             pauses: Pauses::default(),
-            scene: if compositor.is_some() { scene } else { Scene::Screen },
             limit: None,
             audio_next: [None; 2],
             preroll: VecDeque::new(),
@@ -430,14 +429,17 @@ impl Sink {
         (ticks / self.tps() as f64).ceil() as i64
     }
 
-    /// Switch scenes live. Scenes with the camera need a compositor (the
-    /// session was started with a webcam); returns false otherwise.
-    pub fn set_scene(&mut self, scene: Scene) -> bool {
-        if self.compositor.is_none() && scene != Scene::Screen {
-            return false;
+    /// Switch scenes live, with the scene transition. Anything but the
+    /// plain screen needs a compositor (the session was started with a
+    /// webcam or a composed scene); returns false otherwise.
+    pub fn set_scene(&mut self, scene: SceneSpec) -> bool {
+        match self.compositor.as_mut() {
+            Some(c) => {
+                c.set_scene(scene, true);
+                true
+            }
+            None => scene == SceneSpec::Template(Scene::Screen),
         }
-        self.scene = scene;
-        true
     }
 
     /// Pause at host time `now`: nothing captured from the next frame slot on
@@ -462,14 +464,12 @@ impl Sink {
         self.pauses.is_paused()
     }
 
-    /// Screen frames arrive at their native size: scale them to the output.
+    /// Scale screen frames with the high-quality scaler: to the output
+    /// size, or with a compositor to the size the scene draws them at.
     pub fn set_scaler(&mut self, scaler: crate::scale::FrameScaler) {
         let (w, h, f) = self.out_spec;
         if self.out.is_none() && self.own_pool.is_none() {
             self.own_pool = Some(make_pool(w, h, f));
-        }
-        if self.compositor.is_some() {
-            self.scaled_pool = Some(make_pool(w, h, f));
         }
         self.scaler = Some(scaler);
     }
@@ -489,6 +489,15 @@ impl Sink {
 
     pub fn set_live(&mut self, live: std::sync::Arc<crate::live::Live>) {
         self.live = Some(live);
+    }
+
+    /// Change the scene background and transition live (no-op when not
+    /// composing).
+    pub fn set_look(&mut self, background: crate::layout::Background, transition: crate::layout::Transition, secs: f64) {
+        if let Some(c) = self.compositor.as_mut() {
+            c.set_background(background);
+            c.set_transition(transition, secs);
+        }
     }
 
     /// Change the camera overlay live (no-op without a webcam).
@@ -804,21 +813,28 @@ impl Sink {
             }
             let mut write = write;
             let mut screen = self.screen_last.as_ref().map(|s| s.0.clone());
-            // A native-size capture going through the compositor: scale it
-            // first (the compositor then draws it 1:1).
-            if let (Some(sc), Some(pool), Some(src)) = (self.scaler.as_mut(), &self.scaled_pool, screen.as_deref())
-                && sc.needed(src)
-            {
-                let mut buf = std::ptr::null_mut();
-                unsafe { CVPixelBufferPool::create_pixel_buffer(None, pool, std::ptr::NonNull::from(&mut buf)) };
-                if let Some(b) = std::ptr::NonNull::new(buf) {
-                    let b: CFRetained<CVPixelBuffer> = unsafe { CFRetained::from_raw(b) };
-                    if sc.scale(src, &b) {
-                        screen = Some(b);
+            // Going through the compositor: scale the screen to the size the
+            // scene draws it at first (the compositor then draws it 1:1).
+            if let (Some(c), Some(sc), Some(src)) = (self.compositor.as_ref(), self.scaler.as_mut(), screen.as_deref()) {
+                use objc2_core_video::{CVPixelBufferGetHeight, CVPixelBufferGetWidth};
+                let (sw, sh) = (CVPixelBufferGetWidth(src), CVPixelBufferGetHeight(src));
+                if let Some(size) = c.screen_target(sw as f64, sh as f64) {
+                    sc.set_size(size);
+                    if self.scaled_pool.as_ref().is_none_or(|(s, _)| *s != size) {
+                        self.scaled_pool = Some((size, make_pool(size.0, size.1, self.out_spec.2)));
+                    }
+                    let pool = &self.scaled_pool.as_ref().unwrap().1;
+                    let mut buf = std::ptr::null_mut();
+                    unsafe { CVPixelBufferPool::create_pixel_buffer(None, pool, std::ptr::NonNull::from(&mut buf)) };
+                    if let Some(b) = std::ptr::NonNull::new(buf) {
+                        let b: CFRetained<CVPixelBuffer> = unsafe { CFRetained::from_raw(b) };
+                        if sc.scale(src, &b) {
+                            screen = Some(b);
+                        }
                     }
                 }
             }
-            if screen.is_none() && self.scene != Scene::Cam {
+            if screen.is_none() && self.compositor.as_ref().is_none_or(|c| c.needs_screen()) {
                 continue;
             }
             if write
@@ -842,11 +858,9 @@ impl Sink {
                     continue;
                 };
                 let cam = self.cam_last.as_ref().map(|b| b.0.clone());
-                let scene = self.scene;
-                self.compositor.as_mut().unwrap().render(scene, screen.as_deref(), cam.as_deref(), &buf);
+                self.compositor.as_mut().unwrap().render(slot_t, screen.as_deref(), cam.as_deref(), &buf);
                 buf
-            } else if self.scaled_pool.is_none()
-                && let Some(sc) = &self.scaler
+            } else if let Some(sc) = &self.scaler
                 && sc.needed(screen.as_deref().unwrap())
             {
                 let Some(buf) = self.new_output_buffer() else {
@@ -1148,13 +1162,17 @@ mod tests {
                 let f = if std::env::var_os("PROBE_CAM").is_some() {
                     let out = crate::compose::color_probe::stripes(320, 64, &[0], None);
                     let pip = crate::compose::PipSpec { mirror: false, ..Default::default() };
-                    crate::compose::Compositor::new(320, 64, pip).render(crate::compose::Scene::Cam, None, Some(&src), &out);
+                    let mut c = crate::compose::Compositor::new(320, 64, pip);
+                    c.set_scene(crate::layout::SceneSpec::Template(crate::compose::Scene::Cam), false);
+                    c.render(0.0, None, Some(&src), &out);
                     let tf = out.attachment(kCVImageBufferTransferFunctionKey, std::ptr::null_mut());
                     println!("compositor output transfer tag: {:?}", tf);
                     out
                 } else if std::env::var_os("PROBE_SCREEN").is_some() {
                     let out = crate::compose::color_probe::stripes(320, 64, &[0], None);
-                    crate::compose::Compositor::new(320, 64, Default::default()).render(crate::compose::Scene::Screen, Some(&src), None, &out);
+                    let mut c = crate::compose::Compositor::new(320, 64, Default::default());
+                    c.set_scene(crate::layout::SceneSpec::Template(crate::compose::Scene::Screen), false);
+                    c.render(0.0, Some(&src), None, &out);
                     out
                 } else {
                     src

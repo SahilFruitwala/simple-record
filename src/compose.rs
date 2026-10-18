@@ -1,11 +1,15 @@
-//! GPU (CoreImage/Metal) compositing of the webcam over the screen.
+//! GPU (CoreImage/Metal) compositing of scenes: the screen, the webcam,
+//! images and text, placed by `crate::layout`.
+
+use std::collections::HashMap;
 
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
-use objc2_core_image::{CIColor, CIContext, CIImage};
+use objc2_core_image::{CIColor, CIContext, CIFilter, CIImage, CIVector};
 use objc2_core_video::CVPixelBuffer;
 
+use crate::layout::{self, Background, Content, Env, Frame, Placed, SceneSpec, Style, TextSpec, Transition};
 use crate::util::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
@@ -60,34 +64,7 @@ impl Shape {
     }
 }
 
-/// What the output frame shows. Switchable live while the webcam runs.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Scene {
-    /// The screen only.
-    Screen,
-    /// The screen with the webcam picture-in-picture.
-    #[default]
-    ScreenCam,
-    /// The webcam full frame.
-    Cam,
-}
-
-impl Scene {
-    pub const ALL: [Scene; 3] = [Scene::Screen, Scene::ScreenCam, Scene::Cam];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Scene::Screen => "Screen",
-            Scene::ScreenCam => "Screen + Camera",
-            Scene::Cam => "Camera",
-        }
-    }
-
-    pub fn uses_cam(self) -> bool {
-        self != Scene::Screen
-    }
-}
+pub use crate::layout::Scene;
 
 /// Uniform scale and offset that fits (`cover` false) or fills (`cover`
 /// true) a `sw`x`sh` source into a `dw`x`dh` canvas, centred.
@@ -155,6 +132,13 @@ impl Default for PipSpec {
             shadow: false,
             mirror: true,
         }
+    }
+}
+
+impl PipSpec {
+    /// The overlay's outline.
+    pub fn style(&self) -> Style {
+        Style { shape: self.shape, roundness: self.roundness, border: self.border, border_color: self.border_color, shadow: self.shadow }
     }
 }
 
@@ -310,49 +294,62 @@ fn alpha_image(alpha: &[u8], w: usize, h: usize, color: [u8; 3]) -> Retained<CII
     }
 }
 
-type DecorKey = (usize, usize, Shape, u64, u64, [u8; 3], bool);
+type DecorKey = (usize, usize, Shape, u64, u64, [u8; 3], bool, u64);
 
-/// Static overlay layers for one size and style. They are built once on
-/// the CPU and reused every frame; moving the overlay only changes a
-/// transform, so dragging costs nothing.
+/// Static layers for one layer size and style: where the picture shows,
+/// its border and its shadow. They are built once on the CPU and reused
+/// every frame; moving a layer only changes a transform, so dragging costs
+/// nothing.
+#[derive(Clone)]
 struct Decor {
     key: DecorKey,
-    /// Where the camera shows (inside the border, if any).
+    /// Where the picture shows (inside the border, if any).
     mask: Retained<CIImage>,
     border: Option<Retained<CIImage>>,
-    /// Shadow image and its padding in pixels.
+    /// Shadow image and its padding in output pixels.
     shadow: Option<(Retained<CIImage>, f64)>,
 }
 
 impl Decor {
-    fn key(pip: &PipSpec, w: usize, h: usize, out_h: f64) -> DecorKey {
-        let bw = border_px(pip, out_h);
-        (w, h, pip.shape, pip.roundness.to_bits(), bw.to_bits(), pip.border_color, pip.shadow)
+    fn key(style: &Style, w: usize, h: usize, out_h: f64, k: f64) -> DecorKey {
+        let bw = border_px(style.border, out_h);
+        (w, h, style.shape, style.roundness.to_bits(), bw.to_bits(), style.border_color, style.shadow, k.to_bits())
     }
 
-    fn build(pip: &PipSpec, w: usize, h: usize, out_h: f64) -> Decor {
-        let bw = border_px(pip, out_h);
-        let outer = mask(pip.shape, w, h, pip.roundness, 0.0);
-        let inner = if bw > 0.0 { mask(pip.shape, w, h, pip.roundness, bw) } else { outer.clone() };
-        let shadow = pip.shadow.then(|| {
-            let pad = (out_h * 0.03).round().max(3.0) as usize;
-            let a = shadow(&outer, w, h, pad, 0.45);
-            (alpha_image(&a, w + 2 * pad, h + 2 * pad, [0, 0, 0]), pad as f64)
+    /// Built at `k` times the size and scaled up: below 1 while a
+    /// transition animates the size every frame (cheap, and the softer
+    /// edges don't show in motion).
+    fn build(style: &Style, w: usize, h: usize, out_h: f64, k: f64) -> Decor {
+        let (mw, mh) = (((w as f64 * k).round() as usize).max(1), ((h as f64 * k).round() as usize).max(1));
+        let (sx, sy) = (w as f64 / mw as f64, h as f64 / mh as f64);
+        let up = |img: Retained<CIImage>| -> Retained<CIImage> {
+            if mw == w && mh == h {
+                img
+            } else {
+                unsafe { img.imageByApplyingTransform(CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx: 0.0, ty: 0.0 }) }
+            }
+        };
+        let bw = border_px(style.border, out_h) * mw as f64 / w as f64;
+        let outer = mask(style.shape, mw, mh, style.roundness, 0.0);
+        let inner = if bw > 0.0 { mask(style.shape, mw, mh, style.roundness, bw) } else { outer.clone() };
+        let shadow = style.shadow.then(|| {
+            let pad = ((out_h * 0.03).round().max(3.0) * mw as f64 / w as f64).round().max(1.0) as usize;
+            let a = shadow(&outer, mw, mh, pad, 0.45);
+            (up(alpha_image(&a, mw + 2 * pad, mh + 2 * pad, [0, 0, 0])), pad as f64 * sx)
         });
         Decor {
-            key: Self::key(pip, w, h, out_h),
-            mask: alpha_image(&inner, w, h, [255, 255, 255]),
-            border: (bw > 0.0).then(|| alpha_image(&outer, w, h, pip.border_color)),
+            key: Self::key(style, w, h, out_h, k),
+            mask: up(alpha_image(&inner, mw, mh, [255, 255, 255])),
+            border: (bw > 0.0).then(|| up(alpha_image(&outer, mw, mh, style.border_color))),
             shadow,
         }
     }
 }
 
-/// Border width in output pixels.
-fn border_px(pip: &PipSpec, out_h: f64) -> f64 {
-    (pip.border.max(0.0) * out_h / 1080.0).round()
+/// Border width in output pixels for a width given at 1080p.
+fn border_px(border: f64, out_h: f64) -> f64 {
+    (border.max(0.0) * out_h / 1080.0).round()
 }
-
 /// Fills a window capture's transparent rounded corners. ScreenCaptureKit
 /// delivers a single window with its corners (and any other uncovered
 /// pixels) transparent, which a video frame shows as black. Behind the
@@ -421,10 +418,28 @@ pub struct Compositor {
     w: f64,
     h: f64,
     pip: PipSpec,
-    decor: Option<Decor>,
+    scene: SceneSpec,
+    background: Background,
+    transition: Transition,
+    transition_secs: f64,
+    /// The scene being left and when (on the frame clock, seconds) the
+    /// change began.
+    leaving: Option<(SceneSpec, f64)>,
+    /// Time of the last frame rendered.
+    now: f64,
+    /// Recently used layer decorations, oldest first.
+    decor: Vec<Decor>,
+    /// Image files (None: could not be read).
+    images: HashMap<String, Option<Retained<CIImage>>>,
+    texts: Vec<((TextSpec, u64), Retained<CIImage>)>,
     /// Aspect ratio of the last camera frame (16:9 until one arrives).
     cam_aspect: f64,
+    /// Aspect ratio of the last screen frame (the frame's until one arrives).
+    screen_aspect: f64,
 }
+
+/// Decorations kept for reuse (a few layers, plus a transition's sizes).
+const DECOR_CACHE: usize = 12;
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> CGRect {
     CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
@@ -434,13 +449,49 @@ fn translate(img: &CIImage, x: f64, y: f64) -> Retained<CIImage> {
     unsafe { img.imageByApplyingTransform(CGAffineTransform { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: x, ty: y }) }
 }
 
+fn ci_color(c: [u8; 3], alpha: f64) -> Retained<CIColor> {
+    let f = |v: u8| v as f64 / 255.0;
+    unsafe { CIColor::colorWithRed_green_blue_alpha(f(c[0]), f(c[1]), f(c[2]), alpha) }
+}
+
+/// `img` with its alpha multiplied by `alpha`.
+fn faded(img: &CIImage, alpha: f64) -> Retained<CIImage> {
+    unsafe {
+        let v = CIVector::vectorWithX_Y_Z_W(0.0, 0.0, 0.0, alpha);
+        let params = dict(vec![(&*ns("inputAVector"), obj(&*v))]);
+        img.imageByApplyingFilter_withInputParameters(&ns("CIColorMatrix"), &params)
+    }
+}
+
+/// A generator filter's output (no input image).
+fn generate(name: &str, params: Vec<(&objc2_foundation::NSString, Retained<objc2::runtime::AnyObject>)>) -> Option<Retained<CIImage>> {
+    unsafe { CIFilter::filterWithName_withInputParameters(&ns(name), Some(&dict(params)))?.outputImage() }
+}
+
 impl Compositor {
     pub fn new(width: usize, height: usize, pip: PipSpec) -> Self {
         unsafe {
             let opts = dict(vec![(&*ns("kCIContextCacheIntermediates"), num_b(false))]);
             let ctx = CIContext::contextWithOptions(Some(&opts));
             let cs = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).expect("sRGB colorspace");
-            Compositor { ctx, cs, w: width as f64, h: height as f64, pip, decor: None, cam_aspect: 16.0 / 9.0 }
+            Compositor {
+                ctx,
+                cs,
+                w: width as f64,
+                h: height as f64,
+                pip,
+                scene: SceneSpec::default(),
+                background: Background::default(),
+                transition: Transition::default(),
+                transition_secs: 0.4,
+                leaving: None,
+                now: 0.0,
+                decor: vec![],
+                images: HashMap::new(),
+                texts: vec![],
+                cam_aspect: 16.0 / 9.0,
+                screen_aspect: width as f64 / height.max(1) as f64,
+            }
         }
     }
 
@@ -449,76 +500,252 @@ impl Compositor {
         self.pip = pip;
     }
 
+    pub fn set_background(&mut self, bg: Background) {
+        self.background = bg;
+    }
+
+    pub fn set_transition(&mut self, kind: Transition, secs: f64) {
+        self.transition = kind;
+        self.transition_secs = secs.clamp(0.0, 3.0);
+    }
+
+    /// Show `scene`, animated with the transition when `animate` (from the
+    /// last frame rendered).
+    pub fn set_scene(&mut self, scene: SceneSpec, animate: bool) {
+        if scene == self.scene {
+            return;
+        }
+        let old = std::mem::replace(&mut self.scene, scene);
+        self.leaving = (animate && self.transition != Transition::Cut && self.transition_secs > 0.0).then_some((old, self.now));
+    }
+
     pub fn cam_aspect(&self) -> f64 {
         self.cam_aspect
     }
 
-    fn decor(&mut self, w: usize, h: usize) -> &Decor {
-        let key = Decor::key(&self.pip, w, h, self.h);
-        if self.decor.as_ref().is_none_or(|d| d.key != key) {
-            self.decor = Some(Decor::build(&self.pip, w, h, self.h));
-        }
-        self.decor.as_ref().unwrap()
+    fn env(&self) -> Env {
+        Env { w: self.w, h: self.h, screen_aspect: self.screen_aspect, cam_aspect: self.cam_aspect, pip: self.pip.clone(), background: self.background }
     }
 
-    pub fn render(&mut self, scene: Scene, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, out: &CVPixelBuffer) {
-        unsafe {
-            let canvas = rect(0.0, 0.0, self.w, self.h);
-            let black = CIImage::imageWithColor(&CIColor::colorWithRed_green_blue(0.0, 0.0, 0.0)).imageByCroppingToRect(canvas);
-            let cam = cam.map(|c| CIImage::imageWithCVPixelBuffer(c));
-            if let Some(c) = &cam {
-                let e = c.extent();
-                if e.size.height > 0.0 {
-                    self.cam_aspect = e.size.width / e.size.height;
-                }
-            }
-            if scene == Scene::Cam {
-                let mut img = black;
-                if let Some(c) = cam {
-                    let e = c.extent();
-                    let (s, tx, ty) = fit(e.size.width, e.size.height, self.w, self.h, true);
-                    let (a, tx) = if self.pip.mirror { (-s, self.w - tx) } else { (s, tx) };
-                    let t = CGAffineTransform { a, b: 0.0, c: 0.0, d: s, tx, ty };
-                    img = c.imageByApplyingTransform(t).imageByCroppingToRect(canvas).imageByCompositingOverImage(&img);
-                }
-                self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img, out, canvas, Some(&self.cs));
-                return;
-            }
-            let mut img = black;
-            if let Some(screen) = screen {
-                let sc = CIImage::imageWithCVPixelBuffer(screen);
-                let se = sc.extent();
-                // Fit the screen into the canvas (a no-op normally: the
-                // sink scales native-size captures to the output size).
-                let (sx, sy, tx, ty) = fill(se.size.width, se.size.height, self.w, self.h);
-                img = sc.imageByApplyingTransform(CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx, ty }).imageByCompositingOverImage(&img);
-            }
-            if scene == Scene::ScreenCam && let Some(c) = cam {
-                let [x, top, tw, th] = overlay_rect(&self.pip, self.w, self.h, self.cam_aspect);
-                // CoreImage's origin is bottom-left.
-                let y = self.h - top - th;
-                let e = c.extent();
-                // Crop the camera to the overlay's aspect ratio, centered.
-                let (s, ox, oy) = fit(e.size.width, e.size.height, tw, th, true);
-                let (a, tx) = if self.pip.mirror { (-s, x + tw - ox) } else { (s, x + ox) };
-                let t = CGAffineTransform { a, b: 0.0, c: 0.0, d: s, tx: tx - a * e.origin.x, ty: y + oy - s * e.origin.y };
-                let target = rect(x, y, tw, th);
-                let placed = c.imageByApplyingTransform(t).imageByCroppingToRect(target);
-                // Drop the shadow slightly below the overlay.
-                let drop = (self.h * 0.006).round();
-                let decor = self.decor(tw as usize, th as usize);
-                if let Some((sh, pad)) = &decor.shadow {
-                    img = translate(sh, x - pad, y - pad - drop).imageByCompositingOverImage(&img);
-                }
-                if let Some(b) = &decor.border {
-                    img = translate(b, x, y).imageByCompositingOverImage(&img);
-                }
-                let params = dict(vec![(&*ns("inputBackgroundImage"), obj(&*translate(&decor.mask, x, y)))]);
-                let overlay = placed.imageByApplyingFilter_withInputParameters(&ns("CISourceInCompositing"), &params);
-                img = overlay.imageByCompositingOverImage(&img);
-            }
-            self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img, out, canvas, Some(&self.cs));
+    /// Whether the scene (or the one being left) shows the screen: without
+    /// a screen frame there is nothing to emit then.
+    pub fn needs_screen(&self) -> bool {
+        let env = self.env();
+        self.scene.resolve(&env).uses_screen() || self.leaving.as_ref().is_some_and(|(s, _)| s.resolve(&env).uses_screen())
+    }
+
+    /// The size to scale a `sw`x`sh` screen frame to before compositing:
+    /// the largest size the scene draws it at, when smaller than the frame.
+    /// The compositor then draws it 1:1, so the high-quality scaler does
+    /// all the resampling.
+    pub fn screen_target(&self, sw: f64, sh: f64) -> Option<(usize, usize)> {
+        let env = Env { screen_aspect: sw / sh.max(1.0), ..self.env() };
+        let f = self.scene.resolve(&env);
+        let (tw, th) = f
+            .layers
+            .iter()
+            .filter(|l| l.content == Content::Screen)
+            .map(|l| {
+                let (_, sx, sy) = layout::place(sw, sh, l.rect, l.fit);
+                ((sw * sx).round().max(2.0), (sh * sy).round().max(2.0))
+            })
+            .max_by(|a, b| (a.0 * a.1).total_cmp(&(b.0 * b.1)))?;
+        (tw < sw && th < sh).then_some((tw as usize, th as usize))
+    }
+
+    fn decor(&mut self, style: &Style, w: usize, h: usize, k: f64) -> Decor {
+        let key = Decor::key(style, w, h, self.h, k);
+        if let Some(i) = self.decor.iter().position(|d| d.key == key) {
+            let d = self.decor.remove(i);
+            self.decor.push(d.clone());
+            return d;
         }
+        let d = Decor::build(style, w, h, self.h, k);
+        if self.decor.len() >= DECOR_CACHE {
+            self.decor.remove(0);
+        }
+        self.decor.push(d.clone());
+        d
+    }
+
+    fn image(&mut self, path: &str) -> Option<Retained<CIImage>> {
+        self.images
+            .entry(path.to_string())
+            .or_insert_with(|| unsafe {
+                let url = objc2_foundation::NSURL::fileURLWithPath(&ns(path));
+                let img = CIImage::imageWithContentsOfURL(&url);
+                if img.is_none() {
+                    eprintln!("rec: warning: could not read image {path}");
+                }
+                img
+            })
+            .clone()
+    }
+
+    /// `t` rendered at `px` pixels tall (cached by size, in 4 px steps so
+    /// an animated box doesn't render text every frame).
+    fn text(&mut self, t: &TextSpec, px: f64) -> Option<Retained<CIImage>> {
+        if t.text.trim().is_empty() {
+            return None;
+        }
+        let size = ((px * 0.8 / 4.0).round() * 4.0).max(8.0);
+        let key = (t.clone(), size.to_bits());
+        if let Some((_, img)) = self.texts.iter().find(|(k, _)| *k == key) {
+            return Some(img.clone());
+        }
+        let raw = generate(
+            "CITextImageGenerator",
+            vec![
+                (&*ns("inputText"), obj(&*ns(&t.text))),
+                (&*ns("inputFontName"), obj(&*ns("HelveticaNeue-Bold"))),
+                (&*ns("inputFontSize"), num_f(size)),
+                (&*ns("inputScaleFactor"), num_f(1.0)),
+            ],
+        )?;
+        // Recolor: the glyphs' coverage with the text color.
+        let img = unsafe {
+            let zero = CIVector::vectorWithX_Y_Z_W(0.0, 0.0, 0.0, 0.0);
+            let f = |v: u8| v as f64 / 255.0;
+            let bias = CIVector::vectorWithX_Y_Z_W(f(t.color[0]), f(t.color[1]), f(t.color[2]), 0.0);
+            let params = dict(vec![
+                (&*ns("inputRVector"), obj(&*zero)),
+                (&*ns("inputGVector"), obj(&*zero)),
+                (&*ns("inputBVector"), obj(&*zero)),
+                (&*ns("inputBiasVector"), obj(&*bias)),
+            ]);
+            raw.imageByApplyingFilter_withInputParameters(&ns("CIColorMatrix"), &params)
+        };
+        if self.texts.len() >= 8 {
+            self.texts.remove(0);
+        }
+        self.texts.push((key, img.clone()));
+        Some(img)
+    }
+
+    fn background_image(&self, bg: Background) -> Retained<CIImage> {
+        let canvas = rect(0.0, 0.0, self.w, self.h);
+        unsafe {
+            let img = if bg.top == bg.bottom {
+                Some(CIImage::imageWithColor(&ci_color(bg.top, 1.0)))
+            } else {
+                generate(
+                    "CILinearGradient",
+                    vec![
+                        (&*ns("inputPoint0"), obj(&*CIVector::vectorWithX_Y(0.0, self.h))),
+                        (&*ns("inputPoint1"), obj(&*CIVector::vectorWithX_Y(0.0, 0.0))),
+                        (&*ns("inputColor0"), obj(&*ci_color(bg.top, 1.0))),
+                        (&*ns("inputColor1"), obj(&*ci_color(bg.bottom, 1.0))),
+                    ],
+                )
+            };
+            img.unwrap_or_else(|| CIImage::imageWithColor(&CIColor::colorWithRed_green_blue(0.0, 0.0, 0.0))).imageByCroppingToRect(canvas)
+        }
+    }
+
+    /// Draw `l` showing `src` over `under`.
+    fn place(&mut self, l: &Placed, src: &CIImage, under: Retained<CIImage>, k: f64) -> Retained<CIImage> {
+        unsafe {
+            let e = src.extent();
+            let (ew, eh) = (e.size.width, e.size.height);
+            if !(ew > 0.0 && eh > 0.0 && ew.is_finite() && eh.is_finite()) {
+                return under;
+            }
+            let ([dx, top, dw, dh], sx, sy) = layout::place(ew, eh, l.rect, l.fit);
+            // CoreImage's origin is bottom-left.
+            let dy = self.h - top - dh;
+            let (cx, cy) = (dx + dw / 2.0, dy + dh / 2.0);
+            let a = if l.mirror { -sx } else { sx };
+            let t = CGAffineTransform { a, b: 0.0, c: 0.0, d: sy, tx: cx - a * (e.origin.x + ew / 2.0), ty: cy - sy * (e.origin.y + eh / 2.0) };
+            let mut placed = src.imageByApplyingTransform(t).imageByCroppingToRect(rect(dx, dy, dw, dh));
+            let alpha = l.opacity.clamp(0.0, 1.0);
+            if alpha < 1.0 {
+                placed = faded(&placed, alpha);
+            }
+            if l.style.is_plain() {
+                return placed.imageByCompositingOverImage(&under);
+            }
+            let d = self.decor(&l.style, dw.round().max(1.0) as usize, dh.round().max(1.0) as usize, k);
+            let fade = |img: Retained<CIImage>| if alpha < 1.0 { faded(&img, alpha) } else { img };
+            let mut img = under;
+            if let Some((sh, pad)) = &d.shadow {
+                // Drop the shadow slightly below the layer.
+                let drop = (self.h * 0.006).round();
+                img = fade(translate(sh, dx - pad, dy - pad - drop)).imageByCompositingOverImage(&img);
+            }
+            if let Some(b) = &d.border {
+                img = fade(translate(b, dx, dy)).imageByCompositingOverImage(&img);
+            }
+            let params = dict(vec![(&*ns("inputBackgroundImage"), obj(&*translate(&d.mask, dx, dy)))]);
+            let masked = placed.imageByApplyingFilter_withInputParameters(&ns("CISourceInCompositing"), &params);
+            masked.imageByCompositingOverImage(&img)
+        }
+    }
+
+    /// Draw a resolved frame.
+    fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, k: f64) -> Retained<CIImage> {
+        let mut img = self.background_image(f.background);
+        for l in &f.layers {
+            if l.opacity <= 0.0 {
+                continue;
+            }
+            let src = match &l.content {
+                Content::Screen => screen.cloned(),
+                Content::Camera => cam.cloned(),
+                Content::Image(p) => self.image(p),
+                Content::Text(t) => self.text(t, l.rect[3]),
+                Content::Color(c) => {
+                    let r = rect(0.0, 0.0, l.rect[2].max(1.0), l.rect[3].max(1.0));
+                    Some(unsafe { CIImage::imageWithColor(&ci_color(*c, 1.0)).imageByCroppingToRect(r) })
+                }
+            };
+            if let Some(src) = src {
+                img = self.place(l, &src, img, k);
+            }
+        }
+        img
+    }
+
+    /// Render the scene at frame time `t` (seconds; drives transitions).
+    pub fn render(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, out: &CVPixelBuffer) {
+        self.now = t;
+        let canvas = rect(0.0, 0.0, self.w, self.h);
+        let screen = screen.map(|s| unsafe { CIImage::imageWithCVPixelBuffer(s) });
+        let cam = cam.map(|c| unsafe { CIImage::imageWithCVPixelBuffer(c) });
+        for (img, aspect) in [(&cam, &mut self.cam_aspect), (&screen, &mut self.screen_aspect)] {
+            if let Some(i) = img {
+                let e = unsafe { i.extent() };
+                if e.size.height > 0.0 {
+                    *aspect = e.size.width / e.size.height;
+                }
+            }
+        }
+        let env = self.env();
+        let cur = self.scene.resolve(&env);
+        let progress = self.leaving.as_ref().map(|(_, start)| (t - start) / self.transition_secs.max(1e-3));
+        if progress.is_some_and(|p| p >= 1.0 || p < 0.0) {
+            self.leaving = None;
+        }
+        let img = match (self.leaving.clone(), progress) {
+            (Some((old, _)), Some(p)) => {
+                let prev = old.resolve(&env);
+                match self.transition {
+                    Transition::Fade => {
+                        let a = self.draw(&prev, screen.as_ref(), cam.as_ref(), 1.0);
+                        let b = self.draw(&cur, screen.as_ref(), cam.as_ref(), 1.0);
+                        unsafe {
+                            let params = dict(vec![
+                                (&*ns("inputTargetImage"), obj(&*b)),
+                                (&*ns("inputTime"), num_f(layout::smoothstep(p))),
+                            ]);
+                            a.imageByApplyingFilter_withInputParameters(&ns("CIDissolveTransition"), &params)
+                        }
+                    }
+                    _ => self.draw(&layout::blend(&prev, &cur, p), screen.as_ref(), cam.as_ref(), 0.5),
+                }
+            }
+            _ => self.draw(&cur, screen.as_ref(), cam.as_ref(), 1.0),
+        };
+        unsafe { self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img.imageByCroppingToRect(canvas), out, canvas, Some(&self.cs)) };
     }
 }
 
@@ -673,7 +900,8 @@ mod tests {
             ..Default::default()
         };
         let mut c = Compositor::new(640, 360, pip.clone());
-        c.render(Scene::ScreenCam, Some(&screen), Some(&cam), &out);
+        c.set_scene(SceneSpec::Template(Scene::ScreenCam), false);
+        c.render(0.0, Some(&screen), Some(&cam), &out);
         let [x, y, w, h] = overlay_rect(&pip, 640.0, 360.0, c.cam_aspect());
         assert_eq!([x, y, w, h], [240.0, 10.0, 160.0, 160.0]);
         let px = |px: usize, py: usize| unsafe {
@@ -694,7 +922,7 @@ mod tests {
         assert!(black(px(320, 200)), "screen below the overlay: {:?}", px(320, 200));
         // Moving the overlay is live.
         c.set_pip(PipSpec { place: Place::Corner(Corner::BottomLeft), ..pip });
-        c.render(Scene::ScreenCam, Some(&screen), Some(&cam), &out);
+        c.render(1.0 / 30.0, Some(&screen), Some(&cam), &out);
         assert!(black(px(320, 90)), "old position is screen again");
         assert!(red(px(13 + 80, 360 - 13 - 80)), "new position: {:?}", px(93, 267));
     }
@@ -754,6 +982,7 @@ pub(crate) mod color_probe {
     fn camera_tags() {
         let out = gray(0, None);
         let mut c = Compositor::new(64, 36, PipSpec::default());
+        c.set_scene(SceneSpec::Template(Scene::Cam), false);
         unsafe {
             for (name, tag) in [
                 ("untagged", None),
@@ -762,7 +991,7 @@ pub(crate) mod color_probe {
             ] {
                 let vals: Vec<u8> = [32u8, 64, 128, 192].iter().map(|&v| {
                     let cam = gray(v, tag);
-                    c.render(Scene::Cam, None, Some(&cam), &out);
+                    c.render(0.0, None, Some(&cam), &out);
                     center(&out)
                 }).collect();
                 println!("{name}: in [32, 64, 128, 192] -> {vals:?}");

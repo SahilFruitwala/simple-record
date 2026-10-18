@@ -140,6 +140,11 @@ impl FrameScaler {
         Some(FrameScaler { metal, vt, size: (width, height) })
     }
 
+    /// Scale to this size from now on.
+    pub fn set_size(&mut self, size: (usize, usize)) {
+        self.size = size;
+    }
+
     /// Whether `src` needs scaling to the output size.
     pub fn needed(&self, src: &CVPixelBuffer) -> bool {
         (CVPixelBufferGetWidth(src), CVPixelBufferGetHeight(src)) != self.size
