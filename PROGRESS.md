@@ -1,11 +1,14 @@
 # PROGRESS
 
-## OBS gaps closed (2026-10-18): built, not yet run on a Mac
+## OBS gaps closed (2026-10-18): built and unit-tested on macOS, not yet used as an app
 
 Everything in the old Known gaps list, plus scene templates. This work was done in a Linux
-cloud container: the macOS code was **type-checked** for `aarch64-apple-darwin` (clean,
-clippy too), and the platform-independent parts were **run**, but nothing has run on a Mac
-yet.
+cloud container. CI (`.github/workflows/ci.yml`) now builds the app on macOS 15, runs clippy
+and `cargo test` there (96 passed, 0 failed, including the CoreImage compositor test through
+the new layout engine, the mic filters and the VideoToolbox encoders), and runs the
+platform-independent tests and the SRT end to end on Linux. The macOS CI run caught one real
+bug the Linux checks couldn't (`--gate`/`--compressor` argument parsing, fixed). Nothing has
+been tried interactively in the app, with real screens, cameras or mics.
 
 | Feature | Where | Verified here |
 |---|---|---|

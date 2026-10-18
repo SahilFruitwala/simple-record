@@ -27,7 +27,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Install ffmpeg (tests check files with ffprobe; SRT end to end)
+      - name: Install ffmpeg (tests check files with ffprobe)
         run: brew install ffmpeg
       - name: Build
         run: cargo build --locked
@@ -35,5 +35,4 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Tests
         run: cargo test --locked
-      - name: SRT against FFmpeg's libsrt
-        run: scripts/srt-e2e.sh
+      # The SRT end to end runs on Linux: Homebrew's ffmpeg has no libsrt.
