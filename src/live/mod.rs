@@ -1,5 +1,6 @@
 //! Live outputs: one shared H.264 + AAC/Opus encode of the composited
-//! output, fanned out to the replay buffer and any streams (RTMP, WHIP).
+//! output, fanned out to the replay buffer and any streams (RTMP, SRT,
+//! WHIP).
 //!
 //! The capture session feeds every output frame and every audio buffer in
 //! (on the host clock, independent of recording pauses). Nothing is encoded
@@ -9,6 +10,9 @@ pub mod audio;
 pub mod keychain;
 pub mod replay;
 pub mod rtmp;
+pub mod srt;
+pub mod srtout;
+pub mod ts;
 pub mod video;
 pub mod whip;
 
@@ -599,25 +603,28 @@ pub fn preset(p: Platform, height: usize, fps: u32, hevc: bool) -> (u32, usize, 
 }
 
 /// (URL, key) for a destination: the key comes from $REC_STREAM_KEY or the
-/// Keychain. WHIP endpoints may have no key.
+/// Keychain. WHIP endpoints may have no key; for SRT it is the stream ID
+/// (when the URL doesn't give one) and optional.
 pub fn resolve_destination(dest: &str) -> Result<(String, String)> {
     let url = destination_url(dest);
     let key = std::env::var("REC_STREAM_KEY").ok().filter(|k| !k.is_empty()).or_else(|| keychain::get(&url));
     match key {
         Some(k) => Ok((url, k)),
-        None if url.starts_with("http") => Ok((url, String::new())),
+        None if url.starts_with("http") || url.starts_with("srt://") => Ok((url, String::new())),
         None => anyhow::bail!("no stream key for {url}: set REC_STREAM_KEY or run `rec-rs stream-key {dest}`"),
     }
 }
 
-/// Start an output for `url` (rtmp://, rtmps:// or http(s):// WHIP).
+/// Start an output for `url` (rtmp://, rtmps://, srt:// or http(s):// WHIP).
 pub fn start_output(url: &str, key: &str) -> Result<Box<dyn Output>> {
     if url.starts_with("rtmp://") || url.starts_with("rtmps://") {
         Ok(Box::new(rtmp::RtmpOutput::start(url, key)?))
+    } else if url.starts_with("srt://") {
+        Ok(Box::new(srtout::SrtOutput::start(url, key)?))
     } else if url.starts_with("http://") || url.starts_with("https://") {
         Ok(Box::new(whip::WhipOutput::start(url, key)?))
     } else {
-        anyhow::bail!("unsupported stream URL {url:?} (use rtmp://, rtmps:// or a WHIP http(s):// URL)")
+        anyhow::bail!("unsupported stream URL {url:?} (use rtmp://, rtmps://, srt:// or a WHIP http(s):// URL)")
     }
 }
 

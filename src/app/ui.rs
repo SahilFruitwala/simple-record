@@ -734,7 +734,7 @@ fn bytes_text(b: usize) -> String {
     if b >= 1 << 30 { format!("{:.1} GB", b as f64 / (1u64 << 30) as f64) } else { format!("{:.0} MB", b as f64 / (1u64 << 20) as f64) }
 }
 
-pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", "Twitch"), ("custom", "Custom (RTMP or WHIP URL)")];
+pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", "Twitch"), ("custom", "Custom (RTMP, SRT or WHIP URL)")];
 
 /// Replay buffer and streaming: both use the shared live encode and run
 /// with or without a recording.
@@ -798,7 +798,7 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         }
         w::divider(ui);
         let urls = s.stream_urls();
-        let ready = !urls.is_empty() && urls.iter().all(|u| u.starts_with("http") || st.has_stream_key(u));
+        let ready = !urls.is_empty() && urls.iter().all(|u| u.starts_with("http") || u.starts_with("srt://") || st.has_stream_key(u));
         let label = match (live, urls.len()) {
             (true, _) => "Stop Stream".to_string(),
             (false, n) if n > 1 => format!("Go Live ({n} destinations)"),
@@ -859,7 +859,13 @@ fn destination(ui: &mut Ui, st: &mut State, i: usize, dest: &mut String, custom_
     } else {
         ui.horizontal(|ui| {
             let bw = 52.0;
-            let hint = if url.starts_with("http") || url.starts_with("srt") { "Key or passphrase (optional)" } else { "Stream key" };
+            let hint = if url.starts_with("srt") {
+                "Stream ID (optional)"
+            } else if url.starts_with("http") {
+                "Bearer token (optional)"
+            } else {
+                "Stream key"
+            };
             ui.add_sized(
                 vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0),
                 egui::TextEdit::singleline(st.key_input(i)).password(true).margin(vec2(8.0, 4.0)).hint_text(hint),

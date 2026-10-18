@@ -234,9 +234,11 @@ pub struct RecordArgs {
     /// memory; `rec-rs save-replay` writes them to an MP4.
     #[arg(long, value_name = "SECS")]
     replay: Option<f64>,
-    /// Stream to an RTMP(S) URL or a WHIP endpoint (http(s)://.../whip).
-    /// youtube and twitch are shortcuts. The key comes from
-    /// $REC_STREAM_KEY or the Keychain (`rec-rs stream-key URL`).
+    /// Stream to an RTMP(S) URL, an SRT URL
+    /// (srt://host:port?streamid=...&passphrase=...&latency=MS) or a WHIP
+    /// endpoint (http(s)://.../whip). youtube and twitch are shortcuts. The
+    /// key comes from $REC_STREAM_KEY or the Keychain (`rec-rs stream-key
+    /// URL`); for SRT it is the stream ID if the URL has none.
     #[arg(long, value_name = "URL")]
     stream: Vec<String>,
     /// Do not write a recording file (replay buffer / streaming only).
