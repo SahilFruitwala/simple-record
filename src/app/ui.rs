@@ -621,12 +621,37 @@ fn sources(ui: &mut Ui, st: &mut State) {
     w::card(ui, |ui| {
         let displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
         combo(ui, "display", &mut s.display, &displays, idle);
-        let mut targets: Vec<(Option<u32>, String)> = vec![(None, "Entire display".into())];
-        targets.extend(st.windows.iter().map(|(id, l)| (Some(*id), l.clone())));
+        // What to record on the display: all of it, one app's windows, or
+        // one window.
+        #[derive(Clone, PartialEq)]
+        enum Pick {
+            Display,
+            App(String),
+            Window(u32),
+        }
+        let mut targets: Vec<(Pick, String)> = vec![(Pick::Display, "Entire display".into())];
+        targets.extend(st.apps.iter().map(|(id, name)| (Pick::App(id.clone()), format!("App: {name} (all windows)"))));
+        targets.extend(st.windows.iter().map(|(id, l)| (Pick::Window(*id), l.clone())));
+        if let Some(a) = &s.app
+            && !st.apps.iter().any(|(id, _)| id == a)
+        {
+            targets.push((Pick::App(a.clone()), format!("App: {a} (not running)")));
+        }
+        let mut pick = match (&s.window, &s.app) {
+            (Some(w), _) => Pick::Window(*w),
+            (None, Some(a)) => Pick::App(a.clone()),
+            _ => Pick::Display,
+        };
         ui.horizontal(|ui| {
             let bw = 26.0;
             ui.allocate_ui(vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0), |ui| {
-                combo(ui, "window", &mut s.window, &targets, idle);
+                if combo(ui, "window", &mut pick, &targets, idle) {
+                    (s.window, s.app) = match &pick {
+                        Pick::Display => (None, None),
+                        Pick::App(a) => (None, Some(a.clone())),
+                        Pick::Window(w) => (Some(*w), None),
+                    };
+                }
             });
             // Tight padding so the button is exactly `bw` wide: a wider row
             // would widen every card below it.
@@ -635,7 +660,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 st.refresh_devices = true;
             }
         });
-        if s.window.is_none() {
+        if s.window.is_none() && s.app.is_none() {
             w::row(ui, "Area", |ui| {
                 if st.region_select.is_some() {
                     if ui.button("Cancel").clicked()

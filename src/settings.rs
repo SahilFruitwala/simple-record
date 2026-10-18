@@ -58,6 +58,9 @@ pub struct Settings {
     /// Record only this part of the display: [x, y, width, height] in
     /// points from its top-left corner.
     pub region: Option<[f64; 4]>,
+    /// Record every window of this app (bundle ID) on the display, and
+    /// nothing else.
+    pub app: Option<String>,
     pub scene: Scene,
     /// Shape of the output frame.
     pub canvas: Canvas,
@@ -137,6 +140,7 @@ impl Default for Settings {
             bitrate_mbps: None,
             display: 1,
             region: None,
+            app: None,
             scene: Scene::Screen,
             canvas: Canvas::Source,
             background: Background::default(),
@@ -290,7 +294,7 @@ impl Settings {
     /// overlay's look and position, and switches between scenes that the
     /// session can show (with the camera on, or composed), are applied live
     /// instead.
-    pub fn capture_key(&self) -> (Settings, bool) {
+    pub fn capture_key(&self) -> (Settings, bool, Vec<usize>) {
         let d = Settings::default();
         let spec = self.scene_spec();
         // A scene without the camera that still needs the compositor.
@@ -329,7 +333,8 @@ impl Settings {
             mic_filters: d.mic_filters,
             ..self.clone()
         };
-        (key, composed)
+        // Other displays shown need capture streams.
+        (key, composed, spec.extra_displays())
     }
 
     /// The stream destination URL (the YouTube and Twitch ingest URLs for
@@ -398,6 +403,8 @@ impl Settings {
         a.extend(["--display".into(), self.display.to_string()]);
         if let Some(w) = self.window {
             a.extend(["--window".into(), w.to_string()]);
+        } else if let Some(app) = &self.app {
+            a.extend(["--app".into(), app.clone()]);
         } else if let Some([x, y, w, h]) = self.region {
             a.extend(["--region".into(), format!("{},{},{},{}", x.round(), y.round(), w.round().max(16.0), h.round().max(16.0))]);
         }
@@ -519,8 +526,15 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--region", "10,20,1280,720"]));
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         crate::parse_record_args(&refs).unwrap();
-        let rw = Settings { window: Some(3), ..r };
+        let rw = Settings { window: Some(3), ..r.clone() };
         assert!(!rw.record_args(None).iter().any(|a| a == "--region"));
+        // An app replaces the region; the CLI takes it.
+        let ra = Settings { app: Some("com.apple.Safari".into()), ..r };
+        let args = ra.record_args(None);
+        assert!(args.windows(2).any(|w| w == ["--app", "com.apple.Safari"]));
+        assert!(!args.iter().any(|a| a == "--region"));
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        crate::parse_record_args(&refs).unwrap();
     }
 
     #[test]

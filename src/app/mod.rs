@@ -161,6 +161,8 @@ pub struct State {
     pub meters: [Meter; 2],
     pub displays: Vec<String>,
     pub windows: Vec<(u32, String)>,
+    /// Apps with windows on screen: (bundle ID, name).
+    pub apps: Vec<(String, String)>,
     pub cameras: Vec<Device>,
     pub mics: Vec<Device>,
     /// Shortcuts that could not be registered (another app owns them).
@@ -384,6 +386,7 @@ fn load_devices(st: &mut State) {
                 .collect()
         })
         .unwrap_or_default();
+    st.apps = crate::screen::applications().map(|a| a.into_iter().map(|a| (a.bundle_id, a.name)).collect()).unwrap_or_default();
     st.cameras = crate::camera::cameras().into_iter().map(|d| Device { id: d.id, name: d.name }).collect();
     st.mics = crate::camera::microphones().into_iter().map(|d| Device { id: d.id, name: d.name }).collect();
 }
@@ -402,6 +405,7 @@ impl App {
             meters: Default::default(),
             displays: vec![],
             windows: vec![],
+            apps: vec![],
             cameras: vec![],
             mics: vec![],
             hotkey_failed: vec![],

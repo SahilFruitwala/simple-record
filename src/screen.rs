@@ -19,6 +19,7 @@ use crate::record::Shared;
 use crate::util::*;
 use crate::writer::AudioKind;
 
+#[derive(Clone)]
 pub struct DisplayInfo {
     pub id: u32,
     pub points: (i64, i64),
@@ -111,10 +112,54 @@ pub fn find_window(sel: &str) -> Result<WindowInfo> {
         .ok_or_else(|| anyhow!("no on-screen window matches {sel:?} (see `rec-rs devices`)"))
 }
 
+pub struct AppInfo {
+    pub name: String,
+    pub bundle_id: String,
+    pub app: Retained<SCRunningApplication>,
+}
+
+/// Apps with a window on screen (for capturing all of an app's windows),
+/// by name.
+pub fn applications() -> Result<Vec<AppInfo>> {
+    let content = shareable_content()?;
+    let me = std::process::id() as i32;
+    let mut pids = std::collections::HashSet::new();
+    for w in unsafe { content.windows() }.iter() {
+        unsafe {
+            if w.isOnScreen() && w.windowLayer() == 0 && let Some(a) = w.owningApplication() {
+                pids.insert(a.processID());
+            }
+        }
+    }
+    let mut out: Vec<AppInfo> = unsafe { content.applications() }
+        .iter()
+        .filter(|a| unsafe { a.processID() != me && pids.contains(&a.processID()) })
+        .map(|a| unsafe { AppInfo { name: a.applicationName().to_string(), bundle_id: a.bundleIdentifier().to_string(), app: a } })
+        .filter(|a| !a.name.is_empty())
+        .collect();
+    out.sort_by_key(|a| a.name.to_lowercase());
+    Ok(out)
+}
+
+/// An app by bundle ID or (case-insensitive) name substring.
+pub fn find_app(sel: &str) -> Result<AppInfo> {
+    let lower = sel.to_lowercase();
+    let apps = applications()?;
+    if let Some(i) = apps.iter().position(|a| a.bundle_id == sel) {
+        return Ok(apps.into_iter().nth(i).unwrap());
+    }
+    apps.into_iter()
+        .find(|a| a.name.to_lowercase().contains(&lower))
+        .ok_or_else(|| anyhow!("no app with a window on screen matches {sel:?} (see `rec-rs devices`)"))
+}
+
 pub enum Target {
     /// A display, optionally cropped to a region (points, top-left origin).
     Display(DisplayInfo, Option<objc2_core_foundation::CGRect>),
     Window(WindowInfo),
+    /// Every window of an app on a display (the rest of the screen is
+    /// left out).
+    App(DisplayInfo, AppInfo),
 }
 
 impl Target {
@@ -126,6 +171,7 @@ impl Target {
                 d.id, r.size.width, r.size.height, r.origin.x, r.origin.y
             ),
             Target::Window(w) => format!("window \"{} {}\" ({})", w.app, w.title, w.id),
+            Target::App(d, a) => format!("app \"{}\" on display {}", a.name, d.id),
         }
     }
 }
@@ -141,10 +187,14 @@ pub struct ScreenConfig {
     pub system_audio: bool,
     /// None = no mic; Some(None) = default mic; Some(Some(id)) = specific device.
     pub mic: Option<Option<String>>,
+    /// An extra screen source for scene layers (`Content::Display(n)`):
+    /// its frames go to the sink under this display number.
+    pub extra: Option<usize>,
 }
 
 pub struct Ivars {
     shared: Arc<Shared>,
+    extra: Option<usize>,
 }
 
 define_class!(
@@ -172,8 +222,8 @@ define_class!(
 );
 
 impl ScreenOutput {
-    fn create(shared: Arc<Shared>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(Ivars { shared });
+    fn create(shared: Arc<Shared>, extra: Option<usize>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(Ivars { shared, extra });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -191,7 +241,10 @@ impl ScreenOutput {
             let Some(pb) = (unsafe { sb.image_buffer() }) else { return };
             let pts: CMTime = unsafe { sb.presentation_time_stamp() };
             let pb: objc2_core_foundation::CFRetained<CVPixelBuffer> = pb;
-            shared.with(|s| s.push_screen(pts, pb));
+            match self.ivars().extra {
+                Some(n) => shared.with(|s| s.push_extra(n, pts, pb)),
+                None => shared.with(|s| s.push_screen(pts, pb)),
+            }
         } else if kind == SCStreamOutputType::Audio {
             shared.with(|s| s.push_audio(AudioKind::System, sb));
         } else if kind == SCStreamOutputType::Microphone {
@@ -256,6 +309,12 @@ impl ScreenCapture {
                 Target::Window(w) => {
                     SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &w.window)
                 }
+                Target::App(d, a) => SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
+                    SCContentFilter::alloc(),
+                    &d.display,
+                    &NSArray::from_retained_slice(&[a.app.clone()]),
+                    &NSArray::new(),
+                ),
             };
             conf.setWidth(cfg.width);
             conf.setHeight(cfg.height);
@@ -284,7 +343,7 @@ impl ScreenCapture {
                 }
             }
 
-            let output = ScreenOutput::create(shared);
+            let output = ScreenOutput::create(shared, cfg.extra);
             let delegate = ProtocolObject::from_ref(&*output);
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, Some(delegate));
             let out_proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);

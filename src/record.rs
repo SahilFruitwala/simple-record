@@ -163,6 +163,8 @@ pub struct Session {
     stop: Arc<AtomicBool>,
     pacer: Option<std::thread::JoinHandle<()>>,
     screen: Option<ScreenCapture>,
+    /// Other displays the scene shows.
+    extra_screens: Vec<ScreenCapture>,
     synth: Option<Synth>,
     cam: Option<Camera>,
     av_mic: Option<Mic>,
@@ -190,6 +192,10 @@ fn capture_size(o: &Options) -> (usize, usize) {
     let (nw, nh) = o.native;
     let sck = std::env::var("REC_SCALER").as_deref() == Ok("sck");
     if o.test_pattern.is_none() && !sck && nw * nh > w * h { (nw, nh) } else { (w, h) }
+}
+
+fn d_px(k: f64, px: usize) -> usize {
+    (px as f64 * k).round() as usize
 }
 
 /// `rec-….mov` -> `rec-…-camera.mov` (the webcam-only file).
@@ -277,6 +283,7 @@ impl Session {
             stop: stop.clone(),
             pacer: None,
             screen: None,
+            extra_screens: vec![],
             synth: None,
             cam: None,
             av_mic: None,
@@ -397,16 +404,48 @@ impl Session {
                     clicks: o.clicks,
                     system_audio: o.system_audio,
                     mic: sck_mic,
+                    extra: None,
                 };
                 self.screen = Some(ScreenCapture::start(&cfg, self.shared.clone())?);
             }
             (None, None) => bail!("internal: no capture target"),
+        }
+        // Other displays in the scene: whole, at most the frame's size, no
+        // audio.
+        let wanted = o.scene.extra_displays();
+        if o.test_pattern.is_none() && !wanted.is_empty() {
+            let displays = screen::displays()?;
+            for n in wanted {
+                let Some(d) = displays.get(n.wrapping_sub(1)).cloned() else {
+                    eprintln!("rec: warning: display {n} is not connected; its layer stays empty");
+                    continue;
+                };
+                let (w, h) = o.size;
+                let k = (w as f64 / d.pixels.0 as f64).min(h as f64 / d.pixels.1 as f64).min(1.0);
+                let size = (d_px(k, d.pixels.0) & !1, d_px(k, d.pixels.1) & !1);
+                let cfg = ScreenConfig {
+                    target: screen::Target::Display(d, None),
+                    width: size.0.max(2),
+                    height: size.1.max(2),
+                    fps: o.fps,
+                    pixel_format: PIX_BGRA,
+                    cursor: o.cursor,
+                    clicks: o.clicks,
+                    system_audio: false,
+                    mic: None,
+                    extra: Some(n),
+                };
+                self.extra_screens.push(ScreenCapture::start(&cfg, self.shared.clone())?);
+            }
         }
         Ok(())
     }
 
     fn stop_sources(&mut self) -> Option<anyhow::Error> {
         let err = self.screen.take().and_then(|s| s.stop().err());
+        for s in self.extra_screens.drain(..) {
+            let _ = s.stop();
+        }
         if let Some(mut s) = self.synth.take() {
             s.stop();
         }

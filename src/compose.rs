@@ -682,7 +682,7 @@ impl Compositor {
     }
 
     /// Draw a resolved frame.
-    fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, k: f64) -> Retained<CIImage> {
+    fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, extras: &[(usize, Retained<CIImage>)], k: f64) -> Retained<CIImage> {
         let mut img = self.background_image(f.background);
         for l in &f.layers {
             if l.opacity <= 0.0 {
@@ -691,6 +691,7 @@ impl Compositor {
             let src = match &l.content {
                 Content::Screen => screen.cloned(),
                 Content::Camera => cam.cloned(),
+                Content::Display(n) => extras.iter().find(|(d, _)| d == n).map(|(_, i)| i.clone()),
                 Content::Image(p) => self.image(p),
                 Content::Text(t) => self.text(t, l.rect[3]),
                 Content::Color(c) => {
@@ -706,11 +707,13 @@ impl Compositor {
     }
 
     /// Render the scene at frame time `t` (seconds; drives transitions).
-    pub fn render(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, out: &CVPixelBuffer) {
+    /// `extras` are other displays' frames by display number.
+    pub fn render(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, extras: &[(usize, &CVPixelBuffer)], out: &CVPixelBuffer) {
         self.now = t;
         let canvas = rect(0.0, 0.0, self.w, self.h);
         let screen = screen.map(|s| unsafe { CIImage::imageWithCVPixelBuffer(s) });
         let cam = cam.map(|c| unsafe { CIImage::imageWithCVPixelBuffer(c) });
+        let extras: Vec<(usize, Retained<CIImage>)> = extras.iter().map(|(n, b)| (*n, unsafe { CIImage::imageWithCVPixelBuffer(b) })).collect();
         for (img, aspect) in [(&cam, &mut self.cam_aspect), (&screen, &mut self.screen_aspect)] {
             if let Some(i) = img {
                 let e = unsafe { i.extent() };
@@ -730,8 +733,8 @@ impl Compositor {
                 let prev = old.resolve(&env);
                 match self.transition {
                     Transition::Fade => {
-                        let a = self.draw(&prev, screen.as_ref(), cam.as_ref(), 1.0);
-                        let b = self.draw(&cur, screen.as_ref(), cam.as_ref(), 1.0);
+                        let a = self.draw(&prev, screen.as_ref(), cam.as_ref(), &extras, 1.0);
+                        let b = self.draw(&cur, screen.as_ref(), cam.as_ref(), &extras, 1.0);
                         unsafe {
                             let params = dict(vec![
                                 (&*ns("inputTargetImage"), obj(&*b)),
@@ -740,10 +743,10 @@ impl Compositor {
                             a.imageByApplyingFilter_withInputParameters(&ns("CIDissolveTransition"), &params)
                         }
                     }
-                    _ => self.draw(&layout::blend(&prev, &cur, p), screen.as_ref(), cam.as_ref(), 0.5),
+                    _ => self.draw(&layout::blend(&prev, &cur, p), screen.as_ref(), cam.as_ref(), &extras, 0.5),
                 }
             }
-            _ => self.draw(&cur, screen.as_ref(), cam.as_ref(), 1.0),
+            _ => self.draw(&cur, screen.as_ref(), cam.as_ref(), &extras, 1.0),
         };
         unsafe { self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img.imageByCroppingToRect(canvas), out, canvas, Some(&self.cs)) };
     }
@@ -901,7 +904,7 @@ mod tests {
         };
         let mut c = Compositor::new(640, 360, pip.clone());
         c.set_scene(SceneSpec::Template(Scene::ScreenCam), false);
-        c.render(0.0, Some(&screen), Some(&cam), &out);
+        c.render(0.0, Some(&screen), Some(&cam), &[], &out);
         let [x, y, w, h] = overlay_rect(&pip, 640.0, 360.0, c.cam_aspect());
         assert_eq!([x, y, w, h], [240.0, 10.0, 160.0, 160.0]);
         let px = |px: usize, py: usize| unsafe {
@@ -922,7 +925,7 @@ mod tests {
         assert!(black(px(320, 200)), "screen below the overlay: {:?}", px(320, 200));
         // Moving the overlay is live.
         c.set_pip(PipSpec { place: Place::Corner(Corner::BottomLeft), ..pip });
-        c.render(1.0 / 30.0, Some(&screen), Some(&cam), &out);
+        c.render(1.0 / 30.0, Some(&screen), Some(&cam), &[], &out);
         assert!(black(px(320, 90)), "old position is screen again");
         assert!(red(px(13 + 80, 360 - 13 - 80)), "new position: {:?}", px(93, 267));
     }
@@ -991,7 +994,7 @@ pub(crate) mod color_probe {
             ] {
                 let vals: Vec<u8> = [32u8, 64, 128, 192].iter().map(|&v| {
                     let cam = gray(v, tag);
-                    c.render(0.0, None, Some(&cam), &out);
+                    c.render(0.0, None, Some(&cam), &[], &out);
                     center(&out)
                 }).collect();
                 println!("{name}: in [32, 64, 128, 192] -> {vals:?}");

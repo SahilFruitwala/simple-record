@@ -259,6 +259,8 @@ pub struct Sink {
     screen_last: Option<Pb>,
     cam_q: VecDeque<(f64, Pb)>,
     cam_last: Option<Pb>,
+    /// Other displays shown by the scene: (display number, queue, current).
+    extra: Vec<(usize, VecDeque<(f64, Pb)>, Option<Pb>)>,
     compositor: Option<Compositor>,
     /// Scales native-size screen frames to the output size.
     scaler: Option<crate::scale::FrameScaler>,
@@ -390,6 +392,7 @@ impl Sink {
             screen_last: None,
             cam_q: VecDeque::new(),
             cam_last: None,
+            extra: vec![],
             compositor,
             scaler: None,
             corner_fill: None,
@@ -705,6 +708,25 @@ impl Sink {
         Self::cap(&mut self.cam_q, &mut self.cam_last, QUEUE_MAX, due);
     }
 
+    /// A frame of another display (an extra scene source).
+    pub fn push_extra(&mut self, n: usize, pts: CMTime, pb: CFRetained<CVPixelBuffer>) {
+        let due = self.due_time();
+        let i = match self.extra.iter().position(|e| e.0 == n) {
+            Some(i) => i,
+            None => {
+                self.extra.push((n, VecDeque::new(), None));
+                self.extra.len() - 1
+            }
+        };
+        let (_, q, last) = &mut self.extra[i];
+        if self.t0.is_none() {
+            *last = Some(SendBox(pb));
+            return;
+        }
+        q.push_back((secs(pts), SendBox(pb)));
+        Self::cap(q, last, QUEUE_MAX, due);
+    }
+
     pub fn push_audio(&mut self, kind: AudioKind, sb: &CMSampleBuffer) {
         let Some(t0) = self.t0 else {
             // Keep it until the clock starts; the part after t0 is used.
@@ -932,6 +954,9 @@ impl Sink {
             Self::pick(&mut self.screen_q, &mut self.screen_last, slot_t + half);
             let fresh = self.screen_q.len() != before;
             Self::pick(&mut self.cam_q, &mut self.cam_last, slot_t + half);
+            for (_, q, last) in &mut self.extra {
+                Self::pick(q, last, slot_t + half);
+            }
             self.next_slot += 1;
             let write = self.pauses.offset_at(slot as f64).is_some() && self.limit.is_none_or(|l| self.out_slot < l);
             if !write {
@@ -990,7 +1015,9 @@ impl Sink {
                     continue;
                 };
                 let cam = self.cam_last.as_ref().map(|b| b.0.clone());
-                self.compositor.as_mut().unwrap().render(slot_t, screen.as_deref(), cam.as_deref(), &buf);
+                let extras: Vec<(usize, CFRetained<CVPixelBuffer>)> = self.extra.iter().filter_map(|(n, _, l)| l.as_ref().map(|b| (*n, b.0.clone()))).collect();
+                let extras: Vec<(usize, &CVPixelBuffer)> = extras.iter().map(|(n, b)| (*n, &**b)).collect();
+                self.compositor.as_mut().unwrap().render(slot_t, screen.as_deref(), cam.as_deref(), &extras, &buf);
                 buf
             } else if let Some(sc) = &self.scaler
                 && sc.needed(screen.as_deref().unwrap())
@@ -1362,7 +1389,7 @@ mod tests {
                     let pip = crate::compose::PipSpec { mirror: false, ..Default::default() };
                     let mut c = crate::compose::Compositor::new(320, 64, pip);
                     c.set_scene(crate::layout::SceneSpec::Template(crate::compose::Scene::Cam), false);
-                    c.render(0.0, None, Some(&src), &out);
+                    c.render(0.0, None, Some(&src), &[], &out);
                     let tf = out.attachment(kCVImageBufferTransferFunctionKey, std::ptr::null_mut());
                     println!("compositor output transfer tag: {:?}", tf);
                     out
@@ -1370,7 +1397,7 @@ mod tests {
                     let out = crate::compose::color_probe::stripes(320, 64, &[0], None);
                     let mut c = crate::compose::Compositor::new(320, 64, Default::default());
                     c.set_scene(crate::layout::SceneSpec::Template(crate::compose::Scene::Screen), false);
-                    c.render(0.0, Some(&src), None, &out);
+                    c.render(0.0, Some(&src), None, &[], &out);
                     out
                 } else {
                     src

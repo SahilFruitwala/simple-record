@@ -241,8 +241,11 @@ impl Default for TextSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Content {
+    /// The capture target: a display, a region, a window or an app.
     Screen,
     Camera,
+    /// Another display, whole (1-based, as `rec-rs devices` numbers them).
+    Display(usize),
     /// An image file (PNG, JPEG, HEIC...): a logo or a frame.
     Image(String),
     Text(TextSpec),
@@ -255,6 +258,7 @@ impl Content {
         match self {
             Content::Screen => "Screen".into(),
             Content::Camera => "Camera".into(),
+            Content::Display(n) => format!("Display {n}"),
             Content::Image(p) => {
                 let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned());
                 format!("Image {}", name.unwrap_or_default())
@@ -396,6 +400,16 @@ impl SceneSpec {
             SceneSpec::Template(s) => s.resolve(env),
             SceneSpec::Custom(l) => l.resolve(env),
         }
+    }
+
+    /// Displays other than the capture target that the scene shows (each
+    /// needs a capture stream of its own), in order, once each.
+    pub fn extra_displays(&self) -> Vec<usize> {
+        let SceneSpec::Custom(l) = self else { return vec![] };
+        let mut v: Vec<usize> = l.layers.iter().filter(|x| x.visible).filter_map(|x| if let Content::Display(n) = x.content { Some(n) } else { None }).collect();
+        v.sort();
+        v.dedup();
+        v
     }
 }
 
@@ -809,6 +823,13 @@ mod tests {
         // At 4K the same layout scales.
         let big = l.resolve(&env(3840.0, 2160.0));
         assert!((big.layers[0].rect[2] - 2.0 * f.layers[0].rect[2]).abs() <= 2.0);
+        // Other displays are extra sources.
+        let two = Layout {
+            layers: vec![Layer::default(), Layer { content: Content::Display(2), ..Default::default() }, Layer { content: Content::Display(2), visible: true, ..Default::default() }],
+            ..Default::default()
+        };
+        assert_eq!(SceneSpec::Custom(two).extra_displays(), vec![2]);
+        assert!(SceneSpec::Template(Scene::SideBySide).extra_displays().is_empty());
         // Text with a box: a color layer, then the text inside it.
         let text = Layout {
             layers: vec![Layer { content: Content::Text(TextSpec::default()), rect: [0.05, 0.8, 0.3, 0.1], ..Default::default() }],

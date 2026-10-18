@@ -111,6 +111,10 @@ pub struct RecordArgs {
     /// Record a single window: window ID or app/title substring (`rec devices`).
     #[arg(long, value_name = "WINDOW")]
     window: Option<String>,
+    /// Record every window of an app (bundle ID or name substring) on the
+    /// display, and nothing else on it.
+    #[arg(long, value_name = "APP", conflicts_with_all = ["window", "region"])]
+    app: Option<String>,
     /// Output size: 720p, 1080p, 1440p, 4k, native, or WIDTHxHEIGHT. The
     /// frame keeps the display's (or window's) aspect ratio and fits inside
     /// this size (1080p of a 16:10 display is 1728x1080), so there are never
@@ -556,6 +560,10 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
             let w = screen::find_window(sel)?;
             let native = ((w.size.0 * scale) as usize, (w.size.1 * scale) as usize);
             (Some(screen::Target::Window(w)), native)
+        } else if let Some(sel) = &a.app {
+            let app = screen::find_app(sel)?;
+            let native = d.pixels;
+            (Some(screen::Target::App(d, app)), native)
         } else if let Some(r) = &a.region {
             let v: Vec<f64> = r.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>()?;
             if v.len() != 4 || v[2] <= 0.0 || v[3] <= 0.0 {
@@ -730,6 +738,15 @@ fn devices() -> Result<()> {
                     d.id,
                     d.pixels.0, d.pixels.1, d.points.0, d.points.1
                 );
+            }
+        }
+        Err(e) => println!("  unavailable: {e}"),
+    }
+    println!("Apps (for --app):");
+    match screen::applications() {
+        Ok(apps) => {
+            for a in apps {
+                println!("  {}  [{}]", a.name, a.bundle_id);
             }
         }
         Err(e) => println!("  unavailable: {e}"),

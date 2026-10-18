@@ -62,6 +62,7 @@ fn thumb(ui: &Ui, rect: Rect, f: &Frame, fw: f64, screen_aspect: f64) {
     for l in &f.layers {
         let src = match l.content {
             Content::Screen => screen_aspect,
+            Content::Display(_) => 16.0 / 10.0,
             Content::Text(_) => l.rect[2] / l.rect[3].max(1.0),
             _ => 16.0 / 9.0,
         };
@@ -76,8 +77,9 @@ fn thumb(ui: &Ui, rect: Rect, f: &Frame, fw: f64, screen_aspect: f64) {
         let cr = CornerRadius::same(radius.round().min(255.0) as u8);
         let alpha = l.opacity.clamp(0.0, 1.0) as f32;
         match &l.content {
-            Content::Screen => {
-                painter.rect_filled(er, cr, Color32::from_rgb(0xe8, 0xec, 0xf3).gamma_multiply(alpha));
+            Content::Screen | Content::Display(_) => {
+                let fill = if l.content == Content::Screen { Color32::from_rgb(0xe8, 0xec, 0xf3) } else { Color32::from_rgb(0xd8, 0xe6, 0xdc) };
+                painter.rect_filled(er, cr, fill.gamma_multiply(alpha));
                 // A title bar and a few lines of text.
                 let bar = Rect::from_min_size(er.min, vec2(er.width(), (er.height() * 0.12).max(1.0)));
                 painter.rect_filled(bar, CornerRadius { nw: cr.nw, ne: cr.ne, sw: 0, se: 0 }, Color32::from_rgb(0xc5, 0xcc, 0xd8).gamma_multiply(alpha));
@@ -361,6 +363,14 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
         if ui.small_button("Color").clicked() {
             add = Some(Content::Color([0x30, 0x30, 0x3a]));
         }
+        // Other displays, whole (each a capture stream of its own).
+        if st.displays.len() > 1 {
+            for n in 1..=st.displays.len() {
+                if n != s.display && ui.add_enabled(idle, egui::Button::new(format!("Display {n}")).small()).on_hover_text("Another display, whole").clicked() {
+                    add = Some(Content::Display(n));
+                }
+            }
+        }
         if let Some(c) = add {
             let layers = &mut s.custom_scenes[ci].layers;
             // Screens and colors go under everything else, the rest on top.
@@ -469,9 +479,9 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
         Content::Camera => {
             w::row(ui, "Mirror", |ui| w::switch(ui, &mut l.mirror, true));
         }
-        Content::Screen => {}
+        Content::Screen | Content::Display(_) => {}
     }
-    if matches!(l.content, Content::Screen | Content::Camera | Content::Image(_)) {
+    if matches!(l.content, Content::Screen | Content::Display(_) | Content::Camera | Content::Image(_)) {
         w::field(ui, "Fit", LABEL_W, |ui| {
             w::segmented(ui, &mut l.fit, &[(Fit::Contain, "Whole picture", true, ""), (Fit::Cover, "Fill the box", true, "")]);
         });
