@@ -1,0 +1,208 @@
+//! First run: what Rec needs permission for, each permission's state (live),
+//! and the way to grant it: the system prompt, or the right pane of System
+//! Settings when it was denied. Screen Recording takes effect only after a
+//! relaunch, which a button does.
+
+use std::time::{Duration, Instant};
+
+use egui::{Align, Color32, CornerRadius, Layout, Margin, RichText, Ui, vec2};
+
+use super::theme::{self, BODY, SECONDARY};
+use super::{Cmd, State};
+use crate::tcc::Status;
+
+/// System Settings panes (Privacy & Security).
+const SCREEN_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+const MIC_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+const CAMERA_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
+
+/// The three permissions, read at most once a second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Perms {
+    pub screen: Status,
+    pub mic: Status,
+    pub camera: Status,
+}
+
+impl Perms {
+    pub fn read() -> Perms {
+        let (screen, mic, camera) = crate::tcc::report();
+        Perms { screen, mic, camera }
+    }
+
+    pub fn all_granted(&self) -> bool {
+        [self.screen, self.mic, self.camera].iter().all(|s| *s == Status::Granted)
+    }
+}
+
+/// What a permission's row offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Offer {
+    /// Granted: nothing to do.
+    Done,
+    /// Never asked: the system prompt.
+    Ask,
+    /// Denied or restricted: only System Settings can change it.
+    OpenSettings,
+}
+
+pub fn offer(s: Status) -> Offer {
+    match s {
+        Status::Granted => Offer::Done,
+        Status::NotDetermined => Offer::Ask,
+        Status::Denied | Status::Restricted => Offer::OpenSettings,
+    }
+}
+
+/// Whether to show the welcome screen: until it's been through once, unless
+/// everything is already granted (then it's skipped for good).
+pub fn wanted(st: &mut State) -> bool {
+    // Scripted runs (the GUI self-test) drive the app without it.
+    if st.settings.onboarded || std::env::var_os("REC_GUI_SELFTEST").is_some() {
+        return false;
+    }
+    let p = refresh(st);
+    if p.all_granted() {
+        st.settings.onboarded = true;
+        let _ = st.settings.save();
+        return false;
+    }
+    true
+}
+
+fn refresh(st: &mut State) -> Perms {
+    match st.perms {
+        Some((p, at)) if at.elapsed() < Duration::from_secs(1) => p,
+        _ => {
+            let p = Perms::read();
+            st.perms = Some((p, Instant::now()));
+            p
+        }
+    }
+}
+
+fn status_pill(ui: &mut Ui, s: Status) {
+    let (text, fill) = match s {
+        Status::Granted => ("Allowed", Color32::from_rgb(0x34, 0xc7, 0x59)),
+        Status::NotDetermined => ("Not asked yet", Color32::from_rgb(0x8e, 0x8e, 0x93)),
+        Status::Denied => ("Not allowed", Color32::from_rgb(0xff, 0x3b, 0x30)),
+        Status::Restricted => ("Restricted", Color32::from_rgb(0xff, 0x95, 0x00)),
+    };
+    let galley = ui.painter().layout_no_wrap(text.into(), theme::semibold(SECONDARY), Color32::WHITE);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + vec2(16.0, 6.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::same(9), fill);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+}
+
+/// One permission: what it's for, its state, and how to grant it.
+/// `always_ask`: offer the prompt even when not granted (macOS reports
+/// Screen Recording only as granted or not, never as not asked yet).
+#[allow(clippy::too_many_arguments)]
+fn row(ui: &mut Ui, title: &str, why: &str, s: Status, required: bool, always_ask: bool, ask: &mut dyn FnMut(), pane: &str) {
+    let p = theme::pal(ui);
+    egui::Frame::NONE.fill(p.sidebar).corner_radius(CornerRadius::same(10)).inner_margin(Margin::same(14)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(title).font(theme::semibold(BODY)));
+                    ui.label(RichText::new(if required { "required" } else { "optional" }).size(SECONDARY).color(p.secondary));
+                });
+                ui.add(egui::Label::new(RichText::new(why).size(SECONDARY + 1.0).color(p.secondary)).wrap());
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                match offer(s) {
+                    Offer::Done => {}
+                    Offer::Ask => {
+                        if ui.button("Allow…").clicked() {
+                            ask();
+                        }
+                    }
+                    Offer::OpenSettings => {
+                        if ui.button("Open System Settings").on_hover_text("Turn Rec on in this list").clicked() {
+                            super::macos::open_url(pane);
+                        }
+                        if always_ask && ui.button("Allow…").clicked() {
+                            ask();
+                        }
+                    }
+                }
+                status_pill(ui, s);
+            });
+        });
+    });
+    ui.add_space(8.0);
+}
+
+pub fn show(ui: &mut Ui, st: &mut State) {
+    let p = theme::pal(ui);
+    let perms = refresh(st);
+    // The status changes while System Settings is in front.
+    ui.ctx().request_repaint_after(Duration::from_secs(1));
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.set_max_width(560.0);
+            ui.add_space(24.0);
+            ui.label(RichText::new("Welcome to Rec").size(26.0).strong());
+            ui.add_space(6.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new("macOS asks you to allow what Rec records. Only Screen Recording is required; the microphone and camera are for when you use them.")
+                        .color(p.secondary),
+                )
+                .wrap(),
+            );
+            ui.add_space(18.0);
+        });
+        ui.vertical(|ui| {
+            ui.set_max_width(560.0);
+            row(
+                ui,
+                "Screen & System Audio Recording",
+                "To record your screen, windows and the sound your Mac plays. After you turn Rec on in System Settings, Rec needs to restart.",
+                perms.screen,
+                true,
+                true,
+                &mut || crate::tcc::request_all(true, false, false, Duration::ZERO),
+                SCREEN_PANE,
+            );
+            row(ui, "Microphone", "To record your voice.", perms.mic, false, false, &mut || crate::tcc::request_all(false, true, false, Duration::ZERO), MIC_PANE);
+            row(ui, "Camera", "To show your webcam in scenes.", perms.camera, false, false, &mut || crate::tcc::request_all(false, false, true, Duration::ZERO), CAMERA_PANE);
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let label = if perms.screen == Status::Granted { "Continue" } else { "Continue without Screen Recording" };
+                let b = egui::Button::new(RichText::new(label).font(theme::semibold(BODY)).color(Color32::WHITE)).fill(theme::accent()).corner_radius(7).min_size(vec2(0.0, 30.0));
+                if ui.add(b).clicked() {
+                    st.settings.onboarded = true;
+                    let _ = st.settings.save();
+                    // Errors from before (no permission) are stale now.
+                    st.error = None;
+                }
+                if perms.screen != Status::Granted {
+                    ui.add_space(8.0);
+                    if ui.button("Restart Rec").on_hover_text("Screen Recording takes effect after a restart").clicked() {
+                        st.settings.onboarded = true;
+                        let _ = st.settings.save();
+                        super::macos::relaunch();
+                        st.cmds.push(Cmd::Quit);
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(RichText::new("You can change these any time in System Settings > Privacy & Security.").size(SECONDARY).color(p.tertiary));
+        });
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offers() {
+        assert_eq!(offer(Status::Granted), Offer::Done);
+        assert_eq!(offer(Status::NotDetermined), Offer::Ask);
+        assert_eq!(offer(Status::Denied), Offer::OpenSettings);
+        assert_eq!(offer(Status::Restricted), Offer::OpenSettings);
+    }
+}

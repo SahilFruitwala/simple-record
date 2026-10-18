@@ -133,7 +133,7 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
         });
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::same(16)))
-        .show(ui, |ui| preview(ui, st));
+        .show(ui, |ui| if st.onboarding { super::onboarding::show(ui, st) } else { preview(ui, st) });
     // Keyboard: ⌘, settings, ⌘W close (handled as hide by the app), space
     // does nothing (avoid accidental recordings).
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {

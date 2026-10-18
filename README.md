@@ -104,6 +104,11 @@ scripts/srt-e2e.sh               # needs ffmpeg with SRT (ffmpeg -protocols | gr
 
 ## Permissions (one time)
 
+The app's first run shows a welcome screen with each permission's state, an **Allow…**
+button for the system prompt, **Open System Settings** for a permission that was turned down,
+and **Restart Rec** (macOS applies Screen Recording only after a restart). From the command
+line:
+
 ```sh
 dist/rec-rs permissions --request
 ```

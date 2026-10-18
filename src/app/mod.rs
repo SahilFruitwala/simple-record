@@ -11,6 +11,7 @@
 mod dock;
 mod macos;
 mod menubar;
+mod onboarding;
 mod preview;
 mod scenes;
 mod theme;
@@ -196,6 +197,10 @@ pub struct State {
     pub selected_layer: Option<usize>,
     /// The last run ended with a crash (the error banner offers a report).
     pub crashed_last_time: bool,
+    /// Permissions as last read, and when (the welcome screen).
+    pub perms: Option<(onboarding::Perms, Instant)>,
+    /// The welcome screen is up.
+    pub onboarding: bool,
     /// A layer drag in progress: (layer, grip, its box when the drag
     /// began, the pointer's total movement as fractions of the frame).
     pub layer_drag: Option<(usize, crate::layout::Grip, [f64; 4], [f64; 2])>,
@@ -442,6 +447,8 @@ impl App {
             screen_aspect: 16.0 / 10.0,
             selected_layer: None,
             crashed_last_time: false,
+            perms: None,
+            onboarding: false,
             layer_drag: None,
             display_points: vec![],
             region_select: None,
@@ -842,7 +849,8 @@ impl App {
             }
             self.st.preview_settings = None;
         }
-        if want && self.st.preview.is_none() && self.st.error.is_none() {
+        // Not under the welcome screen: without permission it can only fail.
+        if want && self.st.preview.is_none() && self.st.error.is_none() && !self.st.onboarding {
             let cb = preview::callback(Arc::new(wake));
             let cam = self.st.spare_cam.take();
             match self.options(None).and_then(|(o, t)| Session::start_with_camera(&o, t, false, Some(cb), cam)) {
@@ -1079,6 +1087,7 @@ impl App {
         for (m, l) in self.st.meters.iter_mut().zip(lv) {
             m.feed(l, dt);
         }
+        self.st.onboarding = onboarding::wanted(&mut self.st);
         self.sync_preview();
         self.st.apply_pip();
         self.st.apply_scene();

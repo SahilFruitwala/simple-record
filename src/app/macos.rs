@@ -107,6 +107,26 @@ pub fn reveal(path: &std::path::Path) {
     objc2_app_kit::NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
 }
 
+/// Open a URL (a System Settings pane, a web page).
+pub fn open_url(url: &str) {
+    if let Some(u) = objc2_foundation::NSURL::URLWithString(&crate::util::ns(url)) {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&u);
+    }
+}
+
+/// Start a new copy of the app a moment after this one quits (the caller
+/// quits). macOS applies a Screen Recording grant only to a new process.
+pub fn relaunch() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    // Inside Rec.app: open the bundle (as Finder would); else the binary.
+    let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf());
+    let cmd = match &bundle {
+        Some(b) => format!("sleep 1; open \"{}\"", b.display()),
+        None => format!("sleep 1; \"{}\" gui &", exe.display()),
+    };
+    let _ = std::process::Command::new("/bin/sh").args(["-c", &cmd]).spawn();
+}
+
 /// Open a folder in Finder.
 pub fn open_folder(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
