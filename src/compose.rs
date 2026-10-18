@@ -180,6 +180,8 @@ pub struct Compositor {
     main_cam: Option<String>,
     /// Chroma key lookup tables, most recent last.
     cubes: Vec<(ChromaKey, Retained<NSData>)>,
+    /// Buffers keyed layers are rendered into, by size (see `materialize`).
+    key_pools: Vec<((usize, usize), CFRetained<objc2_core_video::CVPixelBufferPool>)>,
     /// sRGB, which the tables are indexed in (whatever the output is in).
     srgb: CFRetained<CGColorSpace>,
 }
@@ -241,6 +243,7 @@ impl Compositor {
                 screen_aspect: width as f64 / height.max(1) as f64,
                 main_cam: None,
                 cubes: vec![],
+                key_pools: vec![],
                 srgb: cs.clone(),
                 cs,
             }
@@ -426,6 +429,35 @@ impl Compositor {
         self.cubes.last().unwrap().1.clone()
     }
 
+    /// `img` rendered into a buffer of its own and read back as an image.
+    fn materialize(&mut self, img: &CIImage) -> Option<Retained<CIImage>> {
+        unsafe {
+            let e = img.extent();
+            if !(e.size.width >= 1.0 && e.size.height >= 1.0 && e.size.width.is_finite() && e.size.height.is_finite()) {
+                return None;
+            }
+            let size = (e.size.width.round() as usize, e.size.height.round() as usize);
+            let i = match self.key_pools.iter().position(|(s, _)| *s == size) {
+                Some(i) => i,
+                None => {
+                    if self.key_pools.len() >= 4 {
+                        self.key_pools.remove(0);
+                    }
+                    self.key_pools.push((size, make_pool(size.0, size.1, PIX_BGRA)));
+                    self.key_pools.len() - 1
+                }
+            };
+            let mut buf = std::ptr::null_mut();
+            objc2_core_video::CVPixelBufferPool::create_pixel_buffer(None, &self.key_pools[i].1, std::ptr::NonNull::from(&mut buf));
+            let buf: CFRetained<CVPixelBuffer> = CFRetained::from_raw(std::ptr::NonNull::new(buf)?);
+            let bounds = rect(0.0, 0.0, size.0 as f64, size.1 as f64);
+            self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&translate(img, -e.origin.x, -e.origin.y), &buf, bounds, Some(&self.cs));
+            let cs: Retained<objc2::runtime::AnyObject> = Retained::retain(&*self.cs as *const CGColorSpace as *mut objc2::runtime::AnyObject)?;
+            let opts = dict(vec![(objc2_core_image::kCIImageColorSpace, cs)]);
+            Some(translate(&CIImage::imageWithCVPixelBuffer_options(&buf, Some(&opts)), e.origin.x, e.origin.y))
+        }
+    }
+
     /// `img` through a layer's filters: the key, then color correction.
     fn filtered(&mut self, img: Retained<CIImage>, e: &Effects) -> Retained<CIImage> {
         let mut img = img;
@@ -439,6 +471,12 @@ impl Compositor {
                     (&*ns("inputColorSpace"), cs),
                 ]);
                 img = img.imageByApplyingFilter_withInputParameters(&ns("CIColorCubeWithColorSpace"), &params);
+                // Rendered on its own: drawn over a web page layer in the
+                // same render, the color cube turned the whole frame into
+                // the page (macOS 15, seen in CI).
+                if let Some(m) = self.materialize(&img) {
+                    img = m;
+                }
             }
             if e.has_color() {
                 let params = dict(vec![

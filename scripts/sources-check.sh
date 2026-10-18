@@ -21,7 +21,7 @@ scene() {
   local layers='{"content": "screen"}'
   for l in "$@"; do layers="$layers, $l"; done
   printf '{"name": "%s", "layers": [%s]}' "$name" "$layers" > "$WORK/$name.json"
-  REC_DEBUG_LAYERS=${DEBUG_LAYERS:-} "$REC" record -q --test-pattern --no-mic --no-system-audio -r 640x360 -f 30 --scene-file "$WORK/$name.json" -t 4 -o "$WORK/$name.mov" 2>"$WORK/$name.log" || { cat "$WORK/$name.log"; exit 1; }
+  REC_DEBUG_LAYERS=${DEBUG_LAYERS:-} "$REC" record -q --test-pattern --no-mic --no-system-audio -r 640x360 -f 30 --scene-file "$WORK/$name.json" -t 6 -o "$WORK/$name.mov" 2>"$WORK/$name.log" || { cat "$WORK/$name.log"; exit 1; }
   grep -v IOServiceMatching "$WORK/$name.log" || true
 }
 RED='{"content": {"media": {"path": "'$WORK'/red.mp4", "looped": true}}, "rect": [0, 0, 0.5, 1], "fit": "cover"}'
@@ -32,17 +32,12 @@ scene page "$PAGE"
 scene video_page "$RED" "$PAGE"
 scene video_keyed "$RED" "$KEYED"
 scene all "$RED" "$PAGE" "$KEYED"
-# Narrowing down (temporary).
-SAT='{"content": {"media": {"path": "'$WORK'/green.mp4", "looped": true}}, "rect": [0.6, 0.3, 0.3, 0.4], "fit": "cover", "effects": {"saturation": 0.0}}'
-PLAIN='{"content": {"media": {"path": "'$WORK'/green.mp4", "looped": true}}, "rect": [0.6, 0.3, 0.3, 0.4], "fit": "cover"}'
+# A keyed layer over a page (once turned the whole frame into the page).
 scene page_keyed "$PAGE" "$KEYED"
-scene all_plain "$RED" "$PAGE" "$PLAIN"
-scene all_sat "$RED" "$PAGE" "$SAT"
-scene keyed_first "$KEYED" "$RED" "$PAGE"
-# The RGB of an 8x8 patch around (x, y) at 2.5 s of recording $1 (between
+# The RGB of an 8x8 patch around (x, y) at 4.5 s of recording $1 (the page has loaded; between
 # the test pattern's white flashes).
 rgb() {
-  ffmpeg -v error -ss 2.5 -i "$WORK/$1.mov" -frames:v 1 -vf "crop=8:8:$2:$3,scale=1:1" -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | tr -s ' ' | sed 's/^ //'
+  ffmpeg -v error -ss 4.5 -i "$WORK/$1.mov" -frames:v 1 -vf "crop=8:8:$2:$3,scale=1:1" -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | tr -s ' ' | sed 's/^ //'
 }
 # A coarse picture of the frame (4 rows of 8 patches), for diagnosis.
 grid() {
@@ -76,5 +71,6 @@ expect "keyed video (pattern through keyed green)" video_keyed 476 176 pattern
 expect "video file under a page" all 156 176 red
 expect "web page beside a video" all 496 40 blue
 expect "chroma key (page through keyed green)" all 476 176 blue
-for n in page_keyed all_plain all_sat keyed_first; do grid $n; done
+expect "keyed video over a page (page through it)" page_keyed 476 176 blue
+expect "keyed video over a page (pattern beside)" page_keyed 156 176 pattern
 exit $fail
