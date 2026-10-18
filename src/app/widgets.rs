@@ -144,6 +144,92 @@ pub fn switch(ui: &mut Ui, on: &mut bool, enabled: bool) -> Response {
     resp
 }
 
+/// A macOS check box: a small rounded square, filled with the accent and
+/// ticked when on (egui's own reads as a radio button with this theme's
+/// corner radius). Use with `ui.add` / `ui.add_enabled`.
+pub struct Check<'a> {
+    on: &'a mut bool,
+    text: egui::WidgetText,
+}
+
+impl<'a> Check<'a> {
+    pub fn new(on: &'a mut bool, text: impl Into<egui::WidgetText>) -> Self {
+        Check { on, text: text.into() }
+    }
+}
+
+impl egui::Widget for Check<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        const BOX: f32 = 14.0;
+        let p = theme::pal(ui);
+        let galley = (!self.text.is_empty()).then(|| self.text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body));
+        let text_w = galley.as_ref().map_or(0.0, |g| g.size().x + 6.0);
+        let h = ui.spacing().interact_size.y;
+        let (rect, mut resp) = ui.allocate_exact_size(vec2(BOX + text_w, h), Sense::click());
+        if resp.clicked() {
+            *self.on = !*self.on;
+            resp.mark_changed();
+        }
+        let enabled = ui.is_enabled();
+        let b = Rect::from_center_size(pos2(rect.left() + BOX / 2.0, rect.center().y), vec2(BOX, BOX));
+        let painter = ui.painter();
+        if *self.on {
+            painter.rect_filled(b, CornerRadius::same(4), theme::accent());
+            let s = Stroke::new(1.8, Color32::WHITE);
+            painter.line(vec![b.left_top() + vec2(3.5, 7.2), b.left_top() + vec2(6.0, 9.8), b.left_top() + vec2(10.6, 4.4)], s);
+        } else {
+            let fill = if resp.hovered() && enabled { theme::blend(p.field, p.hover) } else { p.field };
+            painter.rect_filled(b, CornerRadius::same(4), fill);
+            painter.rect_stroke(b, CornerRadius::same(4), Stroke::new(1.0, p.secondary.gamma_multiply(0.6)), egui::StrokeKind::Inside);
+        }
+        if let Some(g) = galley {
+            let color = if enabled { p.text } else { p.secondary };
+            painter.galley(pos2(b.right() + 6.0, rect.center().y - g.size().y / 2.0), g, color);
+        }
+        resp
+    }
+}
+
+/// A button that asks before acting: the first click turns it into the
+/// question, then Cancel and <confirm>; true once confirmed. For destructive
+/// actions (delete, restore defaults). [`ask_confirm`] opens the question
+/// from elsewhere.
+pub fn confirm_button(ui: &mut Ui, id: &str, label: &str, question: &str, confirm: &str, enabled: bool) -> bool {
+    // A global id, so another control (a context menu) can open the question.
+    let id = egui::Id::new(("confirm", id));
+    let asking = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let mut done = false;
+    if asking {
+        // The question on its own line: a long name would push the buttons
+        // out of a narrow card.
+        ui.add(egui::Label::new(egui::RichText::new(question).size(SECONDARY + 1.0)).wrap());
+        ui.horizontal(|ui| {
+            if ui.button("Cancel").clicked() {
+                ui.data_mut(|d| d.remove::<bool>(id));
+            }
+            let b = egui::Button::new(egui::RichText::new(confirm).color(Color32::WHITE)).fill(Color32::from_rgb(0xff, 0x3b, 0x30));
+            if ui.add(b).clicked() {
+                ui.data_mut(|d| d.remove::<bool>(id));
+                done = true;
+            }
+        });
+    } else if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+        ui.data_mut(|d| d.insert_temp(id, true));
+    }
+    done
+}
+
+/// Shows the question of the [`confirm_button`] with this id.
+pub fn ask_confirm(ctx: &egui::Context, id: &str) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("confirm", id)), true));
+}
+
+/// The window's one prominent action: accent fill, white semibold text.
+pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
+    let b = egui::Button::new(egui::RichText::new(label).font(theme::semibold(theme::BODY)).color(Color32::WHITE)).fill(theme::accent()).corner_radius(7).min_size(vec2(0.0, 30.0));
+    ui.add(b)
+}
+
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let [ar, ag, ab, aa] = a.to_srgba_unmultiplied();
     let [br, bg, bb, ba] = b.to_srgba_unmultiplied();

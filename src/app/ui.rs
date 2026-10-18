@@ -33,10 +33,17 @@ fn tilde(p: &std::path::Path) -> String {
     }
 }
 
+/// A Settings section heading, styled like the sidebar's headers.
 fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(10.0);
-    ui.label(RichText::new(title).font(theme::semibold(SECONDARY)).color(theme::pal(ui).secondary));
-    ui.add_space(2.0);
+    ui.add_space(12.0);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &title.to_uppercase(),
+        0.0,
+        egui::TextFormat { font_id: theme::semibold(10.5), color: theme::pal(ui).secondary, extra_letter_spacing: 0.6, ..Default::default() },
+    );
+    ui.label(job);
+    ui.add_space(4.0);
 }
 
 /// Toolbar strip: empty space drags the window.
@@ -151,6 +158,7 @@ fn preview(ui: &mut Ui, st: &mut State) {
             .corner_radius(CornerRadius::same(8))
             .inner_margin(Margin::same(10))
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Rec quit unexpectedly last time. Reporting it helps fix it.").color(p.text));
                     if ui.button("Report a Problem…").clicked() {
@@ -170,10 +178,15 @@ fn preview(ui: &mut Ui, st: &mut State) {
             .corner_radius(CornerRadius::same(8))
             .inner_margin(Margin::same(10))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(err).color(p.text));
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(RichText::new(err).color(p.text)).wrap());
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
                     if st.permissions_missing && ui.button("Request Permissions").clicked() {
                         crate::tcc::request_all(true, true, true, std::time::Duration::from_secs(0));
+                    }
+                    if st.permissions_missing && ui.button("Open System Settings").on_hover_text("Privacy & Security, Screen & System Audio Recording").clicked() {
+                        super::macos::open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
                     }
                     if ui.button("Dismiss").clicked() {
                         st.error = None;
@@ -388,7 +401,9 @@ pub(super) fn shape_icon(ui: &Ui, rect: egui::Rect, shape: Shape, roundness: f64
             painter.circle_stroke(c, 8.0 * scale, stroke);
         }
         Shape::Squircle => {
-            let n = compose::squircle_exponent(roundness);
+            // At low roundness a squircle is drawn as a square: keep the icon
+            // telling the two apart.
+            let n = compose::squircle_exponent(roundness.max(0.6));
             let pts: Vec<egui::Pos2> = (0..64)
                 .map(|i| {
                     let t = i as f64 / 64.0 * std::f64::consts::TAU;
@@ -519,7 +534,7 @@ fn app_audio(ui: &mut Ui, st: &State, sel: &mut AppAudio, idle: bool) {
     egui::ScrollArea::vertical().id_salt("app-audio-list").max_height(140.0).show(ui, |ui| {
         for (id, name) in &apps {
             let mut on = list.contains(id);
-            if ui.add_enabled(idle, egui::Checkbox::new(&mut on, name.as_str())).on_hover_text(id.as_str()).changed() {
+            if ui.add_enabled(idle, w::Check::new(&mut on, name.as_str())).on_hover_text(id.as_str()).changed() {
                 if on {
                     list.push(id.clone());
                 } else {
@@ -540,7 +555,9 @@ fn controls(ui: &mut Ui, st: &mut State) {
     let recording = st.recording.is_some();
     ui.horizontal_centered(|ui| {
         // Record / stop: a round button like a camera's.
-        let (rect, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
+        // Without Screen Recording there is nothing to record.
+        let blocked = !recording && st.perms().screen != crate::tcc::Status::Granted;
+        let (rect, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), if blocked { Sense::hover() } else { Sense::click() });
         let c = rect.center();
         let painter = ui.painter();
         painter.circle_stroke(c, 21.0, Stroke::new(3.0, if resp.hovered() { p.text } else { p.secondary }));
@@ -549,11 +566,11 @@ fn controls(ui: &mut Ui, st: &mut State) {
         } else if recording {
             painter.rect_filled(egui::Rect::from_center_size(c, vec2(18.0, 18.0)), CornerRadius::same(4), RED);
         } else {
-            painter.circle_filled(c, 16.0, RED);
+            painter.circle_filled(c, 16.0, if blocked { RED.gamma_multiply(0.35) } else { RED });
         }
         let key = st.settings.hotkey(Action::Record).map(|c| format!(" ({})", c.label())).unwrap_or_default();
-        let tip = format!("{} recording{key}", if recording { "Stop" } else { "Start" });
-        if resp.on_hover_text(tip).clicked() && !st.finishing {
+        let tip = if blocked { "Allow Screen Recording to record".to_string() } else { format!("{} recording{key}", if recording { "Stop" } else { "Start" }) };
+        if resp.on_hover_text(tip).clicked() && !st.finishing && !blocked {
             st.cmds.push(Cmd::ToggleRecording);
         }
         ui.add_space(6.0);
@@ -713,7 +730,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
         }
         w::row(ui, "Frame", |ui| {
             let opts: Vec<(Canvas, String)> = Canvas::ALL.iter().map(|c| (*c, c.label().to_string())).collect();
-            ui.allocate_ui(vec2(150.0, 24.0), |ui| combo(ui, "canvas", &mut s.canvas, &opts, idle));
+            ui.allocate_ui(vec2(150.0, 24.0), |ui| combo(ui, "canvas", &mut s.canvas, &opts, idle))
+                .response
+                .on_hover_text("The shape of the video: the screen's own, or 16:9, 9:16 (Shorts), 1:1 or 4:5");
         });
     });
 
@@ -796,7 +815,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
         let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
         cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
         let uses_cam = s.scene_spec().uses_cam();
-        combo(ui, "camera", &mut s.camera, &cams, idle && uses_cam);
+        // A custom scene can add the camera as a layer: pick it first.
+        let custom = s.scene_id().1.is_some();
+        combo(ui, "camera", &mut s.camera, &cams, idle && (uses_cam || custom));
         if uses_cam {
             w::row(ui, "Resolution", |ui| {
                 let opts: Vec<(crate::camera::CamRes, String)> = crate::camera::CamRes::ALL.iter().map(|r| (*r, r.label().to_string())).collect();
@@ -806,7 +827,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 .on_hover_text("Also write the webcam alone to …-camera.mov, on the recording's timeline");
         }
         if !uses_cam {
-            w::hint(ui, "Pick a camera scene to use the webcam.");
+            w::hint(ui, if custom { "Add a Camera layer below to use the webcam." } else { "Pick a camera scene to use the webcam." });
         }
     });
     if s.scene_id().1.is_some() {
@@ -829,6 +850,18 @@ fn sources(ui: &mut Ui, st: &mut State) {
         if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
             s.mic_name = mic_label(&mics, &s.mic);
         }
+        if s.mic_enabled && st.perms().mic != crate::tcc::Status::Granted {
+            let asked = st.perms().mic != crate::tcc::Status::NotDetermined;
+            w::hint(ui, "Rec isn't allowed to use the microphone, so it records without it.");
+            ui.horizontal(|ui| {
+                if !asked && ui.button("Allow…").clicked() {
+                    crate::tcc::request_all(false, true, false, std::time::Duration::ZERO);
+                }
+                if asked && ui.button("Open System Settings").clicked() {
+                    super::macos::open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+                }
+            });
+        }
         if s.mic_enabled {
             // Live, also while recording.
             w::divider(ui);
@@ -843,14 +876,33 @@ fn sources(ui: &mut Ui, st: &mut State) {
     w::header(ui, Icon::Output, "Output");
     w::card(ui, |ui| {
         let codec = s.codec.map_or("Auto".to_string(), |c| format!("{c:?}").replace("H264", "H.264").replace("Hevc", "HEVC").replace("Prores", "ProRes 422"));
-        let value = |ui: &mut Ui, text: String| {
-            ui.add(egui::Label::new(RichText::new(&text).color(p.secondary)).truncate()).on_hover_text(text);
+        // Each row opens Settings at the tab that changes it.
+        let mut open = None;
+        let mut link_row = |ui: &mut Ui, label: &str, text: String, tab: SettingsTab| {
+            let r = ui.scope(|ui| {
+                w::row(ui, label, |ui| {
+                    ui.label(RichText::new("›").size(BODY + 2.0).color(p.tertiary));
+                    ui.add(egui::Label::new(RichText::new(&text).color(p.secondary)).truncate());
+                })
+            });
+            let resp = ui.interact(r.response.rect, ui.id().with(("out-row", label)), Sense::click());
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.on_hover_text(format!("{text}  (click to change in Settings)")).clicked() {
+                open = Some(tab);
+            }
         };
-        w::row(ui, "Format", |ui| value(ui, format!("{} · {} fps", s.resolution.to_uppercase(), s.fps)));
+        let res = if s.resolution == "4k" { "4K".to_string() } else { s.resolution.clone() };
+        link_row(ui, "Format", format!("{res} · {} fps", s.fps), SettingsTab::Video);
         w::divider(ui);
-        w::row(ui, "Codec", |ui| value(ui, format!("{codec} · .{}", s.container)));
+        link_row(ui, "Codec", format!("{codec} · .{}", s.container), SettingsTab::Video);
         w::divider(ui);
-        w::row(ui, "Folder", |ui| value(ui, tilde(&s.output_dir)));
+        link_row(ui, "Folder", tilde(&s.output_dir), SettingsTab::General);
+        if let Some(tab) = open {
+            st.settings_tab = tab;
+            st.cmds.push(Cmd::ShowSettings);
+        }
     });
 
     live_controls(ui, st, &mut s);
@@ -880,12 +932,17 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     }
     w::header(ui, Icon::Replay, "Replay Buffer");
     w::card(ui, |ui| {
-        w::row(ui, "Keep recent footage", |ui| w::switch(ui, &mut s.replay_enabled, true));
+        w::row(ui, &format!("Keep the last {} s", s.replay_secs), |ui| w::switch(ui, &mut s.replay_enabled, true))
+            .on_hover_text("Holds recent footage in memory so you can save it after it happened, recording or not");
         w::field(ui, "Length", 72.0, |ui| {
             ui.spacing_mut().slider_width = (ui.available_width() - 48.0).max(40.0);
             ui.add(egui::Slider::new(&mut s.replay_secs, 15..=300).step_by(5.0).show_value(false));
             w::slot(ui, 40.0, Align::Max, RichText::new(format!("{} s", s.replay_secs)).size(SECONDARY + 1.0).color(p.secondary));
         });
+        if st.replay_stats.is_none() {
+            let key = st.settings.hotkey(Action::SaveReplay).map(|c| format!(" or {}", c.label())).unwrap_or_default();
+            w::hint(ui, &format!("Turn it on, then use Save Replay{key} to save what just happened."));
+        }
         if let Some((held, bytes)) = st.replay_stats {
             w::divider(ui);
             ui.horizontal(|ui| {
@@ -916,7 +973,7 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
                 w::switch(ui, &mut d.enabled, !live).on_hover_text("Stream here too");
                 ui.label(RichText::new(format!("Also stream to ({})", i + 2)).size(SECONDARY).color(p.secondary));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add_enabled(!live, egui::Button::new("✕").small()).on_hover_text("Remove this destination").clicked() {
+                    if ui.add_enabled(!live, egui::Button::new("×").small()).on_hover_text("Remove this destination").clicked() {
                         remove = Some(i);
                     }
                 });
@@ -931,7 +988,7 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
                         let sizes: Vec<(String, String)> = ["720p", "1080p", "1440p", "4k"].iter().map(|r| (r.to_string(), r.to_uppercase())).collect();
                         ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, &format!("dest-res-{i}"), &mut d.resolution, &sizes, !live));
                         let mut auto = d.bitrate_kbps == 0;
-                        if ui.add_enabled(!live, egui::Checkbox::new(&mut auto, "Auto bitrate")).changed() {
+                        if ui.add_enabled(!live, w::Check::new(&mut auto, "Auto bitrate")).changed() {
                             d.bitrate_kbps = if auto { 0 } else { 6000 };
                         }
                         if !auto {
@@ -971,6 +1028,9 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         let resp = if ready || live { resp } else { resp.on_disabled_hover_text("Save a stream key for every destination first") };
         if resp.clicked() {
             st.cmds.push(Cmd::ToggleStream);
+        }
+        if !ready && !live {
+            w::hint(ui, if urls.is_empty() { "Enter a server URL to go live." } else { "Save a stream key to go live." });
         }
         for status in &st.stream_statuses {
             let text = if status.live {
@@ -1031,6 +1091,29 @@ fn destination(ui: &mut Ui, st: &mut State, i: usize, dest: &mut String, custom_
     }
 }
 
+/// The Settings window's tabs, in toolbar order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    Video,
+    Audio,
+    Streaming,
+    Shortcuts,
+    Camera,
+}
+
+impl SettingsTab {
+    const ALL: [(SettingsTab, &'static str); 6] = [
+        (SettingsTab::General, "General"),
+        (SettingsTab::Video, "Video"),
+        (SettingsTab::Audio, "Audio"),
+        (SettingsTab::Streaming, "Streaming"),
+        (SettingsTab::Shortcuts, "Shortcuts"),
+        (SettingsTab::Camera, "Camera"),
+    ];
+}
+
 pub fn settings_window(ui: &mut Ui, st: &mut State) {
     let p = theme::pal(ui);
     let idle = st.recording.is_none() && !st.finishing;
@@ -1040,25 +1123,40 @@ pub fn settings_window(ui: &mut Ui, st: &mut State) {
         .show(ui, |ui| {
             toolbar(ui, |ui| {
                 ui.label(RichText::new("Settings").font(theme::semibold(BODY)));
+                // In the toolbar, so the form doesn't jump when it appears.
+                if !idle {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Locked while recording").size(SECONDARY).color(p.secondary));
+                }
             });
         });
-    egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::symmetric(20, 12)))
+    egui::Panel::top("settings-tabs")
+        .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin { left: 20, right: 20, top: 4, bottom: 8 }))
         .show(ui, |ui| {
-            if !idle {
-                ui.label(RichText::new("Settings are locked while recording.").color(p.secondary));
-            }
+            let tabs: Vec<(SettingsTab, &str, bool, &str)> = SettingsTab::ALL.iter().map(|(t, l)| (*t, *l, true, "")).collect();
+            w::segmented(ui, &mut st.settings_tab, &tabs);
+        });
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::symmetric(20, 4)))
+        .show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                ui.add_enabled_ui(idle, |ui| settings_form(ui, st));
-                // The overlay stays editable while recording (applied live).
-                section(ui, "CAMERA OVERLAY");
-                let mut s = st.settings.clone();
-                overlay_controls(ui, &mut s);
-                if s != st.settings {
-                    st.settings = s;
-                    st.apply_pip();
-                    let _ = st.settings.save();
+                let tab = st.settings_tab;
+                if tab == SettingsTab::Camera {
+                    // The device is locked while recording; the overlay is
+                    // applied live, so it stays editable.
+                    ui.add_enabled_ui(idle, |ui| settings_form(ui, st, tab));
+                    section(ui, "CAMERA OVERLAY");
+                    let mut s = st.settings.clone();
+                    overlay_controls(ui, &mut s);
+                    if s != st.settings {
+                        st.settings = s;
+                        st.apply_pip();
+                        let _ = st.settings.save();
+                    }
+                } else {
+                    ui.add_enabled_ui(idle, |ui| settings_form(ui, st, tab));
                 }
+                ui.add_space(12.0);
             });
         });
 }
@@ -1098,11 +1196,11 @@ fn shortcuts(ui: &mut Ui, st: &mut State, s: &mut Settings) {
                 } else {
                     s.hotkey(a).map(|c| c.label()).unwrap_or_else(|| "None".into())
                 };
-                let b = egui::Button::selectable(capturing, RichText::new(text).monospace()).min_size(vec2(110.0, 22.0));
+                let b = egui::Button::new(RichText::new(text).monospace()).selected(capturing).min_size(vec2(110.0, 22.0));
                 if ui.add(b).on_hover_text("Click, then press the shortcut (Esc cancels, ⌫ clears)").clicked() {
                     st.capturing_shortcut = if capturing { None } else { Some(a) };
                 }
-                if s.hotkey(a).is_some() && ui.small_button("✕").on_hover_text("No shortcut").clicked() {
+                if s.hotkey(a).is_some() && ui.small_button("×").on_hover_text("Remove this shortcut").clicked() {
                     s.set_hotkey(a, None);
                 }
                 if st.hotkey_failed.contains(&a) {
@@ -1119,248 +1217,283 @@ fn shortcuts(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     }
 }
 
-fn settings_form(ui: &mut Ui, st: &mut State) {
+fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
     let mut s = st.settings.clone();
     let grid = |ui: &mut Ui, id: &str, add: &mut dyn FnMut(&mut Ui)| {
         egui::Grid::new(id).num_columns(2).spacing(vec2(12.0, 8.0)).min_col_width(110.0).show(ui, |ui| add(ui));
     };
+    let secondary = theme::pal(ui).secondary;
+    let note = |ui: &mut Ui, text: &str| {
+        ui.add(egui::Label::new(RichText::new(text).size(SECONDARY).color(secondary)).wrap());
+    };
 
-    section(ui, "OUTPUT");
-    grid(ui, "out", &mut |ui| {
-        ui.label("Folder");
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tilde(&s.output_dir)).size(SECONDARY));
-            if ui.button("Choose…").clicked()
-                && let Some(d) = rfd::FileDialog::new().set_directory(&s.output_dir).pick_folder()
-            {
-                s.output_dir = d;
-            }
-        });
-        ui.end_row();
-        ui.label("Format");
-        let opts = [("mov".to_string(), "QuickTime (.mov)".to_string()), ("mp4".to_string(), "MPEG-4 (.mp4)".to_string())];
-        combo(ui, "container", &mut s.container, &opts, s.codec != Some(Codec::Prores));
-        ui.end_row();
-    });
-
-    section(ui, "VIDEO");
-    grid(ui, "video", &mut |ui| {
-        ui.label("Resolution");
-        let opts: Vec<(String, String)> = RESOLUTIONS.iter().map(|(l, v)| (v.to_string(), l.to_string())).collect();
-        combo(ui, "res", &mut s.resolution, &opts, true);
-        ui.end_row();
-        ui.label("Frame rate");
-        let opts: Vec<(u32, String)> = FPS.iter().map(|f| (*f, format!("{f} fps"))).collect();
-        combo(ui, "fps", &mut s.fps, &opts, true);
-        ui.end_row();
-        ui.label("Codec");
-        let opts = vec![
-            (None, "Auto (H.264 ≤1080p, HEVC above)".to_string()),
-            (Some(Codec::H264), "H.264".to_string()),
-            (Some(Codec::Hevc), "HEVC (H.265)".to_string()),
-            (Some(Codec::Prores), "ProRes 422 (.mov)".to_string()),
-        ];
-        combo(ui, "codec", &mut s.codec, &opts, true);
-        ui.end_row();
-        ui.label("HDR");
-        ui.vertical(|ui| {
-            // Not while streaming: the stream would lose its frames.
-            ui.add_enabled(s.codec != Some(Codec::H264) && !st.streaming(), egui::Checkbox::new(&mut s.hdr, "Record HDR (experimental)"))
-                .on_hover_text("10-bit HEVC or ProRes, BT.2020 PQ, from ScreenCaptureKit's HDR capture");
-            if s.hdr_on() {
-                ui.label(RichText::new("HDR is for recordings: the replay buffer and streams are off while it is on.").size(SECONDARY).color(theme::pal(ui).secondary));
-            }
-        });
-        ui.end_row();
-        ui.label("Bitrate");
-        ui.horizontal(|ui| {
-            let mut auto = s.bitrate_mbps.is_none();
-            if ui.add_enabled(s.codec != Some(Codec::Prores), egui::Checkbox::new(&mut auto, "Auto")).changed() {
-                s.bitrate_mbps = if auto { None } else { Some(30.0) };
-            }
-            if let Some(b) = &mut s.bitrate_mbps {
-                ui.add(egui::Slider::new(b, 2.0..=200.0).suffix(" Mb/s").logarithmic(true).integer());
-            }
-        });
-        ui.end_row();
-        ui.label("Cursor");
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut s.cursor, "Show");
-            ui.add_enabled(s.cursor, egui::Checkbox::new(&mut s.clicks, "Highlight clicks"));
-        });
-        ui.end_row();
-        ui.label("Preview");
-        ui.checkbox(&mut s.preview_low_power, "Low power (half resolution, 15 fps)");
-        ui.end_row();
-    });
-
-    section(ui, "SCENES");
-    grid(ui, "scenes", &mut |ui| {
-        ui.label("Frame shape");
-        let opts: Vec<(Canvas, String)> = Canvas::ALL
-            .iter()
-            .map(|c| (*c, match c {
-                Canvas::Source => "The screen's shape (no bars)".to_string(),
-                Canvas::Landscape => "16:9 (YouTube)".to_string(),
-                Canvas::Portrait => "9:16 (Shorts, Reels, TikTok)".to_string(),
-                Canvas::Square => "1:1 (square)".to_string(),
-                Canvas::Tall => "4:5 (Instagram feed)".to_string(),
-            }))
-            .collect();
-        combo(ui, "canvas2", &mut s.canvas, &opts, true);
-        ui.end_row();
-        ui.label("Background");
-        ui.horizontal(|ui| {
-            ui.color_edit_button_srgb(&mut s.background.top);
-            ui.color_edit_button_srgb(&mut s.background.bottom);
-            ui.label(RichText::new("top, bottom").size(SECONDARY).color(theme::pal(ui).secondary));
-            if ui.small_button("Reset").clicked() {
-                s.background = Background::default();
-            }
-        });
-        ui.end_row();
-        ui.label("Transition");
-        ui.horizontal(|ui| {
-            let opts: Vec<(Transition, String)> = Transition::ALL.iter().map(|t| (*t, t.label().to_string())).collect();
-            ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, "transition", &mut s.transition, &opts, true));
-            ui.add_enabled(s.transition != Transition::Cut, egui::Slider::new(&mut s.transition_ms, 100..=1500).suffix(" ms").step_by(50.0));
-        });
-        ui.end_row();
-    });
-
-    section(ui, "AUDIO");
-    grid(ui, "audio", &mut |ui| {
-        ui.label("System audio");
-        ui.checkbox(&mut s.system_audio, "Record");
-        ui.end_row();
-        ui.label("Microphone");
-        let mics = mic_options(st, &s);
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut s.mic_enabled, "");
-            if combo(ui, "mic2", &mut s.mic, &mics, s.mic_enabled) {
-                s.mic_name = mic_label(&mics, &s.mic);
-            }
-        });
-        ui.end_row();
-        ui.label("Tracks");
-        let opts = vec![
-            (AudioLayout::Both, "Mix + separate system & mic".to_string()),
-            (AudioLayout::Mix, "Mix only".to_string()),
-            (AudioLayout::Stems, "Separate only".to_string()),
-        ];
-        combo(ui, "tracks", &mut s.audio_tracks, &opts, true);
-        ui.end_row();
-        ui.label("System gain");
-        ui.add(egui::Slider::new(&mut s.system_gain_db, -24.0..=12.0).suffix(" dB").step_by(0.5));
-        ui.end_row();
-        ui.label("Mic gain");
-        ui.add(egui::Slider::new(&mut s.mic_gain_db, -24.0..=24.0).suffix(" dB").step_by(0.5));
-        ui.end_row();
-        let f = &mut s.mic_filters;
-        ui.label("Mic filters");
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut f.low_cut, "Low cut");
-            ui.checkbox(&mut f.denoise, "Noise suppression");
-            ui.checkbox(&mut f.gate, "Gate");
-            ui.checkbox(&mut f.compressor, "Compressor");
-        });
-        ui.end_row();
-        ui.label("Gate opens at");
-        ui.add_enabled(f.gate, egui::Slider::new(&mut f.gate_db, -70.0..=-20.0).suffix(" dBFS").step_by(1.0));
-        ui.end_row();
-        ui.label("Compressor");
-        ui.add_enabled_ui(f.compressor, |ui| {
-            ui.vertical(|ui| {
-                ui.add(egui::Slider::new(&mut f.comp_threshold_db, -40.0..=-5.0).suffix(" dB").step_by(1.0).text("threshold"));
-                ui.add(egui::Slider::new(&mut f.comp_ratio, 1.5..=10.0).step_by(0.5).text(": 1"));
-                ui.add(egui::Slider::new(&mut f.comp_makeup_db, 0.0..=18.0).suffix(" dB").step_by(1.0).text("makeup"));
+    match tab {
+        SettingsTab::General => {
+            section(ui, "OUTPUT");
+            grid(ui, "out", &mut |ui| {
+                ui.label("Folder");
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tilde(&s.output_dir)).size(SECONDARY));
+                    if ui.button("Choose…").clicked()
+                        && let Some(d) = rfd::FileDialog::new().set_directory(&s.output_dir).pick_folder()
+                    {
+                        s.output_dir = d;
+                    }
+                });
+                ui.end_row();
+                ui.label("Format");
+                let opts = [("mov".to_string(), "QuickTime (.mov)".to_string()), ("mp4".to_string(), "MPEG-4 (.mp4)".to_string())];
+                combo(ui, "container", &mut s.container, &opts, s.codec != Some(Codec::Prores));
+                ui.end_row();
             });
-        });
-        ui.end_row();
-    });
 
-    section(ui, "LIVE ENCODE (REPLAY & STREAMING)");
-    let streaming = st.streaming();
-    ui.add_enabled_ui(!streaming, |ui| {
-        grid(ui, "live", &mut |ui| {
-            ui.label("Resolution");
-            let opts: Vec<(String, String)> =
-                [("720p", "720p"), ("1080p", "1080p"), ("1440p", "1440p"), ("4k", "4K")].iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
-            combo(ui, "live-res", &mut s.live_resolution, &opts, true);
-            ui.end_row();
-            ui.label("Codec");
-            let opts: Vec<(String, String)> = [("auto", "Auto (HEVC for YouTube, else H.264)"), ("h264", "H.264"), ("hevc", "HEVC (falls back to H.264)")]
-                .iter()
-                .map(|(v, l)| (v.to_string(), l.to_string()))
-                .collect();
-            combo(ui, "live-codec", &mut s.stream_codec, &opts, true);
-            ui.end_row();
-            ui.label("Video bitrate");
+            section(ui, "SCENES");
+            grid(ui, "scenes", &mut |ui| {
+                ui.label("Frame shape").on_hover_text("The shape of the video. Scenes are laid out inside it.");
+                let opts: Vec<(Canvas, String)> = Canvas::ALL
+                    .iter()
+                    .map(|c| (*c, match c {
+                        Canvas::Source => "The screen's shape (no bars)".to_string(),
+                        Canvas::Landscape => "16:9 (YouTube)".to_string(),
+                        Canvas::Portrait => "9:16 (Shorts, Reels, TikTok)".to_string(),
+                        Canvas::Square => "1:1 (square)".to_string(),
+                        Canvas::Tall => "4:5 (Instagram feed)".to_string(),
+                    }))
+                    .collect();
+                combo(ui, "canvas2", &mut s.canvas, &opts, true);
+                ui.end_row();
+                ui.label("Background").on_hover_text("Fills what the scene doesn't cover: a gradient from top to bottom");
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_srgb(&mut s.background.top);
+                    ui.color_edit_button_srgb(&mut s.background.bottom);
+                    ui.label(RichText::new("top, bottom").size(SECONDARY).color(theme::pal(ui).secondary));
+                    if ui.small_button("Reset").clicked() {
+                        s.background = Background::default();
+                    }
+                });
+                ui.end_row();
+                ui.label("Transition").on_hover_text("The animation when you switch scenes");
+                ui.horizontal(|ui| {
+                    let opts: Vec<(Transition, String)> = Transition::ALL.iter().map(|t| (*t, t.label().to_string())).collect();
+                    ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, "transition", &mut s.transition, &opts, true));
+                    ui.add_enabled(s.transition != Transition::Cut, egui::Slider::new(&mut s.transition_ms, 100..=1500).suffix(" ms").step_by(50.0));
+                });
+                ui.end_row();
+            });
+
+            section(ui, "HELP");
             ui.horizontal(|ui| {
-                ui.checkbox(&mut s.stream_bitrate_auto, "Platform preset");
-                if !s.stream_bitrate_auto {
-                    ui.add(egui::Slider::new(&mut s.stream_bitrate_kbps, 1000..=60_000).suffix(" kb/s").step_by(500.0).logarithmic(true));
+                if ui.button("Report a Problem…").on_hover_text("Saves the logs and details of this Mac (no stream keys or passwords) to a folder on the Desktop").clicked() {
+                    st.cmds.push(Cmd::ReportProblem);
+                }
+                if ui.button("Open Log").clicked() {
+                    st.cmds.push(Cmd::OpenLog);
                 }
             });
-            ui.end_row();
-            ui.label("");
-            let c = s.live_config();
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "Up to {}x{} {} at {:.1} Mb/s (the frame keeps its shape, never above the recording size)",
-                        c.width,
-                        c.height,
-                        if c.hevc { "HEVC" } else { "H.264" },
-                        c.bitrate as f64 / 1e6
-                    ))
-                    .size(SECONDARY)
-                    .color(theme::pal(ui).secondary),
-                )
-                .wrap(),
-            );
-            ui.end_row();
-            ui.label("Rate control");
-            ui.checkbox(&mut s.stream_cbr, "Constant bitrate (CBR)");
-            ui.end_row();
-            ui.label("Keyframe every");
-            ui.add(egui::Slider::new(&mut s.keyframe_secs, 1.0..=4.0).suffix(" s").step_by(0.5));
-            ui.end_row();
-            ui.label("Audio bitrate");
-            let opts: Vec<(u32, String)> = [96, 128, 160, 192, 256, 320].iter().map(|k| (*k, format!("{k} kb/s"))).collect();
-            combo(ui, "live-audio", &mut s.stream_audio_kbps, &opts, true);
-            ui.end_row();
-        });
-    });
-    if streaming {
-        ui.label(RichText::new("Stop the stream to change the live encode.").size(SECONDARY).color(theme::pal(ui).secondary));
+            note(ui, &tilde(&crate::logging::log_path()));
+
+            section(ui, "RESET");
+            note(ui, "Puts every setting back to how Rec came, except the output folder. Custom scenes and shortcuts are reset too.");
+            ui.add_space(4.0);
+            if w::confirm_button(ui, "restore-defaults", "Restore Defaults…", "Reset all settings?", "Restore Defaults", true) {
+                s = crate::settings::Settings { output_dir: s.output_dir.clone(), onboarded: s.onboarded, ..Default::default() };
+            }
+        }
+
+        SettingsTab::Video => {
+            section(ui, "VIDEO");
+            grid(ui, "video", &mut |ui| {
+                ui.label("Resolution");
+                let opts: Vec<(String, String)> = RESOLUTIONS.iter().map(|(l, v)| (v.to_string(), l.to_string())).collect();
+                combo(ui, "res", &mut s.resolution, &opts, true);
+                ui.end_row();
+                ui.label("Frame rate");
+                let opts: Vec<(u32, String)> = FPS.iter().map(|f| (*f, format!("{f} fps"))).collect();
+                combo(ui, "fps", &mut s.fps, &opts, true);
+                ui.end_row();
+                ui.label("Codec");
+                let opts = vec![
+                    (None, "Auto (H.264 ≤1080p, HEVC above)".to_string()),
+                    (Some(Codec::H264), "H.264".to_string()),
+                    (Some(Codec::Hevc), "HEVC (H.265)".to_string()),
+                    (Some(Codec::Prores), "ProRes 422 (.mov)".to_string()),
+                ];
+                combo(ui, "codec", &mut s.codec, &opts, true);
+                ui.end_row();
+                ui.label("HDR");
+                ui.vertical(|ui| {
+                    // Not while streaming: the stream would lose its frames.
+                    ui.add_enabled(s.codec != Some(Codec::H264) && !st.streaming(), w::Check::new(&mut s.hdr, "Record HDR (experimental)"))
+                        .on_hover_text("10-bit HEVC or ProRes, BT.2020 PQ, from ScreenCaptureKit's HDR capture");
+                    if s.hdr_on() {
+                        ui.add(egui::Label::new(RichText::new("HDR is for recordings: the replay buffer and streams are off while it is on.").size(SECONDARY).color(theme::pal(ui).secondary)).wrap());
+                    }
+                });
+                ui.end_row();
+                ui.label("Bitrate");
+                ui.horizontal(|ui| {
+                    let mut auto = s.bitrate_mbps.is_none();
+                    if ui.add_enabled(s.codec != Some(Codec::Prores), w::Check::new(&mut auto, "Auto")).changed() {
+                        s.bitrate_mbps = if auto { None } else { Some(30.0) };
+                    }
+                    if let Some(b) = &mut s.bitrate_mbps {
+                        ui.add(egui::Slider::new(b, 2.0..=200.0).suffix(" Mb/s").logarithmic(true).integer());
+                    }
+                });
+                ui.end_row();
+                ui.label("Cursor");
+                ui.horizontal(|ui| {
+                    ui.add(w::Check::new(&mut s.cursor, "Show"));
+                    ui.add_enabled(s.cursor, w::Check::new(&mut s.clicks, "Highlight clicks"));
+                });
+                ui.end_row();
+                ui.label("Preview");
+                ui.add(w::Check::new(&mut s.preview_low_power, "Low power (half resolution, 15 fps)"));
+                ui.end_row();
+            });
+        }
+
+        SettingsTab::Audio => {
+            section(ui, "AUDIO");
+            grid(ui, "audio", &mut |ui| {
+                ui.label("System audio");
+                ui.add(w::Check::new(&mut s.system_audio, "Record"));
+                ui.end_row();
+                ui.label("Microphone");
+                let mics = mic_options(st, &s);
+                ui.horizontal(|ui| {
+                    ui.add(w::Check::new(&mut s.mic_enabled, "Record"));
+                    if combo(ui, "mic2", &mut s.mic, &mics, s.mic_enabled) {
+                        s.mic_name = mic_label(&mics, &s.mic);
+                    }
+                });
+                ui.end_row();
+                ui.label("Tracks").on_hover_text("Mix: one track with everything. Separate: the system sound and the mic each on a track of their own, for editing.");
+                let opts = vec![
+                    (AudioLayout::Both, "Mix + separate system & mic".to_string()),
+                    (AudioLayout::Mix, "Mix only".to_string()),
+                    (AudioLayout::Stems, "Separate only".to_string()),
+                ];
+                combo(ui, "tracks", &mut s.audio_tracks, &opts, true);
+                ui.end_row();
+                ui.label("System gain");
+                ui.add(egui::Slider::new(&mut s.system_gain_db, -24.0..=12.0).suffix(" dB").step_by(0.5).fixed_decimals(1));
+                ui.end_row();
+                ui.label("Mic gain");
+                ui.add(egui::Slider::new(&mut s.mic_gain_db, -24.0..=24.0).suffix(" dB").step_by(0.5).fixed_decimals(1));
+                ui.end_row();
+            });
+
+            section(ui, "MIC FILTERS");
+            let f = &mut s.mic_filters;
+            grid(ui, "mic-filters", &mut |ui| {
+                ui.label("Low cut").on_hover_text("Removes rumble and desk knocks (below 80 Hz)");
+                ui.add(w::Check::new(&mut f.low_cut, "On"));
+                ui.end_row();
+                ui.label("Noise suppression").on_hover_text("Removes fans, hum and keyboard noise (RNNoise)");
+                ui.add(w::Check::new(&mut f.denoise, "On"));
+                ui.end_row();
+                ui.label("Noise gate").on_hover_text("Silences the mic between words: below this level it is muted");
+                ui.add(w::Check::new(&mut f.gate, "On"));
+                ui.end_row();
+                ui.add_enabled_ui(f.gate, |ui| ui.label("    Opens at").on_hover_text("The mic is muted while it is quieter than this"));
+                ui.add_enabled(f.gate, egui::Slider::new(&mut f.gate_db, -70.0..=-20.0).suffix(" dBFS").step_by(1.0).fixed_decimals(0));
+                ui.end_row();
+                ui.label("Compressor").on_hover_text("Evens out loud and quiet speech");
+                ui.add(w::Check::new(&mut f.compressor, "On"));
+                ui.end_row();
+                ui.add_enabled_ui(f.compressor, |ui| ui.label("    Threshold").on_hover_text("Speech louder than this is turned down"));
+                ui.add_enabled(f.compressor, egui::Slider::new(&mut f.comp_threshold_db, -40.0..=-5.0).suffix(" dB").step_by(1.0).fixed_decimals(0));
+                ui.end_row();
+                ui.add_enabled_ui(f.compressor, |ui| ui.label("    Ratio").on_hover_text("How much: at 3 : 1, 3 dB over the threshold comes out as 1 dB"));
+                ui.add_enabled(f.compressor, egui::Slider::new(&mut f.comp_ratio, 1.5..=10.0).step_by(0.5).fixed_decimals(1).suffix(" : 1"));
+                ui.end_row();
+                ui.add_enabled_ui(f.compressor, |ui| ui.label("    Makeup gain").on_hover_text("Turns everything back up after compressing"));
+                ui.add_enabled(f.compressor, egui::Slider::new(&mut f.comp_makeup_db, 0.0..=18.0).suffix(" dB").step_by(1.0).fixed_decimals(0));
+                ui.end_row();
+            });
+        }
+
+        SettingsTab::Streaming => {
+            section(ui, "LIVE ENCODE");
+            note(ui, "The encode the replay buffer and streams share. Recordings use the Video settings.");
+            ui.add_space(4.0);
+            let streaming = st.streaming();
+            ui.add_enabled_ui(!streaming, |ui| {
+                grid(ui, "live", &mut |ui| {
+                    ui.label("Resolution");
+                    let opts: Vec<(String, String)> =
+                        [("720p", "720p"), ("1080p", "1080p"), ("1440p", "1440p"), ("4k", "4K")].iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
+                    combo(ui, "live-res", &mut s.live_resolution, &opts, true);
+                    ui.end_row();
+                    ui.label("Codec");
+                    let opts: Vec<(String, String)> = [("auto", "Auto (HEVC for YouTube, else H.264)"), ("h264", "H.264"), ("hevc", "HEVC (falls back to H.264)")]
+                        .iter()
+                        .map(|(v, l)| (v.to_string(), l.to_string()))
+                        .collect();
+                    combo(ui, "live-codec", &mut s.stream_codec, &opts, true);
+                    ui.end_row();
+                    ui.label("Video bitrate");
+                    ui.horizontal(|ui| {
+                        ui.add(w::Check::new(&mut s.stream_bitrate_auto, "Platform preset"));
+                        if !s.stream_bitrate_auto {
+                            ui.add(egui::Slider::new(&mut s.stream_bitrate_kbps, 1000..=60_000).suffix(" kb/s").step_by(500.0).logarithmic(true));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    let c = s.live_config();
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "Up to {}x{} {} at {:.1} Mb/s (the frame keeps its shape, never above the recording size)",
+                                c.width,
+                                c.height,
+                                if c.hevc { "HEVC" } else { "H.264" },
+                                c.bitrate as f64 / 1e6
+                            ))
+                            .size(SECONDARY)
+                            .color(theme::pal(ui).secondary),
+                        )
+                        .wrap(),
+                    );
+                    ui.end_row();
+                    ui.label("Rate control").on_hover_text("Constant bitrate keeps the stream steady; most services ask for it");
+                    ui.add(w::Check::new(&mut s.stream_cbr, "Constant bitrate (CBR)"));
+                    ui.end_row();
+                    ui.label("Keyframe every").on_hover_text("How often the stream sends a whole picture. Most services want 2 s.");
+                    ui.add(egui::Slider::new(&mut s.keyframe_secs, 1.0..=4.0).suffix(" s").step_by(0.5).fixed_decimals(1));
+                    ui.end_row();
+                    ui.label("Audio bitrate");
+                    let opts: Vec<(u32, String)> = [96, 128, 160, 192, 256, 320].iter().map(|k| (*k, format!("{k} kb/s"))).collect();
+                    combo(ui, "live-audio", &mut s.stream_audio_kbps, &opts, true);
+                    ui.end_row();
+                });
+            });
+            if streaming {
+                note(ui, "Stop the stream to change the live encode.");
+            }
+        }
+
+        SettingsTab::Shortcuts => {
+            section(ui, "SHORTCUTS");
+            note(ui, "They work in any app. Click one, then press the keys: Esc cancels, Delete removes it.");
+            ui.add_space(4.0);
+            shortcuts(ui, st, &mut s);
+        }
+
+        SettingsTab::Camera => {
+            section(ui, "CAMERA");
+            grid(ui, "cam", &mut |ui| {
+                ui.label("Camera");
+                let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
+                cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
+                combo(ui, "cam2", &mut s.camera, &cams, true);
+                ui.end_row();
+            });
+        }
     }
 
-    section(ui, "SHORTCUTS");
-    shortcuts(ui, st, &mut s);
-
-    section(ui, "CAMERA");
-    grid(ui, "cam", &mut |ui| {
-        ui.label("Camera");
-        let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
-        cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
-        combo(ui, "cam2", &mut s.camera, &cams, true);
-        ui.end_row();
-    });
-    section(ui, "HELP");
-    ui.horizontal(|ui| {
-        if ui.button("Report a Problem…").on_hover_text("Saves the logs and details of this Mac (no stream keys or passwords) to a folder on the Desktop").clicked() {
-            st.cmds.push(Cmd::ReportProblem);
-        }
-        if ui.button("Open Log").clicked() {
-            st.cmds.push(Cmd::OpenLog);
-        }
-        ui.label(RichText::new(tilde(&crate::logging::log_path())).size(SECONDARY).color(theme::pal(ui).secondary));
-    });
-    ui.add_space(12.0);
-    if ui.button("Restore Defaults").clicked() {
-        s = crate::settings::Settings { output_dir: s.output_dir.clone(), ..Default::default() };
-    }
     if s != st.settings {
         st.settings = s;
         let _ = st.settings.save();
