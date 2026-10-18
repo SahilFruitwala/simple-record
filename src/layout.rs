@@ -255,6 +255,9 @@ pub enum Content {
     /// A camera other than the main one (`Camera`), by unique ID; the
     /// name is shown, and finds it again if the ID changes.
     Webcam { id: String, name: String },
+    /// A video file (its picture; played from the start when capture
+    /// starts, then looped or held on its last frame).
+    Media { path: String, looped: bool },
 }
 
 /// A source with a capture of its own, besides the main screen and camera.
@@ -264,6 +267,8 @@ pub enum Source {
     Display(usize),
     /// A camera, by unique ID.
     Camera(String),
+    /// A video file, by path.
+    Media(String),
 }
 
 impl Content {
@@ -279,6 +284,10 @@ impl Content {
             Content::Text(t) => format!("Text “{}”", t.text),
             Content::Color(_) => "Color".into(),
             Content::Webcam { name, .. } => format!("Camera {name}"),
+            Content::Media { path, .. } => {
+                let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned());
+                format!("Video {}", name.unwrap_or_default())
+            }
         }
     }
 
@@ -287,6 +296,7 @@ impl Content {
         match self {
             Content::Display(n) => Some(Source::Display(*n)),
             Content::Webcam { id, .. } => Some(Source::Camera(id.clone())),
+            Content::Media { path, .. } => Some(Source::Media(path.clone())),
             _ => None,
         }
     }
@@ -432,6 +442,14 @@ impl SceneSpec {
         match self {
             SceneSpec::Template(s) => s.resolve(env),
             SceneSpec::Custom(l) => l.resolve(env),
+        }
+    }
+
+    /// A custom scene's layers (none for a template).
+    pub fn layers(&self) -> &[Layer] {
+        match self {
+            SceneSpec::Template(_) => &[],
+            SceneSpec::Custom(l) => &l.layers,
         }
     }
 
@@ -880,6 +898,9 @@ mod tests {
         let json = serde_json::to_string(&multi).unwrap();
         assert!(json.contains(r#""webcam":{"id":"usb-1","name":"Logitech"}"#), "{json}");
         assert_eq!(serde_json::from_str::<Layout>(&json).unwrap(), multi);
+        let clip = Layout { layers: vec![Layer { content: Content::Media { path: "/m/intro.mp4".into(), looped: true }, ..Default::default() }], ..Default::default() };
+        assert_eq!(SceneSpec::Custom(clip.clone()).sources(), vec![Source::Media("/m/intro.mp4".into())]);
+        assert_eq!(clip.layers[0].content.label(), "Video intro.mp4");
         // Text with a box: a color layer, then the text inside it.
         let text = Layout {
             layers: vec![Layer { content: Content::Text(TextSpec::default()), rect: [0.05, 0.8, 0.3, 0.1], ..Default::default() }],

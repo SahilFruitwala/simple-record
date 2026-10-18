@@ -100,6 +100,14 @@ fn thumb(ui: &Ui, rect: Rect, f: &Frame, fw: f64, screen_aspect: f64) {
                 let body = Rect::from_center_size(c + vec2(0.0, u * 0.33), vec2(u * 0.6, u * 0.4));
                 painter.rect_filled(body.intersect(er), CornerRadius::same((u * 0.2).min(255.0) as u8), Color32::from_rgb(0x3d, 0x8b, 0xff).gamma_multiply(alpha));
             }
+            Content::Media { .. } => {
+                painter.rect_filled(er, cr, Color32::from_rgb(0x2b, 0x2f, 0x3a).gamma_multiply(alpha));
+                // A play button.
+                let u = er.width().min(er.height()) * 0.18;
+                let c = er.center();
+                let pts = vec![c + vec2(-u * 0.6, -u), c + vec2(u, 0.0), c + vec2(-u * 0.6, u)];
+                painter.add(egui::Shape::convex_polygon(pts, Color32::from_rgb(0xf2, 0xf2, 0xf7).gamma_multiply(alpha), Stroke::NONE));
+            }
             Content::Image(_) => {
                 painter.rect_filled(er, cr, Color32::from_rgb(0x6c, 0x5c, 0x9c).gamma_multiply(alpha));
                 // A mountain and a sun.
@@ -264,6 +272,8 @@ fn delete_scene(st: &mut State, s: &mut Settings, i: usize) {
     st.selected_layer = None;
 }
 
+const VIDEO_EXTENSIONS: [&str; 5] = ["mov", "mp4", "m4v", "hevc", "3gp"];
+
 /// A new layer of `content`, centered.
 fn new_layer(content: Content, aspect: f64) -> Layer {
     let (w, h): (f64, f64) = match &content {
@@ -357,6 +367,11 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
             && let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "heic", "tiff", "gif", "bmp", "webp"]).pick_file()
         {
             add = Some(Content::Image(f.to_string_lossy().into_owned()));
+        }
+        if ui.add_enabled(idle, egui::Button::new("Video…").small()).on_hover_text("A video file (its picture)").clicked()
+            && let Some(f) = rfd::FileDialog::new().add_filter("Videos", &VIDEO_EXTENSIONS).pick_file()
+        {
+            add = Some(Content::Media { path: f.to_string_lossy().into_owned(), looped: true });
         }
         if ui.small_button("Text").clicked() {
             add = Some(Content::Text(TextSpec::default()));
@@ -483,12 +498,25 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
                 ui.color_edit_button_srgb(c);
             });
         }
+        Content::Media { path, looped } => {
+            w::field(ui, "File", LABEL_W, |ui| {
+                let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if ui.small_button("Choose…").clicked()
+                    && let Some(f) = rfd::FileDialog::new().add_filter("Videos", &VIDEO_EXTENSIONS).pick_file()
+                {
+                    *path = f.to_string_lossy().into_owned();
+                }
+                ui.add(egui::Label::new(RichText::new(name).size(SECONDARY)).truncate()).on_hover_text(path.as_str());
+            });
+            w::row(ui, "Loop", |ui| w::switch(ui, looped, true));
+            w::hint(ui, "Plays from the start when capture starts; its sound isn't recorded.");
+        }
         Content::Camera | Content::Webcam { .. } => {
             w::row(ui, "Mirror", |ui| w::switch(ui, &mut l.mirror, true));
         }
         Content::Screen | Content::Display(_) => {}
     }
-    if matches!(l.content, Content::Screen | Content::Display(_) | Content::Camera | Content::Webcam { .. } | Content::Image(_)) {
+    if matches!(l.content, Content::Screen | Content::Display(_) | Content::Camera | Content::Webcam { .. } | Content::Image(_) | Content::Media { .. }) {
         w::field(ui, "Fit", LABEL_W, |ui| {
             w::segmented(ui, &mut l.fit, &[(Fit::Contain, "Whole picture", true, ""), (Fit::Cover, "Fill the box", true, "")]);
         });

@@ -7,6 +7,7 @@ mod hotkey;
 mod layout;
 mod live;
 mod logging;
+mod media;
 mod mixer;
 mod outlatency;
 mod play;

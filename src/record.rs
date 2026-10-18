@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use crate::camera::{self, Camera, Mic};
 use crate::synth::Synth;
 use crate::compose::{Compositor, PipSpec};
-use crate::layout::{Background, Scene, SceneSpec, Source, Transition};
+use crate::layout::{Background, Content, Scene, SceneSpec, Source, Transition};
 use crate::screen::{self, ScreenCapture, ScreenConfig};
 use crate::tcc::{self, Status};
 use crate::util::*;
@@ -170,6 +170,7 @@ pub struct Session {
     /// session has.
     extra_screens: Vec<ScreenCapture>,
     extra_cams: Vec<Camera>,
+    media: Vec<crate::media::MediaSource>,
     sources: Vec<Source>,
     synth: Option<Synth>,
     cam: Option<Camera>,
@@ -311,6 +312,7 @@ impl Session {
             screen: None,
             extra_screens: vec![],
             extra_cams: vec![],
+            media: vec![],
             sources: vec![],
             synth: None,
             cam: None,
@@ -484,6 +486,16 @@ impl Session {
                         continue;
                     }
                 },
+                Source::Media(path) => {
+                    let looped = o.scene.layers().iter().any(|l| l.content == Content::Media { path: path.clone(), looped: true });
+                    match crate::media::MediaSource::start(path, looped, src.clone(), self.shared.clone()) {
+                        Ok(m) => self.media.push(m),
+                        Err(e) => {
+                            eprintln!("rec: warning: {e:#}; its layer stays empty");
+                            continue;
+                        }
+                    }
+                }
             }
             self.sources.push(src);
         }
@@ -497,6 +509,9 @@ impl Session {
         }
         for c in self.extra_cams.drain(..) {
             c.stop();
+        }
+        for mut m in self.media.drain(..) {
+            m.stop();
         }
         if let Some(mut s) = self.synth.take() {
             s.stop();
