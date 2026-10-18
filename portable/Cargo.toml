@@ -1,0 +1,29 @@
+# The platform-independent parts of rec-rs (scene layouts, shapes, mic
+# filters, shortcuts, MPEG-TS and SRT), compiled from ../src so their tests
+# run on any OS, including Linux CI. The app itself needs macOS.
+[package]
+name = "rec-rs-portable"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Not part of the app's build.
+[workspace]
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"
+libc = "0.2.190"
+nnnoiseless = { version = "0.5.2", default-features = false }
+aes = { version = "0.8", default-features = false }
+ctr = { version = "0.9", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
+aes-kw = "0.2"
+
+[profile.test]
+# The noise suppression tests run real audio through RNNoise.
+opt-level = 2

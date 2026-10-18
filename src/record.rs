@@ -176,6 +176,8 @@ pub struct Session {
     pub output: Option<PathBuf>,
     pub started: Instant,
     pub description: String,
+    /// Frames go through the compositor (fixed for the session).
+    composed: bool,
 }
 
 /// How often the output device's latency is re-read while capturing.
@@ -310,6 +312,7 @@ impl Session {
             output: write.then(|| o.output.clone()),
             started: Instant::now(),
             description: String::new(),
+            composed,
         };
         // On any start failure, tear down what was started and remove the file.
         match sess.start_sources(o, target, pixel_format, cam) {
@@ -559,11 +562,10 @@ impl Session {
     }
 
     /// Frames go through the compositor (any scene can be shown, given
-    /// its sources).
+    /// its sources). Known from the start: the UI asks every frame, without
+    /// taking the sink's lock from the capture threads.
     pub fn composed(&self) -> bool {
-        let mut c = false;
-        self.shared.with(|s| c = s.composed());
-        c
+        self.composed
     }
 
     /// (stats, peak levels [system, mic] since last call).

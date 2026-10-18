@@ -92,6 +92,16 @@ scripts/synccheck.py FILE        # A/V offset of a flash + beep recording
 
 Test recordings go to `~/Movies/rec-rs-tests/`.
 
+The platform-independent parts (scene layouts, shapes, mic filters, shortcuts, MPEG-TS, SRT)
+also build and test on any OS, Linux included, from `portable/`; the SRT output is checked end
+to end against FFmpeg's libsrt by a script. CI (`.github/workflows/ci.yml`) runs both on
+Linux, and builds, lints and tests the app on macOS:
+
+```sh
+cargo test --manifest-path portable/Cargo.toml
+scripts/srt-e2e.sh               # needs ffmpeg with SRT (ffmpeg -protocols | grep srt)
+```
+
 ## Permissions (one time)
 
 ```sh
@@ -444,5 +454,6 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 | `src/probe.rs` | AVFoundation verification |
 | `src/synth.rs` | Test pattern with flash + beep |
 | `src/scale.rs` | Native-resolution screen scaling (Metal Performance Shaders Lanczos, VideoToolbox fallback) |
-| `scripts/` | Build, self-test, soak, sync checks (`synccheck.py` with ffmpeg, `avsync.swift` with AVFoundation) and quality metrics (`quality.sh`, `encquality.sh`, `testcard.swift`) |
+| `portable/` | The platform-independent modules, built from `src/` for tests on any OS, and the SRT end-to-end tools |
+| `scripts/` | Build, self-test, SRT end to end (`srt-e2e.sh`), soak, sync checks (`synccheck.py` with ffmpeg, `avsync.swift` with AVFoundation) and quality metrics (`quality.sh`, `encquality.sh`, `testcard.swift`) |
 | `analysis/OBS_ARCHITECTURE.md` | OBS study |

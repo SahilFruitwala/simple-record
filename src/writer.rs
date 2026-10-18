@@ -485,9 +485,6 @@ impl Sink {
         }
     }
 
-    pub fn composed(&self) -> bool {
-        self.compositor.is_some()
-    }
 
     /// Pause at host time `now`: nothing captured from the next frame slot on
     /// is written until `resume`. The preview keeps running.

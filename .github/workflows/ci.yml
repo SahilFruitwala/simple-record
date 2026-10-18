@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  portable:
+    name: Portable tests and SRT end to end (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install ffmpeg (with libsrt)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: Unit tests (layouts, shapes, mic filters, shortcuts, MPEG-TS, SRT)
+        run: cargo test --manifest-path portable/Cargo.toml
+      - name: SRT against FFmpeg's libsrt (plain, AES-128/256, 5% loss, wrong passphrase)
+        run: scripts/srt-e2e.sh
+
+  macos:
+    name: Build, clippy and tests (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Build
+        run: cargo build --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets
+      - name: Tests
+        run: cargo test --locked
