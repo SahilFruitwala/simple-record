@@ -53,6 +53,14 @@ define_class!(
         fn quit(&self, _s: Option<&AnyObject>) {
             super::push(Cmd::Quit);
         }
+        #[unsafe(method(reportProblem:))]
+        fn report_problem(&self, _s: Option<&AnyObject>) {
+            super::push(Cmd::ReportProblem);
+        }
+        #[unsafe(method(openLog:))]
+        fn open_log(&self, _s: Option<&AnyObject>) {
+            super::push(Cmd::OpenLog);
+        }
     }
 );
 
@@ -259,11 +267,17 @@ pub fn install_main_menu(mtm: MainThreadMarker) -> Retained<Target> {
             item("Show Rec Window", Some(sel!(showWindow:)), "0", true),
         ],
     );
+    let (help_item, help_menu) = submenu(
+        "Help",
+        vec![item("Report a Problem…", Some(sel!(reportProblem:)), "", true), item("Open Log", Some(sel!(openLog:)), "", true)],
+    );
     let main = NSMenu::new(mtm);
     main.addItem(&app_item);
     main.addItem(&win_item);
+    main.addItem(&help_item);
     let app = NSApplication::sharedApplication(mtm);
     app.setMainMenu(Some(&main));
     app.setWindowsMenu(Some(&win_menu));
+    app.setHelpMenu(Some(&help_menu));
     target
 }

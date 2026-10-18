@@ -143,6 +143,25 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
 
 fn preview(ui: &mut Ui, st: &mut State) {
     let p = theme::pal(ui);
+    if st.crashed_last_time {
+        egui::Frame::NONE
+            .fill(Color32::from_rgba_unmultiplied(0xff, 0x95, 0x00, 30))
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::same(10))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Rec quit unexpectedly last time. Reporting it helps fix it.").color(p.text));
+                    if ui.button("Report a Problem…").clicked() {
+                        st.cmds.push(Cmd::ReportProblem);
+                        st.crashed_last_time = false;
+                    }
+                    if ui.button("Dismiss").clicked() {
+                        st.crashed_last_time = false;
+                    }
+                });
+            });
+        ui.add_space(10.0);
+    }
     if let Some(err) = st.error.clone() {
         egui::Frame::NONE
             .fill(Color32::from_rgba_unmultiplied(0xff, 0x3b, 0x30, 30))
@@ -1224,6 +1243,16 @@ fn settings_form(ui: &mut Ui, st: &mut State) {
         cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
         combo(ui, "cam2", &mut s.camera, &cams, true);
         ui.end_row();
+    });
+    section(ui, "HELP");
+    ui.horizontal(|ui| {
+        if ui.button("Report a Problem…").on_hover_text("Saves the logs and details of this Mac (no stream keys or passwords) to a folder on the Desktop").clicked() {
+            st.cmds.push(Cmd::ReportProblem);
+        }
+        if ui.button("Open Log").clicked() {
+            st.cmds.push(Cmd::OpenLog);
+        }
+        ui.label(RichText::new(tilde(&crate::logging::log_path())).size(SECONDARY).color(theme::pal(ui).secondary));
     });
     ui.add_space(12.0);
     if ui.button("Restore Defaults").clicked() {

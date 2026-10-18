@@ -5,6 +5,7 @@ mod filters;
 mod hotkey;
 mod layout;
 mod live;
+mod logging;
 mod mixer;
 mod outlatency;
 mod play;

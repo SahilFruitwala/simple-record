@@ -5,6 +5,8 @@
 pub mod filters;
 #[path = "../../src/layout.rs"]
 pub mod layout;
+#[path = "../../src/logging.rs"]
+pub mod logging;
 #[path = "../../src/shapes.rs"]
 pub mod shapes;
 #[path = "../../src/shortcut.rs"]

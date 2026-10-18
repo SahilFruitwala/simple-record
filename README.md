@@ -216,6 +216,12 @@ rec-rs save-replay  # SIGINFO: write the replay buffer to an MP4
 
 Quitting the app or sending it SIGTERM mid-recording finalizes the file first.
 
+The app logs to `~/Library/Logs/rec-rs/rec.log` (timestamped, rotated at 5 MB). **Help >
+Report a Problem…** (also in Settings) saves the logs, a description of the Mac and its
+devices, the settings without secrets (URL queries cut; stream keys are never in them) and
+recent crash reports to a folder on the Desktop, ready to attach. After a crash, the next
+launch offers it.
+
 The shortcuts are registered system-wide while Rec runs (⇧⌘R records by default; a browser's
 hard reload therefore won't see it until Rec quits). If another app already owns one, Settings
 says so.

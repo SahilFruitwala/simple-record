@@ -47,6 +47,9 @@ pub enum Cmd {
     ToggleStream,
     NextScene,
     PrevScene,
+    /// Gather logs and system details into a folder to send.
+    ReportProblem,
+    OpenLog,
     Quit,
 }
 
@@ -191,6 +194,8 @@ pub struct State {
     pub screen_aspect: f64,
     /// The custom scene layer being edited.
     pub selected_layer: Option<usize>,
+    /// The last run ended with a crash (the error banner offers a report).
+    pub crashed_last_time: bool,
     /// A layer drag in progress: (layer, grip, its box when the drag
     /// began, the pointer's total movement as fractions of the frame).
     pub layer_drag: Option<(usize, crate::layout::Grip, [f64; 4], [f64; 2])>,
@@ -436,6 +441,7 @@ impl App {
             filters_applied: None,
             screen_aspect: 16.0 / 10.0,
             selected_layer: None,
+            crashed_last_time: false,
             layer_drag: None,
             display_points: vec![],
             region_select: None,
@@ -742,6 +748,43 @@ impl App {
         }
     }
 
+    /// A folder on the Desktop with the logs, a description of this Mac and
+    /// its devices, the settings without secrets, and recent crash
+    /// reports, shown in Finder: ready to attach to a report.
+    fn report_problem(&mut self) {
+        let st = &self.st;
+        let run = |cmd: &str, args: &[&str]| {
+            std::process::Command::new(cmd).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+        };
+        let (screen, mic, cam) = crate::tcc::report();
+        let mut sys = format!(
+            "Rec {}\nmacOS {} ({})\nModel {}\nPermissions: screen {screen}, microphone {mic}, camera {cam}\n",
+            env!("CARGO_PKG_VERSION"),
+            run("sw_vers", &["-productVersion"]),
+            run("sw_vers", &["-buildVersion"]),
+            run("sysctl", &["-n", "hw.model"]),
+        );
+        if let Some(l) = crate::outlatency::output_latency() {
+            sys += &format!("Output latency {:.1} ms\n", l * 1000.0);
+        }
+        let list = |title: &str, items: Vec<String>| format!("{title}:\n{}\n", items.iter().map(|i| format!("  {i}\n")).collect::<String>());
+        sys += &list("Displays", st.displays.clone());
+        sys += &list("Cameras", st.cameras.iter().map(|d| d.name.clone()).collect());
+        sys += &list("Microphones", st.mics.iter().map(|d| d.name.clone()).collect());
+        sys += &format!("Recording: {}  Streaming: {}  Last error: {:?}\n", st.recording.is_some(), st.streaming(), st.error);
+        let settings = std::fs::read_to_string(Settings::path()).ok();
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let desktop = Some(home.join("Desktop")).filter(|d| d.is_dir()).unwrap_or_else(|| st.settings.output_dir.clone());
+        match crate::logging::diagnostics(&desktop, &sys, settings.as_deref(), &home.join("Library/Logs/DiagnosticReports"), 7) {
+            Ok(dir) => {
+                eprintln!("rec: diagnostics in {}", dir.display());
+                macos::reveal(&dir);
+                self.st.notice = Some(("Diagnostics saved to the Desktop: attach that folder to your report".into(), Instant::now()));
+            }
+            Err(e) => self.st.error = Some(format!("Could not gather diagnostics: {e}")),
+        }
+    }
+
     fn save_replay(&mut self) {
         if self.st.replay_stats.is_none() {
             return;
@@ -933,6 +976,8 @@ impl App {
             Cmd::OpenFolder => macos::open_folder(&self.st.settings.output_dir),
             Cmd::SaveReplay => self.save_replay(),
             Cmd::ToggleStream => self.toggle_stream(),
+            Cmd::ReportProblem => self.report_problem(),
+            Cmd::OpenLog => macos::reveal(&crate::logging::log_path()),
             Cmd::NextScene => self.cycle_scene(1),
             Cmd::PrevScene => self.cycle_scene(-1),
             Cmd::Quit => self.quit(el),
@@ -1424,6 +1469,10 @@ impl SelfTest {
 
 pub fn run(start_recording: bool, settings: bool, window: Option<u32>) -> Result<()> {
     use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+    // Opened from Finder, stderr goes nowhere: keep it in the log too.
+    crate::logging::start();
+    crate::logging::install_panic_hook();
+    let crashed = crate::logging::take_last_crash();
     unsafe {
         libc::signal(libc::SIGINT, on_sigint as *const () as usize);
         libc::signal(libc::SIGTERM, on_sigterm as *const () as usize);
@@ -1438,11 +1487,19 @@ pub fn run(start_recording: bool, settings: bool, window: Option<u32>) -> Result
     let _ = PROXY.set(Mutex::new(el.create_proxy()));
     dock::install();
     let mut app = App::new(start_recording);
+    if let Some(c) = crashed {
+        eprintln!("rec: the last run ended with a crash: {}", c.lines().nth(1).unwrap_or_default());
+        // Its own banner: an error would also hold back the preview.
+        app.st.crashed_last_time = true;
+    }
     app.st.settings.window = window;
     if settings {
         push(Cmd::ShowSettings);
     }
-    el.run_app(&mut app)?;
+    let r = el.run_app(&mut app);
     let _ = std::fs::remove_file(record::pidfile_path());
+    eprintln!("rec: app quit");
+    crate::logging::finish();
+    r?;
     Ok(())
 }
