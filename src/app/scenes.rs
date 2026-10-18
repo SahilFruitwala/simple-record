@@ -43,7 +43,7 @@ pub fn screen_rect(st: &State, preview: Rect) -> Option<Rect> {
 }
 
 /// Fill `rect` with a vertical gradient.
-fn gradient(ui: &Ui, rect: Rect, bg: Background) {
+pub(super) fn gradient(ui: &Ui, rect: Rect, bg: Background) {
     let c = |v: [u8; 3]| Color32::from_rgb(v[0], v[1], v[2]);
     let mut mesh = egui::Mesh::default();
     for (pos, col) in [(rect.left_top(), bg.top), (rect.right_top(), bg.top), (rect.right_bottom(), bg.bottom), (rect.left_bottom(), bg.bottom)] {

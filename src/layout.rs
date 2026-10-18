@@ -341,6 +341,20 @@ impl Default for Background {
     }
 }
 
+impl Background {
+    /// Ready-made backgrounds, the default first.
+    pub const PRESETS: [(&'static str, Background); 8] = [
+        ("Midnight", Background { top: [0x1d, 0x1f, 0x2b], bottom: [0x3b, 0x2f, 0x5e] }),
+        ("Graphite", Background { top: [0x2c, 0x2c, 0x30], bottom: [0x16, 0x16, 0x18] }),
+        ("Ocean", Background { top: [0x0f, 0x20, 0x27], bottom: [0x2c, 0x53, 0x64] }),
+        ("Forest", Background { top: [0x13, 0x4e, 0x5e], bottom: [0x71, 0xb2, 0x80] }),
+        ("Sunset", Background { top: [0xee, 0x9c, 0xa7], bottom: [0xff, 0xdd, 0xe1] }),
+        ("Peach", Background { top: [0xff, 0x7e, 0x5f], bottom: [0xfe, 0xb4, 0x7b] }),
+        ("Paper", Background { top: [0xf4, 0xf4, 0xf6], bottom: [0xdc, 0xdd, 0xe3] }),
+        ("Black", Background { top: [0x00, 0x00, 0x00], bottom: [0x00, 0x00, 0x00] }),
+    ];
+}
+
 /// A resolved scene: what the compositor draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {

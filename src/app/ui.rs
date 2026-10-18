@@ -160,6 +160,38 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
     }
 }
 
+/// The scene background: a swatch per preset, then the two custom colours.
+/// `labels`: name the custom colours (the Settings window has the room).
+fn background_picker(ui: &mut Ui, bg: &mut Background, labels: bool) {
+    let p = theme::pal(ui);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        for (name, preset) in Background::PRESETS {
+            let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            super::scenes::gradient(ui, rect.shrink(3.0), preset);
+            let sel = *bg == preset;
+            let ring = if sel { Stroke::new(2.0, theme::accent()) } else if resp.hovered() { Stroke::new(1.0, p.secondary) } else { Stroke::new(1.0, p.control_border) };
+            ui.painter().rect_stroke(rect, CornerRadius::same(4), ring, egui::StrokeKind::Inside);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.on_hover_text(name).clicked() {
+                *bg = preset;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let custom = !Background::PRESETS.iter().any(|(_, b)| b == bg);
+        let label = if custom { "Custom:" } else { "Or your own:" };
+        ui.label(RichText::new(label).size(SECONDARY).color(p.secondary));
+        ui.color_edit_button_srgb(&mut bg.top).on_hover_text("Top colour");
+        ui.color_edit_button_srgb(&mut bg.bottom).on_hover_text("Bottom colour (the same as the top for a solid colour)");
+        if labels {
+            ui.label(RichText::new("top, bottom").size(SECONDARY).color(p.secondary));
+        }
+    });
+}
+
 /// Drag the sidebar's left edge to resize it (double-click: default width).
 /// The width is saved when the drag ends.
 fn sidebar_resize(ui: &mut Ui, st: &mut State, sidebar: egui::Rect, max_w: f32) {
@@ -767,6 +799,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 .response
                 .on_hover_text("The shape of the video: the screen's own, or 16:9, 9:16 (Shorts), 1:1 or 4:5");
         });
+        // Live, also while recording (like the transition).
+        ui.label(RichText::new("Background").color(theme::pal(ui).text)).on_hover_text("Fills what the scene doesn't cover");
+        background_picker(ui, &mut s.background, false);
     });
 
     w::header(ui, Icon::Display, "Screen");
@@ -1296,14 +1331,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 combo(ui, "canvas2", &mut s.canvas, &opts, true);
                 ui.end_row();
                 ui.label("Background").on_hover_text("Fills what the scene doesn't cover: a gradient from top to bottom");
-                ui.horizontal(|ui| {
-                    ui.color_edit_button_srgb(&mut s.background.top);
-                    ui.color_edit_button_srgb(&mut s.background.bottom);
-                    ui.label(RichText::new("top, bottom").size(SECONDARY).color(theme::pal(ui).secondary));
-                    if ui.small_button("Reset").clicked() {
-                        s.background = Background::default();
-                    }
-                });
+                ui.vertical(|ui| background_picker(ui, &mut s.background, true));
                 ui.end_row();
                 ui.label("Transition").on_hover_text("The animation when you switch scenes");
                 ui.horizontal(|ui| {
