@@ -268,6 +268,9 @@ pub struct Sink {
     /// current).
     extra: Vec<ExtraSource>,
     compositor: Option<Compositor>,
+    /// Studio mode: the staged scene's compositor, and the pool of preview
+    /// frames showing it beside the program.
+    studio: Option<(Compositor, CFRetained<CVPixelBufferPool>)>,
     /// Scales native-size screen frames to the output size.
     scaler: Option<crate::scale::FrameScaler>,
     /// Fills a window capture's transparent corners (see `CornerFill`).
@@ -416,6 +419,7 @@ impl Sink {
             cam_last: None,
             extra: vec![],
             compositor,
+            studio: None,
             scaler: None,
             corner_fill: None,
             cam_gate: None,
@@ -476,6 +480,40 @@ impl Sink {
     /// Switch scenes live, with the scene transition. Anything but the
     /// plain screen needs a compositor (the session was started with a
     /// webcam or a composed scene); returns false otherwise.
+    /// Studio mode: preview frames show `staged` beside the program (the
+    /// output). None: off. False when the session doesn't compose.
+    pub fn set_studio(&mut self, staged: Option<SceneSpec>) -> bool {
+        let Some(program) = self.compositor.as_ref() else {
+            self.studio = None;
+            return staged.is_none();
+        };
+        match staged {
+            None => self.studio = None,
+            Some(spec) => {
+                let (c, _) = self.studio.get_or_insert_with(|| {
+                    let (w, h) = program.size();
+                    let (sw, sh, _) = crate::layout::studio_size(w, h);
+                    (program.twin(), make_pool(sw, sh, PIX_BGRA))
+                });
+                c.set_scene(spec, false);
+            }
+        }
+        true
+    }
+
+    /// The studio mode preview frame for this slot (None when off).
+    fn studio_frame(&mut self, t: f64, screen: Option<&CVPixelBuffer>, program: &CVPixelBuffer) -> Option<CFRetained<CVPixelBuffer>> {
+        let (c, pool) = self.studio.as_mut()?;
+        let mut buf = std::ptr::null_mut();
+        unsafe { CVPixelBufferPool::create_pixel_buffer(None, pool, std::ptr::NonNull::from(&mut buf)) };
+        let out: CFRetained<CVPixelBuffer> = unsafe { CFRetained::from_raw(std::ptr::NonNull::new(buf)?) };
+        let cam = self.cam_last.as_ref().map(|b| b.0.clone());
+        let extras: Vec<(&crate::layout::Source, CFRetained<CVPixelBuffer>)> = self.extra.iter().filter_map(|(n, _, l)| l.as_ref().map(|b| (n, b.0.clone()))).collect();
+        let extras: Vec<(&crate::layout::Source, &CVPixelBuffer)> = extras.iter().map(|(n, b)| (*n, &**b)).collect();
+        c.render_studio(t, screen, cam.as_deref(), &extras, program, &out);
+        Some(out)
+    }
+
     pub fn set_scene(&mut self, scene: SceneSpec, animate: bool) -> bool {
         match self.compositor.as_mut() {
             Some(c) => {
@@ -614,7 +652,7 @@ impl Sink {
     /// Change the scene background and transition live (no-op when not
     /// composing).
     pub fn set_look(&mut self, background: crate::layout::Background, transition: crate::layout::Transition, secs: f64) {
-        if let Some(c) = self.compositor.as_mut() {
+        for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
             c.set_background(background);
             c.set_transition(transition, secs);
         }
@@ -623,15 +661,15 @@ impl Sink {
     /// The main camera's unique ID: a scene layer showing that camera by
     /// ID shows its frames.
     pub fn set_main_camera(&mut self, id: Option<String>) {
-        if let Some(c) = self.compositor.as_mut() {
-            c.set_main_camera(id);
+        for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
+            c.set_main_camera(id.clone());
         }
     }
 
     /// Change the camera overlay live (no-op without a webcam).
     pub fn set_pip(&mut self, pip: crate::compose::PipSpec) {
-        if let Some(c) = self.compositor.as_mut() {
-            c.set_pip(pip);
+        for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
+            c.set_pip(pip.clone());
         }
     }
 
@@ -1065,7 +1103,7 @@ impl Sink {
                 self.scaler.as_mut().unwrap().scale(screen.as_deref().unwrap(), &buf);
                 buf
             } else {
-                screen.unwrap()
+                screen.clone().unwrap()
             };
             if write {
                 let pts = unsafe { CMTime::new(self.slot_ticks(self.out_slot), TIMESCALE) };
@@ -1088,9 +1126,12 @@ impl Sink {
             if want_live && let Some(l) = &self.live {
                 l.video(&frame, slot_t, self.fps as u32);
             }
-            if want_preview && let Some(p) = &self.preview {
+            if want_preview && let Some(p) = self.preview.clone() {
                 self.last_preview = slot_t;
-                p(frame);
+                match self.studio_frame(slot_t, screen.as_deref(), &frame) {
+                    Some(f) => p(f),
+                    None => p(frame),
+                }
             }
         }
     }

@@ -283,6 +283,11 @@ impl Compositor {
         self.leaving = (animate && self.transition != Transition::Cut && self.transition_secs > 0.0).then_some((old, self.now));
     }
 
+    /// The output size in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.w as usize, self.h as usize)
+    }
+
     pub fn cam_aspect(&self) -> f64 {
         self.cam_aspect
     }
@@ -519,11 +524,46 @@ impl Compositor {
         img
     }
 
+    /// A compositor with this one's look (overlay, background, transition,
+    /// color space, main camera) and size, showing the default scene: studio
+    /// mode's staged scene.
+    pub fn twin(&self) -> Compositor {
+        let mut c = Compositor::new(self.w as usize, self.h as usize, self.pip.clone());
+        c.cs = self.cs.clone();
+        c.background = self.background;
+        c.transition = self.transition;
+        c.transition_secs = self.transition_secs;
+        c.main_cam = self.main_cam.clone();
+        c
+    }
+
     /// Render the scene at frame time `t` (seconds; drives transitions).
     /// `extras` are other displays' and cameras' frames.
     pub fn render(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, extras: &[(&Source, &CVPixelBuffer)], out: &CVPixelBuffer) {
-        self.now = t;
         let canvas = rect(0.0, 0.0, self.w, self.h);
+        let img = self.compose(t, screen, cam, extras);
+        unsafe { self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img.imageByCroppingToRect(canvas), out, canvas, Some(&self.cs)) };
+    }
+
+    /// Studio mode's preview: this compositor's scene (staged) on the left,
+    /// `program` (the output frame) on the right, into `out`
+    /// (`layout::studio_size`).
+    pub fn render_studio(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, extras: &[(&Source, &CVPixelBuffer)], program: &CVPixelBuffer, out: &CVPixelBuffer) {
+        let (sw, sh, gap) = layout::studio_size(self.w as usize, self.h as usize);
+        let canvas = rect(0.0, 0.0, sw as f64, sh as f64);
+        let staged = self.compose(t, screen, cam, extras);
+        unsafe {
+            let staged = staged.imageByCroppingToRect(rect(0.0, 0.0, self.w, self.h));
+            let prog = translate(&CIImage::imageWithCVPixelBuffer(program), self.w + gap as f64, 0.0);
+            let bg = CIImage::imageWithColor(&ci_color([0x0c, 0x0c, 0x10], 1.0)).imageByCroppingToRect(canvas);
+            let img = prog.imageByCompositingOverImage(&staged.imageByCompositingOverImage(&bg));
+            self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img, out, canvas, Some(&self.cs));
+        }
+    }
+
+    /// The frame at time `t`, as an image of the output's extent.
+    fn compose(&mut self, t: f64, screen: Option<&CVPixelBuffer>, cam: Option<&CVPixelBuffer>, extras: &[(&Source, &CVPixelBuffer)]) -> Retained<CIImage> {
+        self.now = t;
         let screen = screen.map(|s| unsafe { CIImage::imageWithCVPixelBuffer(s) });
         let cam = cam.map(|c| unsafe { CIImage::imageWithCVPixelBuffer(c) });
         let extras: Vec<(&Source, Retained<CIImage>)> = extras.iter().map(|(n, b)| (*n, unsafe { CIImage::imageWithCVPixelBuffer(b) })).collect();
@@ -541,7 +581,7 @@ impl Compositor {
         if progress.is_some_and(|p| !(0.0..1.0).contains(&p)) {
             self.leaving = None;
         }
-        let img = match (self.leaving.clone(), progress) {
+        match (self.leaving.clone(), progress) {
             (Some((old, _)), Some(p)) => {
                 let prev = old.resolve(&env);
                 match self.transition {
@@ -561,8 +601,7 @@ impl Compositor {
                 }
             }
             _ => self.draw(&cur, screen.as_ref(), cam.as_ref(), &extras, 1.0),
-        };
-        unsafe { self.ctx.render_toCVPixelBuffer_bounds_colorSpace(&img.imageByCroppingToRect(canvas), out, canvas, Some(&self.cs)) };
+        }
     }
 }
 
@@ -653,6 +692,24 @@ mod tests {
         c.set_main_camera(Some("a".into()));
         c.render(0.1, None, Some(&red), &[(&b, &blue)], &out);
         assert!(is_red(pixel(&out, 80, 90)) && is_blue(pixel(&out, 240, 90)), "{:?}", pixel(&out, 80, 90));
+    }
+
+    /// Studio mode's preview: the staged scene left, the program right.
+    #[test]
+    fn studio_frame() {
+        let (green, _p1) = solid(160, 90, [0, 255, 0, 255]);
+        let (program, _p2) = solid(320, 180, [0, 0, 255, 255]);
+        let (sw, sh, gap) = layout::studio_size(320, 180);
+        let (out, _p3) = solid(sw, sh, [0, 0, 0, 255]);
+        let mut c = Compositor::new(320, 180, PipSpec { mirror: false, ..Default::default() }).twin();
+        c.set_scene(SceneSpec::Template(Scene::Cam), false);
+        c.render_studio(0.0, None, Some(&green), &[], &program, &out);
+        let [b, g, r] = pixel(&out, 160, 90);
+        assert!(g > 200 && r < 40 && b < 40, "staged camera: {:?}", [b, g, r]);
+        let [b, g, r] = pixel(&out, 320 + gap + 160, 90);
+        assert!(r > 200 && g < 40 && b < 40, "program: {:?}", [b, g, r]);
+        let [b, g, r] = pixel(&out, 320 + gap / 2, 90);
+        assert!(r < 30 && g < 30 && b < 30, "the gap: {:?}", [b, g, r]);
     }
 
     /// Bake an overlay with CoreImage and read pixels back.

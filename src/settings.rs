@@ -305,6 +305,25 @@ impl Settings {
         }
     }
 
+    /// The scene `id` (as `scene_id` gives it) names.
+    pub fn spec_of(&self, id: (Scene, Option<usize>)) -> SceneSpec {
+        match id.1.and_then(|i| self.custom_scenes.get(i)) {
+            Some(l) => SceneSpec::Custom(l.clone()),
+            None => SceneSpec::Template(id.0),
+        }
+    }
+
+    /// Make the scene `id` the one shown.
+    pub fn show(&mut self, id: (Scene, Option<usize>)) {
+        match id.1.filter(|i| *i < self.custom_scenes.len()) {
+            Some(i) => self.custom_scene = Some(i),
+            None => {
+                self.scene = id.0;
+                self.custom_scene = None;
+            }
+        }
+    }
+
     /// Which scene is shown (a template, or a custom scene by index):
     /// switching between these animates, editing one doesn't.
     pub fn scene_id(&self) -> (Scene, Option<usize>) {

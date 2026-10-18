@@ -619,6 +619,14 @@ impl Session {
     }
 
     /// Change the scene background and transition live.
+    /// Studio mode: show `staged` beside the program in the preview (None:
+    /// off). False if this session can't (it doesn't compose).
+    pub fn set_studio(&self, staged: Option<SceneSpec>) -> bool {
+        let mut ok = false;
+        self.shared.with(|s| ok = s.set_studio(staged));
+        ok
+    }
+
     pub fn set_look(&self, background: Background, transition: Transition, secs: f64) {
         self.shared.with(|s| s.set_look(background, transition, secs));
     }

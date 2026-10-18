@@ -160,7 +160,9 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
     let aspect = env.w / env.h;
     let thumb_h = (tile_w / aspect as f32).min(tile_w * 0.9);
     let thumb_w = (thumb_h * aspect as f32).min(tile_w);
-    let shown = s.scene_id();
+    // Studio mode: picking stages a scene; the program is marked.
+    let program = s.scene_id();
+    let shown = if st.studio { st.staged.unwrap_or(program) } else { program };
     let mut tiles: Vec<(Pick, String, Option<Frame>, bool, bool, String)> = vec![];
     for scene in Scene::ALL {
         let spec = layout::SceneSpec::Template(scene);
@@ -198,6 +200,15 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
                     Stroke::new(1.0, p.control_border)
                 };
                 ui.painter().rect_stroke(t, CornerRadius::same(4), stroke, egui::StrokeKind::Outside);
+                let id = match pick {
+                    Pick::Template(sc) => Some((*sc, None)),
+                    Pick::Custom(i) => Some((Scene::Screen, Some(*i))),
+                    Pick::New => None,
+                };
+                if st.studio && id == Some(program) {
+                    let dot = egui::pos2(t.right() - 7.0, t.top() + 7.0);
+                    ui.painter().circle_filled(dot, 4.0, Color32::from_rgb(0xff, 0x3b, 0x30));
+                }
                 let color = if !ok { p.tertiary } else if *sel { p.text } else { p.secondary };
                 let font = if *sel { theme::semibold(SECONDARY) } else { egui::FontId::proportional(SECONDARY) };
                 let galley = ui.painter().layout_no_wrap(label.clone(), font, color);
@@ -231,6 +242,19 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
             }
         });
         ui.add_space(4.0);
+    }
+    if st.studio {
+        match picked {
+            Some(Pick::Template(sc)) => {
+                st.staged = Some((sc, None));
+                return false;
+            }
+            Some(Pick::Custom(i)) => {
+                st.staged = Some((Scene::Screen, Some(i)));
+                return false;
+            }
+            _ => {}
+        }
     }
     match picked {
         Some(Pick::Template(sc)) => {

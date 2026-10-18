@@ -235,7 +235,17 @@ fn preview(ui: &mut Ui, st: &mut State) {
             ui.painter().rect_stroke(rect, r, Stroke::new(2.0, border), egui::StrokeKind::Outside);
         }
         let custom = st.settings.scene_id().1.is_some();
-        if live && st.region_select.is_some() {
+        if live && st.studio {
+            // The frame is the staged scene, a gap, then the program.
+            let (sw, _, _) = crate::layout::studio_size(1920, 1080);
+            let half = rect.width() * 1920.0 / sw as f32;
+            for (x, text, fill) in [(rect.left(), "PREVIEW", theme::accent()), (rect.right() - half, "PROGRAM", RED)] {
+                let galley = ui.painter().layout_no_wrap(text.into(), theme::semibold(SECONDARY), Color32::WHITE);
+                let pill = egui::Rect::from_min_size(egui::pos2(x + 8.0, rect.top() + 8.0), galley.size() + vec2(12.0, 4.0));
+                ui.painter().rect_filled(pill, CornerRadius::same(4), fill.gamma_multiply(0.9));
+                ui.painter().galley(pill.min + vec2(6.0, 2.0), galley, Color32::WHITE);
+            }
+        } else if live && st.region_select.is_some() {
             select_region(ui, st, rect);
         } else if live && custom {
             super::scenes::edit_in_preview(ui, st, rect);
@@ -675,10 +685,31 @@ fn sources(ui: &mut Ui, st: &mut State) {
             // A template made for another frame shape picks it.
             s.canvas = c;
         }
-        if s.scene_id().1.is_none() {
+        if s.scene_id().1.is_none() && !st.studio {
             w::hint(ui, s.scene.description());
         }
         w::divider(ui);
+        // Studio mode needs a session that composes (any scene but the
+        // plain screen, or a camera).
+        let composes = st.recording.as_ref().or(st.preview.as_ref()).is_some_and(|r| r.composed());
+        w::row(ui, "Studio mode", |ui| {
+            let mut on = st.studio;
+            if w::switch(ui, &mut on, composes || st.studio).on_hover_text("Set up the next scene in the preview, then switch to it with Transition").changed() {
+                st.studio = on;
+                st.staged = None;
+            }
+        });
+        if st.studio {
+            let staged = st.staged.unwrap_or(s.scene_id());
+            let differs = staged != s.scene_id();
+            ui.horizontal(|ui| {
+                let b = egui::Button::new(RichText::new("Transition ▸").font(theme::semibold(BODY)).color(Color32::WHITE)).fill(if differs { theme::accent() } else { p.control }).corner_radius(7).min_size(vec2(0.0, 28.0));
+                if ui.add_enabled(differs, b).on_hover_text("Make the staged scene the program, with the transition").clicked() {
+                    s.show(staged);
+                }
+                ui.label(RichText::new("Click a scene to stage it; ● marks the program.").size(SECONDARY).color(p.secondary));
+            });
+        }
         w::row(ui, "Frame", |ui| {
             let opts: Vec<(Canvas, String)> = Canvas::ALL.iter().map(|c| (*c, c.label().to_string())).collect();
             ui.allocate_ui(vec2(120.0, 24.0), |ui| combo(ui, "canvas", &mut s.canvas, &opts, idle));

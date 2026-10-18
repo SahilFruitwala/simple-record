@@ -19,10 +19,12 @@ pub enum Action {
     Stream,
     NextScene,
     PrevScene,
+    /// Studio mode: the staged scene becomes the program.
+    Transition,
 }
 
 impl Action {
-    pub const ALL: [Action; 6] = [Action::Record, Action::Pause, Action::SaveReplay, Action::Stream, Action::NextScene, Action::PrevScene];
+    pub const ALL: [Action; 7] = [Action::Record, Action::Pause, Action::SaveReplay, Action::Stream, Action::NextScene, Action::PrevScene, Action::Transition];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -32,6 +34,7 @@ impl Action {
             Action::Stream => "Go live / stop stream",
             Action::NextScene => "Next scene",
             Action::PrevScene => "Previous scene",
+            Action::Transition => "Transition (studio mode)",
         }
     }
 

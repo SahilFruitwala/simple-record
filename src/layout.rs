@@ -640,6 +640,13 @@ pub fn smoothstep(t: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Studio mode's preview frame for a `w`x`h` output: the staged scene and
+/// the program side by side, `gap` apart. Returns (width, height, gap).
+pub fn studio_size(w: usize, h: usize) -> (usize, usize, usize) {
+    let gap = ((w / 48).max(8) + 1) & !1;
+    (2 * w + gap, h, gap)
+}
+
 /// The in-between frame `t` (0..1) of a Move transition from `a` to `b`:
 /// layers showing the same thing glide between their boxes and styles,
 /// others fade out (under) or in (in `b`'s order).
@@ -936,6 +943,14 @@ mod tests {
         assert_eq!(l.layers[2].content, Content::Browser { url: "/t/page.html".into() });
         assert!(l.layers[3].effects.chroma_key.is_some() && l.layers[1].effects.is_none());
         assert_eq!(SceneSpec::Custom(l).sources(), vec![Source::Media("/t/green.mp4".into()), Source::Media("/t/red.mp4".into()), Source::Browser("/t/page.html".into())]);
+    }
+
+    #[test]
+    fn studio_frame() {
+        assert_eq!(studio_size(1920, 1080), (3880, 1080, 40));
+        let (w, _, gap) = studio_size(640, 360);
+        assert_eq!(gap % 2, 0);
+        assert_eq!(w, 1280 + gap);
     }
 
     #[test]

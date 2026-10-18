@@ -48,6 +48,7 @@ pub enum Cmd {
     ToggleStream,
     NextScene,
     PrevScene,
+    Transition,
     /// Gather logs and system details into a folder to send.
     ReportProblem,
     OpenLog,
@@ -64,6 +65,7 @@ impl Cmd {
             Action::Stream => Cmd::ToggleStream,
             Action::NextScene => Cmd::NextScene,
             Action::PrevScene => Cmd::PrevScene,
+            Action::Transition => Cmd::Transition,
         }
     }
 }
@@ -197,6 +199,12 @@ pub struct State {
     pub selected_layer: Option<usize>,
     /// The last run ended with a crash (the error banner offers a report).
     pub crashed_last_time: bool,
+    /// Studio mode: the preview shows a staged scene beside the program;
+    /// Transition makes it the program.
+    pub studio: bool,
+    pub staged: Option<(Scene, Option<usize>)>,
+    /// What the session was last told to stage.
+    studio_applied: Option<Option<crate::layout::SceneSpec>>,
     /// Permissions as last read, and when (the welcome screen).
     pub perms: Option<(onboarding::Perms, Instant)>,
     /// The welcome screen is up.
@@ -309,6 +317,7 @@ impl State {
             self.scene_applied = None;
             self.look_applied = None;
             self.filters_applied = None;
+            self.studio_applied = None;
             return;
         };
         let applied = (self.settings.scene_id(), self.settings.scene_spec());
@@ -317,6 +326,16 @@ impl State {
             let animate = self.scene_applied.as_ref().is_none_or(|(id, _)| *id != applied.0);
             if sess.set_scene(applied.1.clone(), animate) {
                 self.scene_applied = Some(applied);
+            }
+        }
+        let staged = self.studio.then(|| self.settings.spec_of(self.staged.unwrap_or(self.settings.scene_id())));
+        if self.studio_applied.as_ref() != Some(&staged) {
+            if sess.set_studio(staged.clone()) {
+                self.studio_applied = Some(staged);
+            } else {
+                // The session doesn't compose: no studio mode.
+                self.studio = false;
+                self.studio_applied = None;
             }
         }
         let s = &self.settings;
@@ -337,6 +356,7 @@ impl State {
         self.scene_applied = Some((s.scene_id(), s.scene_spec()));
         self.look_applied = Some((s.background, s.transition, s.transition_ms));
         self.filters_applied = Some(s.mic_filters);
+        self.studio_applied = None;
     }
 
     /// Whether the running recording can switch to `scene` live: it needs
@@ -447,6 +467,9 @@ impl App {
             screen_aspect: 16.0 / 10.0,
             selected_layer: None,
             crashed_last_time: false,
+            studio: false,
+            staged: None,
+            studio_applied: None,
             perms: None,
             onboarding: false,
             layer_drag: None,
@@ -731,12 +754,25 @@ impl App {
 
     /// Show the next (`step` 1) or previous (-1) scene of the gallery that
     /// the running session can show.
+    /// Studio mode: the staged scene becomes the program.
+    fn transition(&mut self) {
+        let Some(staged) = self.st.staged.filter(|_| self.st.studio) else { return };
+        if staged != self.st.settings.scene_id() && self.st.can_switch_live(&self.st.settings.spec_of(staged)) {
+            self.st.settings.show(staged);
+            let _ = self.st.settings.save();
+            self.st.apply_scene();
+        }
+    }
+
+    /// The next or previous scene the session can show (in studio mode,
+    /// staged rather than shown).
     fn cycle_scene(&mut self, step: i32) {
         let s = &self.st.settings;
         let mut all: Vec<(Scene, Option<usize>)> = Scene::ALL.iter().map(|x| (*x, None)).collect();
         all.extend((0..s.custom_scenes.len()).map(|i| (Scene::Screen, Some(i))));
         let n = all.len() as i32;
-        let cur = all.iter().position(|x| *x == s.scene_id()).unwrap_or(0) as i32;
+        let current = if self.st.studio { self.st.staged.unwrap_or(s.scene_id()) } else { s.scene_id() };
+        let cur = all.iter().position(|x| *x == current).unwrap_or(0) as i32;
         for k in 1..n {
             let (scene, custom) = all[(cur + step * k).rem_euclid(n) as usize];
             let mut next = s.clone();
@@ -747,6 +783,12 @@ impl App {
                     Some(i) => next.custom_scenes[i].name.clone(),
                     None => scene.label().to_string(),
                 };
+                if self.st.studio {
+                    self.st.staged = Some((scene, custom));
+                    self.st.apply_scene();
+                    self.st.notice = Some((format!("Staged: {name}"), Instant::now()));
+                    return;
+                }
                 self.st.settings = next;
                 let _ = self.st.settings.save();
                 self.st.apply_scene();
@@ -989,6 +1031,7 @@ impl App {
             Cmd::OpenLog => macos::reveal(&crate::logging::log_path()),
             Cmd::NextScene => self.cycle_scene(1),
             Cmd::PrevScene => self.cycle_scene(-1),
+            Cmd::Transition => self.transition(),
             Cmd::Quit => self.quit(el),
         }
     }
