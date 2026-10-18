@@ -1,5 +1,40 @@
 # PROGRESS
 
+## OBS gaps closed (2026-10-18): built, not yet run on a Mac
+
+Everything in the old Known gaps list, plus scene templates. This work was done in a Linux
+cloud container: the macOS code was **type-checked** for `aarch64-apple-darwin` (clean,
+clippy too), and the platform-independent parts were **run**, but nothing has run on a Mac
+yet.
+
+| Feature | Where | Verified here |
+|---|---|---|
+| Scene engine: 9 templates, frame shapes (source, 16:9, 9:16, 1:1, 4:5), gradient background, Move/Fade/Cut transitions | `layout.rs`, `compose.rs`, `app/scenes.rs` | Layout geometry: 12 unit tests (every template fits every frame shape, no overlaps, blends, snapping) |
+| Custom scenes: screen, camera, other displays, image, text, color layers; drag/resize in the preview; JSON export, `--scene-file` | `layout.rs`, `app/scenes.rs` | Geometry and JSON round trip tested |
+| Configurable shortcuts (record, pause, replay, stream, next/prev scene) | `hotkey.rs`, `app/mod.rs` | Key table and labels tested |
+| Region selection in the app; app capture (`--app`); other displays as layers | `app/ui.rs`, `screen.rs`, `record.rs` | Settings/CLI round trips |
+| Several stream destinations in the app; portrait-aware live encode size | `settings.rs`, `app/`, `live/mod.rs` | Settings tests |
+| System audio follows output device changes | `record.rs` | — |
+| Mic filters: low cut, RNNoise, gate, compressor | `filters.rs` | 8 tests on real DSP: noise reduced, 30 Hz cut, gate, compression, exact 20 ms delay |
+| Camera resolution; separate camera file | `camera.rs`, `writer.rs` | — |
+| SRT output (MPEG-TS, retransmission, AES) | `live/ts.rs`, `live/srt.rs`, `live/srtout.rs` | End to end against FFmpeg's libsrt: all frames decode; AES-128/256; 5% loss recovered; wrong passphrase reported |
+| HDR (experimental) | `screen.rs`, `writer.rs`, `compose.rs` | — |
+
+To check on a Mac, in order of risk:
+
+1. `cargo test` and `scripts/selftest.sh` (the compositor test now goes through the layout
+   engine; its pixel expectations are unchanged).
+2. Each scene template in the app, at 16:9 and 9:16, recording and switching live (Move and
+   Fade): sharpness of the screen in Side by Side and Presenter (it is pre-scaled with the
+   Lanczos scaler to the size it is drawn), CPU during transitions at 4K.
+3. A custom scene with an image (PNG with alpha) and a text layer (CoreImage's text generator:
+   color and size).
+4. Mic filters on a real voice; noise suppression's sync with `scripts/synccheck.py`.
+5. Camera file: opens next to the recording in Final Cut/Resolve and lines up.
+6. App capture, a second display layer, region selection.
+7. SRT to a real server (OBS/vMix/MediaMTX) and the multi-destination Go Live.
+8. HDR on an HDR display: QuickTime should show it as HDR.
+
 ## Your fix list (2026-10-12 evening): done
 
 Every item was measured on real recordings in `~/Movies/rec-rs-tests/goal/` (camera clips
