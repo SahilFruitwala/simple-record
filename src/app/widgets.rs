@@ -242,7 +242,9 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T, &str, bool, &str)]) -> bool {
     let p = theme::pal(ui);
     let dark = ui.visuals().dark_mode;
-    let (track_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    // The track's own (auto) id keys the segments: two controls in one Ui
+    // must not share ids, or a click lands in both.
+    let (track_rect, track_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
     let track = if dark { Color32::from_black_alpha(70) } else { Color32::from_black_alpha(14) };
     ui.painter().rect_filled(track_rect, CornerRadius::same(8), track);
     let inner = track_rect.shrink(2.0);
@@ -250,7 +252,7 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T,
     let mut changed = false;
     for (i, (v, label, ok, why)) in options.iter().enumerate() {
         let r = Rect::from_min_size(pos2(inner.left() + w * i as f32, inner.top()), vec2(w, inner.height()));
-        let resp = ui.interact(r, ui.id().with(("seg", i)), if *ok { Sense::click() } else { Sense::hover() });
+        let resp = ui.interact(r, track_resp.id.with(("seg", i)), if *ok { Sense::click() } else { Sense::hover() });
         let sel = *value == *v;
         if sel {
             let raised = if dark { Color32::from_rgb(0x5a, 0x5a, 0x5e) } else { Color32::WHITE };

@@ -679,6 +679,8 @@ impl App {
         o.scene = self.st.settings.scene_spec();
         o.mic_filters = self.st.settings.mic_filters;
         o.pip.effects = self.st.settings.camera_effects;
+        // The command line has the colours only; the screen's inset too.
+        o.background = self.st.settings.background;
         // The mic is optional: without permission, record without it (the
         // Audio card says so) rather than refuse to start.
         if o.mic.is_some() && crate::tcc::mic_status() != crate::tcc::Status::Granted {

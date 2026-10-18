@@ -10,7 +10,7 @@ use super::widgets::{self as w, Icon};
 use super::{Cmd, Meter, RegionSelect, State};
 use crate::compose::{self, Corner, Place, Shape};
 use crate::hotkey::{Action, Combo};
-use crate::layout::{Background, Canvas, Transition};
+use crate::layout::{Background, Canvas, Scene, Transition};
 use crate::settings::Settings;
 use crate::settings::{FPS, RESOLUTIONS};
 use crate::writer::{AudioLayout, Codec};
@@ -169,19 +169,19 @@ fn background_picker(ui: &mut Ui, bg: &mut Background, labels: bool) {
         for (name, preset) in Background::PRESETS {
             let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
             super::scenes::gradient(ui, rect.shrink(3.0), preset);
-            let sel = *bg == preset;
+            let sel = bg.same_colors(&preset);
             let ring = if sel { Stroke::new(2.0, theme::accent()) } else if resp.hovered() { Stroke::new(1.0, p.secondary) } else { Stroke::new(1.0, p.control_border) };
             ui.painter().rect_stroke(rect, CornerRadius::same(4), ring, egui::StrokeKind::Inside);
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if resp.on_hover_text(name).clicked() {
-                *bg = preset;
+                (bg.top, bg.bottom) = (preset.top, preset.bottom);
             }
         }
     });
     ui.horizontal(|ui| {
-        let custom = !Background::PRESETS.iter().any(|(_, b)| b == bg);
+        let custom = !Background::PRESETS.iter().any(|(_, b)| b.same_colors(bg));
         let label = if custom { "Custom:" } else { "Or your own:" };
         ui.label(RichText::new(label).size(SECONDARY).color(p.secondary));
         ui.color_edit_button_srgb(&mut bg.top).on_hover_text("Top colour");
@@ -759,22 +759,66 @@ fn sources(ui: &mut Ui, st: &mut State) {
 
     w::header(ui, Icon::Scene, "Scene");
     w::card(ui, |ui| {
-        if super::scenes::gallery(ui, st, &mut s, idle)
-            && idle
-            && s.scene_id().1.is_none()
-            && let Some(c) = s.scene.suggested_canvas()
-            && s.canvas == Canvas::Source
-        {
-            // A template made for another frame shape picks it.
-            s.canvas = c;
+        if super::scenes::gallery(ui, st, &mut s, idle) && idle {
+            // Vertical picks 9:16; the next scene goes back.
+            s.follow_scene_canvas();
         }
         if s.scene_id().1.is_none() && !st.studio {
             w::hint(ui, s.scene.description());
         }
         w::divider(ui);
+        let composes = st.recording.as_ref().or(st.preview.as_ref()).is_some_and(|r| r.composed());
+
+        // The frame's shape, one click each (it decides the video's size).
+        ui.label(RichText::new("Frame shape").color(p.text)).on_hover_text("The shape of the video: the screen's own, or 16:9 (YouTube), 9:16 (Shorts, Reels), 1:1 or 4:5");
+        let shapes: Vec<(Canvas, &str, bool, &str)> =
+            Canvas::ALL.iter().map(|c| (*c, if *c == Canvas::Source { "Screen" } else { c.label() }, idle, "Stop recording to change the frame shape")).collect();
+        if w::segmented(ui, &mut s.canvas, &shapes) {
+            s.canvas_before = None;
+        }
+        if let Some(before) = s.canvas_before {
+            let name = |c: Canvas| if c == Canvas::Source { "the screen's shape".to_string() } else { c.label().to_string() };
+            w::hint(ui, &format!("{} is made for {}. Picking another scene goes back to {}.", s.scene.label(), name(s.canvas), name(before)));
+        }
+
+        // Screen and Screen + Camera: the screen edge to edge, or on the
+        // background. (The other templates place it themselves.)
+        let template = s.scene_id().1.is_none();
+        if template && matches!(s.scene, Scene::Screen | Scene::ScreenCam) {
+            ui.add_space(4.0);
+            ui.label(RichText::new("Screen").color(p.text));
+            // From edge to edge to inset needs the compositor: not mid-recording
+            // on the plain screen.
+            let can = idle || composes;
+            let mut on_bg = s.background.inset > 0.0;
+            let opts = [(false, "Full frame", can, "Stop recording to change this"), (true, "On background", can, "Stop recording to change this")];
+            if w::segmented(ui, &mut on_bg, &opts) {
+                s.background.inset = if on_bg { Background::DEFAULT_INSET } else { 0.0 };
+            }
+            if on_bg {
+                w::field(ui, "Spacing", 72.0, |ui| {
+                    let mut pct = s.background.inset * 100.0;
+                    ui.spacing_mut().slider_width = (ui.available_width() - 48.0).max(40.0);
+                    if ui.add_enabled(can, egui::Slider::new(&mut pct, 2.0..=15.0).step_by(0.5).show_value(false)).changed() {
+                        s.background.inset = pct / 100.0;
+                    }
+                    w::slot(ui, 40.0, Align::Max, RichText::new(format!("{pct:.0}%")).size(SECONDARY + 1.0).color(p.secondary));
+                });
+            }
+        }
+
+        // Live, also while recording (like the transition).
+        ui.add_space(4.0);
+        ui.label(RichText::new("Background").color(p.text)).on_hover_text("Fills what the scene doesn't cover");
+        let covered = template && s.canvas == Canvas::Source && (s.scene == Scene::Cam || (matches!(s.scene, Scene::Screen | Scene::ScreenCam) && s.background.inset == 0.0));
+        if covered {
+            w::hint(ui, if s.scene == Scene::Cam { "Hidden: the camera fills the frame." } else { "Hidden: the screen fills the frame. Choose On background to show it." });
+        }
+        background_picker(ui, &mut s.background, false);
+        w::divider(ui);
+
         // Studio mode needs a session that composes (any scene but the
         // plain screen, or a camera).
-        let composes = st.recording.as_ref().or(st.preview.as_ref()).is_some_and(|r| r.composed());
         w::row(ui, "Studio mode", |ui| {
             let mut on = st.studio;
             if w::switch(ui, &mut on, composes || st.studio).on_hover_text("Set up the next scene in the preview, then switch to it with Transition").changed() {
@@ -793,15 +837,6 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 ui.label(RichText::new("Click a scene to stage it; ● marks the program.").size(SECONDARY).color(p.secondary));
             });
         }
-        w::row(ui, "Frame", |ui| {
-            let opts: Vec<(Canvas, String)> = Canvas::ALL.iter().map(|c| (*c, c.label().to_string())).collect();
-            ui.allocate_ui(vec2(150.0, 24.0), |ui| combo(ui, "canvas", &mut s.canvas, &opts, idle))
-                .response
-                .on_hover_text("The shape of the video: the screen's own, or 16:9, 9:16 (Shorts), 1:1 or 4:5");
-        });
-        // Live, also while recording (like the transition).
-        ui.label(RichText::new("Background").color(theme::pal(ui).text)).on_hover_text("Fills what the scene doesn't cover");
-        background_picker(ui, &mut s.background, false);
     });
 
     w::header(ui, Icon::Display, "Screen");
@@ -1328,7 +1363,9 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                         Canvas::Tall => "4:5 (Instagram feed)".to_string(),
                     }))
                     .collect();
-                combo(ui, "canvas2", &mut s.canvas, &opts, true);
+                if combo(ui, "canvas2", &mut s.canvas, &opts, true) {
+                    s.canvas_before = None;
+                }
                 ui.end_row();
                 ui.label("Background").on_hover_text("Fills what the scene doesn't cover: a gradient from top to bottom");
                 ui.vertical(|ui| background_picker(ui, &mut s.background, true));

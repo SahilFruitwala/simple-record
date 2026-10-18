@@ -73,6 +73,10 @@ pub struct Settings {
     pub scene: Scene,
     /// Shape of the output frame.
     pub canvas: Canvas,
+    /// Set when a template switched the frame shape for itself (Vertical to
+    /// 9:16): the shape before, restored when another scene is picked.
+    /// None once the shape was picked by hand.
+    pub canvas_before: Option<Canvas>,
     /// Behind scene layers that don't cover the frame.
     pub background: Background,
     pub transition: Transition,
@@ -161,6 +165,7 @@ impl Default for Settings {
             app: None,
             scene: Scene::Screen,
             canvas: Canvas::Source,
+            canvas_before: None,
             background: Background::default(),
             transition: Transition::Move,
             transition_ms: 400,
@@ -231,6 +236,27 @@ fn value<T: ValueEnum>(v: T) -> String {
 }
 
 impl Settings {
+    /// After a template was picked: one made for another frame shape
+    /// (Vertical, 9:16) switches to it, unless the shape was picked by hand;
+    /// picking another template then switches back.
+    pub fn follow_scene_canvas(&mut self) {
+        if self.scene_id().1.is_some() {
+            return;
+        }
+        match self.scene.suggested_canvas() {
+            Some(c) if self.canvas != c && (self.canvas_before.is_some() || self.canvas == Canvas::Source) => {
+                self.canvas_before = Some(self.canvas_before.unwrap_or(self.canvas));
+                self.canvas = c;
+            }
+            Some(_) => {}
+            None => {
+                if let Some(b) = self.canvas_before.take() {
+                    self.canvas = b;
+                }
+            }
+        }
+    }
+
     /// $REC_SETTINGS, else ~/Library/Application Support/rec-rs/settings.json.
     pub fn path() -> PathBuf {
         if let Some(p) = std::env::var_os("REC_SETTINGS") {
@@ -351,7 +377,8 @@ impl Settings {
         let d = Settings::default();
         let spec = self.scene_spec();
         // A scene without the camera that still needs the compositor.
-        let composed = !spec.uses_cam() && spec != SceneSpec::Template(Scene::Screen);
+        // (The plain screen inset on the background is composed too.)
+        let composed = !spec.uses_cam() && (spec != SceneSpec::Template(Scene::Screen) || self.background.inset > 0.0);
         let key = Settings {
             pip_size: d.pip_size,
             pip_place: d.pip_place,
@@ -368,6 +395,7 @@ impl Settings {
             custom_scenes: vec![],
             custom_scene: None,
             background: d.background,
+            canvas_before: d.canvas_before,
             transition: d.transition,
             transition_ms: d.transition_ms,
             preview_low_power: d.preview_low_power,
@@ -572,6 +600,23 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertical_switches_the_frame_shape_and_back() {
+        let mut s = Settings { scene: Scene::Vertical, ..Default::default() };
+        s.follow_scene_canvas();
+        assert_eq!((s.canvas, s.canvas_before), (Canvas::Portrait, Some(Canvas::Source)));
+        s.scene = Scene::SideBySide;
+        s.follow_scene_canvas();
+        assert_eq!((s.canvas, s.canvas_before), (Canvas::Source, None));
+        // A shape picked by hand stays.
+        s.canvas = Canvas::Landscape;
+        s.scene = Scene::Vertical;
+        s.follow_scene_canvas();
+        s.scene = Scene::Screen;
+        s.follow_scene_canvas();
+        assert_eq!(s.canvas, Canvas::Landscape);
+    }
 
     #[test]
     fn json_roundtrip_and_defaults_for_missing_fields() {

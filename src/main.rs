@@ -410,7 +410,7 @@ fn parse_background(s: &str) -> Result<layout::Background> {
         Some(b) => parse_hex(b)?,
         None => top,
     };
-    Ok(layout::Background { top, bottom })
+    Ok(layout::Background::gradient(top, bottom))
 }
 
 /// The live encode's bounding box for a preset or WxH (the encoder fits the
@@ -943,7 +943,7 @@ mod tests {
         let a = parse_record_args(&["--canvas", "9:16", "--transition", "fade", "--background", "101010,303030"]).unwrap();
         assert_eq!(a.canvas, layout::Canvas::Portrait);
         assert_eq!(a.transition, layout::Transition::Fade);
-        assert_eq!(parse_background(a.background.as_deref().unwrap()).unwrap(), layout::Background { top: [16; 3], bottom: [48; 3] });
+        assert_eq!(parse_background(a.background.as_deref().unwrap()).unwrap(), layout::Background::gradient([16; 3], [48; 3]));
         assert!(parse_record_args(&["--scene", "cam", "--scene-file", "x.json"]).is_err());
     }
 

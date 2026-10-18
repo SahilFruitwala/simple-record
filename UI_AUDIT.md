@@ -65,6 +65,14 @@ New, found and fixed during the retest:
   really resizes it, from 280 to 460 pt, leaving at least 420 pt for the preview. The content follows the width,
   the width is saved in the settings, and double-clicking the edge restores 304.
 
+- **37** (reported by you) Picking Vertical switched the frame to 9:16, and no other scene switched it back.
+  The only way back was the Frame dropdown. Now a template's own shape is undone when you pick another
+  scene, unless you chose the shape yourself. A hint says so while it applies, and Frame shape is a
+  one-click segmented control in the Scene card.
+- **38** (requested) The Screen and Screen + Camera scenes can be "Full frame" or "On background": the
+  screen inset with rounded corners and an adjustable spacing, so the background shows. The background
+  picker says when it's hidden because the screen or camera fills the frame.
+
 Nothing found in the retest is still open. The welcome page (16) was not checked in the app.
 
 ## Bugs (broken or clipped)

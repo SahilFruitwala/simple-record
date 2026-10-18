@@ -333,25 +333,42 @@ pub struct Placed {
 pub struct Background {
     pub top: [u8; 3],
     pub bottom: [u8; 3],
+    /// How far in from the frame's edges the screen sits on the Screen and
+    /// Screen + Camera scenes, as a fraction of the frame's shorter side,
+    /// so the background shows around it. 0: edge to edge (full frame).
+    pub inset: f64,
 }
 
 impl Default for Background {
     fn default() -> Self {
-        Background { top: [0x1d, 0x1f, 0x2b], bottom: [0x3b, 0x2f, 0x5e] }
+        Background::gradient([0x1d, 0x1f, 0x2b], [0x3b, 0x2f, 0x5e])
     }
 }
 
 impl Background {
+    /// The screen's inset when "On background" is first chosen.
+    pub const DEFAULT_INSET: f64 = 0.05;
+
+    /// A gradient with the screen edge to edge.
+    pub const fn gradient(top: [u8; 3], bottom: [u8; 3]) -> Background {
+        Background { top, bottom, inset: 0.0 }
+    }
+
+    /// Same colours (the inset aside).
+    pub fn same_colors(&self, other: &Background) -> bool {
+        self.top == other.top && self.bottom == other.bottom
+    }
+
     /// Ready-made backgrounds, the default first.
     pub const PRESETS: [(&'static str, Background); 8] = [
-        ("Midnight", Background { top: [0x1d, 0x1f, 0x2b], bottom: [0x3b, 0x2f, 0x5e] }),
-        ("Graphite", Background { top: [0x2c, 0x2c, 0x30], bottom: [0x16, 0x16, 0x18] }),
-        ("Ocean", Background { top: [0x0f, 0x20, 0x27], bottom: [0x2c, 0x53, 0x64] }),
-        ("Forest", Background { top: [0x13, 0x4e, 0x5e], bottom: [0x71, 0xb2, 0x80] }),
-        ("Sunset", Background { top: [0xee, 0x9c, 0xa7], bottom: [0xff, 0xdd, 0xe1] }),
-        ("Peach", Background { top: [0xff, 0x7e, 0x5f], bottom: [0xfe, 0xb4, 0x7b] }),
-        ("Paper", Background { top: [0xf4, 0xf4, 0xf6], bottom: [0xdc, 0xdd, 0xe3] }),
-        ("Black", Background { top: [0x00, 0x00, 0x00], bottom: [0x00, 0x00, 0x00] }),
+        ("Midnight", Background::gradient([0x1d, 0x1f, 0x2b], [0x3b, 0x2f, 0x5e])),
+        ("Graphite", Background::gradient([0x2c, 0x2c, 0x30], [0x16, 0x16, 0x18])),
+        ("Ocean", Background::gradient([0x0f, 0x20, 0x27], [0x2c, 0x53, 0x64])),
+        ("Forest", Background::gradient([0x13, 0x4e, 0x5e], [0x71, 0xb2, 0x80])),
+        ("Sunset", Background::gradient([0xee, 0x9c, 0xa7], [0xff, 0xdd, 0xe1])),
+        ("Peach", Background::gradient([0xff, 0x7e, 0x5f], [0xfe, 0xb4, 0x7b])),
+        ("Paper", Background::gradient([0xf4, 0xf4, 0xf6], [0xdc, 0xdd, 0xe3])),
+        ("Black", Background::gradient([0x00, 0x00, 0x00], [0x00, 0x00, 0x00])),
     ];
 }
 
@@ -561,10 +578,21 @@ impl Scene {
         };
         let full = [0.0, 0.0, w, h];
         let sa = env.screen_aspect.max(0.01);
+        // The screen of Screen and Screen + Camera: full frame, or inset on
+        // the background with rounded corners.
+        let main_screen = || {
+            let i = (min * env.background.inset.clamp(0.0, 0.25)).round();
+            if i < 1.0 {
+                screen(full, Style::default())
+            } else {
+                let r = contain(sa, [i, i, w - 2.0 * i, h - 2.0 * i]);
+                screen(r, Style::rounded(radius, r[2], r[3]))
+            }
+        };
         let layers = match self {
-            Scene::Screen => vec![screen(full, Style::default())],
+            Scene::Screen => vec![main_screen()],
             Scene::Cam => vec![cam(full, Fit::Cover, Style::default())],
-            Scene::ScreenCam => vec![screen(full, Style::default()), overlay()],
+            Scene::ScreenCam => vec![main_screen(), overlay()],
             Scene::Presenter => {
                 let inset = (m * 1.5).round();
                 let r = contain(sa, [inset, inset, w - 2.0 * inset, h - 2.0 * inset]);
@@ -711,6 +739,7 @@ pub fn blend(a: &Frame, b: &Frame, t: f64) -> Frame {
     let background = Background {
         top: lerp_color(a.background.top, b.background.top, t),
         bottom: lerp_color(a.background.bottom, b.background.bottom, t),
+        inset: lerp(a.background.inset, b.background.inset, t),
     };
     Frame { background, layers }
 }
