@@ -1,4 +1,6 @@
-# rec-rs
+<p align="center"><img src="assets/logo/logo.svg" alt="Rec logo" width="128"></p>
+
+# Rec (rec-rs)
 
 A simple, fast, reliable screen and camera recorder for macOS, written in Rust, as an alternative
 to OBS for recording YouTube videos. It records the screen, system audio, microphone and webcam
@@ -33,7 +35,8 @@ It uses only Apple frameworks:
 There is no FFmpeg, OBS or Electron at runtime. The UI is egui on wgpu in the paper-rs style:
 transparent titlebar and the Inter font.
 
-It needs macOS 15 or later on Apple Silicon. It was developed and tested on macOS 27 on an M4
+It needs macOS 15 or later on Apple Silicon. Windows and Linux are not supported yet; see
+[PLATFORMS.md](PLATFORMS.md) for what a port involves. It was developed and tested on macOS 27 on an M4
 Pro MacBook Pro.
 
 The code is a clean-room implementation, licensed MIT OR Apache-2.0. OBS (GPL-2.0) was studied
@@ -77,6 +80,11 @@ the OBS Project. No original OBS code or assets are included in this repository.
 ./scripts/build.sh          # cargo build --release, then assemble and sign dist/Rec.app
 dist/rec-rs --help          # dist/rec is a short alias
 ```
+
+`./scripts/package.sh` also wraps the app in `dist/Rec-<version>-macos-arm64.dmg`. Pushing a tag
+such as `v0.1.0` runs the Release workflow, which builds the DMG and attaches it to a GitHub
+release (ad-hoc signed there, so the first launch needs right-click, Open). `scripts/make-icons.sh`
+regenerates the logo and icons from `assets/logo/make_logo.py`.
 
 Build output goes to `~/.cache/rec-rs-target` (`CARGO_TARGET_DIR`), never into the repo,
 because the repo is synced between machines. The script signs `dist/Rec.app` with your Apple

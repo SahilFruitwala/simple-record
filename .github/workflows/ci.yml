@@ -26,6 +26,20 @@ jobs:
       - name: SRT end to end (libsrt plain, AES-128/256, HEVC, 5% loss, wrong passphrase; MediaMTX)
         run: scripts/srt-e2e.sh
 
+  portable-os:
+    name: Portable crate builds and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Probe for the Windows/Linux port (see PLATFORMS.md); informational until it is green.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path portable/Cargo.toml
+
   macos:
     name: Build, clippy and tests (macOS)
     runs-on: macos-15
