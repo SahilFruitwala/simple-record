@@ -42,7 +42,9 @@ This is a multi-month effort and a rewrite of the capture and encode paths, not 
 configuration change; it should be planned as its own project. A reasonable order is
 Windows first (largest user base, the capture APIs are mature), then Linux.
 
-## CI probe
+## Known blockers in the "portable" code
 
-`.github/workflows/ci.yml` builds and tests the portable crate on Windows as well, as an
-informational (non-blocking) job, so any drift that would make the port harder shows up early.
+`portable/` builds on macOS and Linux but **not on Windows**: `src/logging.rs` and
+`src/live/srt.rs` use Unix-only APIs (`libc::gettimeofday`, `localtime_r`, `std::os::fd`,
+socket options). Porting those to `std`/`socket2`/`time` is the first concrete step for
+Windows; a Windows CI job should be added once it compiles.
