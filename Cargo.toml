@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A simple, fast, reliable screen and camera recorder for macOS"
+repository = "https://github.com/SahilFruitwala/simple-record"
+homepage = "https://github.com/SahilFruitwala/simple-record"
+readme = "README.md"
+keywords = ["screen-recorder", "streaming", "macos", "screencapturekit"]
+categories = ["multimedia::video"]
+publish = false
 
 [dependencies]
 anyhow = "1.0.104"
