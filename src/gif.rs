@@ -155,7 +155,9 @@ fn write(input: &Path, output: &Path, o: &GifOptions, progress: &dyn Fn(f64)) ->
             }
             let (pw, ph) = (objc2_core_video::CVPixelBufferGetWidth(&pb), objc2_core_video::CVPixelBufferGetHeight(&pb));
             let (w, h) = *size.get_or_insert_with(|| out_size(pw, ph, o.width));
-            let img = CIImage::imageWithCVPixelBuffer(&pb);
+            // Clamped first, so the scaler doesn't fade the edges to
+            // transparent (a dark or see-through border in the GIF).
+            let img = CIImage::imageWithCVPixelBuffer(&pb).imageByClampingToExtent();
             let params = dict(vec![
                 (&*ns("inputScale"), num_f(h as f64 / ph as f64)),
                 (&*ns("inputAspectRatio"), num_f((w as f64 / pw as f64) / (h as f64 / ph as f64))),

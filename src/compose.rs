@@ -463,16 +463,15 @@ impl Compositor {
                 return None;
             }
             let k = (self.w / e.size.width).max(self.h / e.size.height);
-            let src = translate(&src, -e.origin.x, -e.origin.y);
+            // Clamped before scaling: the image's edge pixels repeat
+            // outwards, so the Lanczos filter (whose kernel reaches past
+            // the edges, a few pixels wide once scaled up) never fades it
+            // out at the frame's edges or under a blur. The scaled size is
+            // then known, not read from the (infinite) extent.
+            let src = translate(&src, -e.origin.x, -e.origin.y).imageByClampingToExtent();
             let params = dict(vec![(&*ns("inputScale"), num_f(k)), (&*ns("inputAspectRatio"), num_f(1.0))]);
             let scaled = src.imageByApplyingFilter_withInputParameters(&ns("CILanczosScaleTransform"), &params);
-            let s = scaled.extent();
-            // Lanczos leaves the outermost pixels partly transparent: cut
-            // them off and repeat the next ones outwards, so neither the
-            // frame's edges nor a blur let the colours under it through.
-            let mut img = translate(&scaled, (self.w - s.size.width) / 2.0 - s.origin.x, (self.h - s.size.height) / 2.0 - s.origin.y)
-                .imageByCroppingToRect(rect(1.0, 1.0, self.w - 2.0, self.h - 2.0))
-                .imageByClampingToExtent();
+            let mut img = translate(&scaled, (self.w - e.size.width * k) / 2.0, (self.h - e.size.height * k) / 2.0);
             if blur >= 0.5 {
                 img = img.imageByApplyingGaussianBlurWithSigma(blur);
             }
