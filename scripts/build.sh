@@ -18,7 +18,7 @@ cp support/Info.plist "$STAGE/Contents/Info.plist"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion ${BUILD_NUMBER:-1}" "$STAGE/Contents/Info.plist"
 cp support/AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
-cp THIRD_PARTY_NOTICES.md "$STAGE/Contents/Resources/THIRD_PARTY_NOTICES.md"
+cp THIRD_PARTY_NOTICES.md LICENSE-MIT LICENSE-APACHE "$STAGE/Contents/Resources/"
 cp "$CARGO_TARGET_DIR/$PROFILE/simple-record" "$STAGE/Contents/MacOS/simple-record"
 IDENTITY="${REC_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
 if [ -z "$IDENTITY" ]; then
@@ -30,7 +30,9 @@ codesign --verify --strict "$STAGE"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$STAGE/Contents/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns.new" && mv -f "$APP/Contents/Resources/AppIcon.icns.new" "$APP/Contents/Resources/AppIcon.icns"
 cp "$STAGE/Contents/Info.plist" "$APP/Contents/Info.plist.new" && mv -f "$APP/Contents/Info.plist.new" "$APP/Contents/Info.plist"
-cp "$STAGE/Contents/Resources/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+for f in THIRD_PARTY_NOTICES.md LICENSE-MIT LICENSE-APACHE; do
+  cp "$STAGE/Contents/Resources/$f" "$APP/Contents/Resources/$f"
+done
 mv -f "$STAGE/Contents/MacOS/simple-record" "$APP/Contents/MacOS/simple-record"
 rm -f "$APP/Contents/MacOS/rec"  # pre-rename executable
 rm -rf "$APP/Contents/_CodeSignature"
