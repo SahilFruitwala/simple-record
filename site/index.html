@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimpleRecord – Screen and camera recorder for Mac</title>
+<meta name="description" content="A simple, fast, reliable screen and camera recorder for macOS. Scenes, replay buffer and live streaming, with no FFmpeg, OBS or Electron.">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #fbfbfd; --fg: #1d1d1f; --muted: #6e6e73; --card: #ffffff;
+    --line: #d2d2d7; --accent: #0071e3; --accent-fg: #fff; --alt: #f5f5f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #000; --fg: #f5f5f7; --muted: #a1a1a6; --card: #1c1c1e;
+            --line: #38383a; --accent: #2997ff; --accent-fg: #000; --alt: #111113; }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 22px; }
+  nav { position: sticky; top: 0; z-index: 10; backdrop-filter: saturate(180%) blur(20px);
+    background: color-mix(in srgb, var(--bg) 78%, transparent); border-bottom: 1px solid var(--line); }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 48px; }
+  nav .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--fg); }
+  nav .brand img { width: 22px; height: 22px; }
+  nav .links { display: flex; gap: 24px; font-size: 14px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--fg); text-decoration: none; }
+  .hero { text-align: center; padding: 88px 0 56px; }
+  .hero img.icon { width: 96px; height: 96px; border-radius: 22%; box-shadow: 0 8px 30px rgba(0,0,0,.18); }
+  h1 { font-size: clamp(40px, 8vw, 72px); line-height: 1.05; letter-spacing: -.03em; margin: 28px 0 14px; font-weight: 700; }
+  .hero p.lead { font-size: clamp(19px, 3vw, 26px); color: var(--muted); max-width: 640px; margin: 0 auto 32px; line-height: 1.35; }
+  .btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 12px 26px; border-radius: 980px; font-size: 17px; }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); }
+  .btn.primary:hover { opacity: .9; text-decoration: none; }
+  .btn.ghost { color: var(--accent); }
+  .note { color: var(--muted); font-size: 14px; margin-top: 18px; }
+  .shot { margin: 56px auto 0; max-width: 900px; border-radius: 14px; overflow: hidden;
+    border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0,0,0,.22); }
+  .shot img { display: block; width: 100%; height: auto; }
+  section { padding: 88px 0; }
+  section.alt { background: var(--alt); }
+  h2 { font-size: clamp(30px, 5vw, 48px); letter-spacing: -.02em; line-height: 1.1; text-align: center; margin: 0 0 12px; }
+  .sub { text-align: center; color: var(--muted); font-size: 21px; max-width: 620px; margin: 0 auto 48px; line-height: 1.35; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 28px; }
+  .card h3 { margin: 0 0 8px; font-size: 21px; letter-spacing: -.01em; }
+  .card p { margin: 0; color: var(--muted); font-size: 16px; }
+  .specs { list-style: none; padding: 0; margin: 0 auto; max-width: 640px; }
+  .specs li { display: flex; justify-content: space-between; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .specs li span:first-child { color: var(--muted); }
+  .specs li span:last-child { text-align: right; font-weight: 500; }
+  .cta { text-align: center; }
+  footer { border-top: 1px solid var(--line); padding: 28px 0; color: var(--muted); font-size: 13px; text-align: center; }
+  footer a { color: var(--muted); text-decoration: underline; }
+  @media (max-width: 560px) { nav .links { gap: 16px; } .hero { padding-top: 56px; } section { padding: 64px 0; } }
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#"><img src="logo.svg" alt="">SimpleRecord</a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#specs">Details</a>
+      <a href="https://github.com/SahilFruitwala/simple-record">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <img class="icon" src="logo.svg" alt="SimpleRecord icon">
+  <h1>Record. Simply.</h1>
+  <p class="lead">A fast, reliable screen and camera recorder for Mac. Built for making videos, not for fiddling with settings.</p>
+  <div class="btns">
+    <a class="btn primary" href="https://github.com/SahilFruitwala/simple-record/releases/latest">Download for Mac</a>
+    <a class="btn ghost" href="https://github.com/SahilFruitwala/simple-record">View on GitHub &rsaquo;</a>
+  </div>
+  <p class="note">Requires macOS 15 or later on Apple Silicon. Free and open source.</p>
+  <div class="shot"><img src="screenshot.png" alt="SimpleRecord main window" width="1800" height="1200"></div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Everything you need. Nothing you don't.</h2>
+    <p class="sub">One recording with your screen, system audio, microphone and webcam, ready for your editor.</p>
+    <div class="grid">
+      <div class="card"><h3>Sharp screen capture</h3><p>Captured at native resolution (a 5K display stays 5K) and scaled with a Lanczos filter on the GPU.</p></div>
+      <div class="card"><h3>Scenes</h3><p>Nine ready-made layouts, from Presenter to Vertical for Shorts. Build your own and switch live with animated transitions.</p></div>
+      <div class="card"><h3>Replay buffer</h3><p>Keep the last seconds rolling and save them the moment something great happens.</p></div>
+      <div class="card"><h3>Live streaming</h3><p>Stream over RTMP, SRT or WHIP to several destinations at once from a single hardware encode.</p></div>
+      <div class="card"><h3>Clean audio</h3><p>Built-in noise suppression, low cut, noise gate and compressor for your microphone.</p></div>
+      <div class="card"><h3>Opens anywhere</h3><p>Records <code>.mov</code> or <code>.mp4</code> that plays in QuickTime and imports into Final Cut, Premiere and DaVinci Resolve.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="specs" class="alt">
+  <div class="wrap">
+    <h2>Light on your Mac.</h2>
+    <p class="sub">Only Apple frameworks and Rust. No FFmpeg, OBS or Electron at runtime.</p>
+    <ul class="specs">
+      <li><span>Capture</span><span>ScreenCaptureKit, AVCapture</span></li>
+      <li><span>Encoding</span><span>Hardware H.264, HEVC, ProRes 422</span></li>
+      <li><span>Streaming</span><span>RTMP/RTMPS, SRT, WHIP</span></li>
+      <li><span>Compositing</span><span>Core Image on Metal</span></li>
+      <li><span>Stream keys</span><span>Stored in the macOS Keychain</span></li>
+      <li><span>License</span><span>MIT or Apache-2.0</span></li>
+    </ul>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <h2>Ready when you are.</h2>
+    <p class="sub">Download the latest release, right-click, Open, and hit record.</p>
+    <a class="btn primary" href="https://github.com/SahilFruitwala/simple-record/releases/latest">Download for Mac</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">SimpleRecord is open source under the <a href="https://github.com/SahilFruitwala/simple-record/blob/main/LICENSE-MIT">MIT</a> and <a href="https://github.com/SahilFruitwala/simple-record/blob/main/LICENSE-APACHE">Apache-2.0</a> licenses.</div>
+</footer>
+</body>
+</html>

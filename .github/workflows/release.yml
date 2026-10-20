@@ -8,6 +8,16 @@ name: Release
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "portable/**"
+      - "vendor/**"
+      - "scripts/**"
+      - "support/**"
+      - "assets/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
     tags: ["v*"]
   workflow_dispatch:
 
