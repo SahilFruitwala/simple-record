@@ -106,6 +106,13 @@ pub fn make_floating_panel(window: &Window) {
     w.setExcludedFromWindowsMenu(true);
 }
 
+/// Fade a whole window (its content and shadow), 1.0 being opaque.
+pub fn set_alpha(window: &Window, alpha: f64) {
+    if let Some(w) = ns_window(window) {
+        w.setAlphaValue(alpha);
+    }
+}
+
 /// The main screen's desktop picture.
 pub fn desktop_picture() -> Option<std::path::PathBuf> {
     let mtm = objc2::MainThreadMarker::new()?;

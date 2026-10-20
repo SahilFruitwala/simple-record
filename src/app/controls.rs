@@ -21,6 +21,10 @@ const GRIP_W: f32 = 20.0;
 const BAR_W: f32 = PAD + STOP_W + 10.0 + 5.0 * BTN + 4.0 * GAP + 9.0 + 1.0 + 3.0 + GRIP_W + PAD;
 /// The window: the bar and its margin.
 pub const SIZE: (f64, f64) = ((BAR_W + 2.0 * MARGIN) as f64, (BAR_H + 2.0 * MARGIN) as f64);
+/// How opaque the window is while the pointer is elsewhere, so the bar is
+/// not in the way; it turns solid under the pointer or while it asks.
+pub const IDLE_ALPHA: f64 = 0.4;
+
 /// How long a Restart or Delete waits for its confirmation.
 const CONFIRM_FOR: Duration = Duration::from_secs(5);
 
@@ -95,11 +99,11 @@ pub fn bar(ui: &mut Ui, st: &mut State) -> bool {
             let area = Rect::from_min_max(pos2(x, rect.top()), pos2(rect.right() - PAD - GRIP_W - 13.0, rect.bottom()));
             let (question, yes) = match what {
                 Confirm::Restart => ("Restart?", "Restart"),
-                Confirm::Delete => ("Delete take?", "Delete"),
+                Confirm::Delete => ("Delete?", "Delete"),
             };
             ui.painter().text(pos2(area.left(), cy), egui::Align2::LEFT_CENTER, question, theme::semibold(12.5), fg);
-            let cancel = Rect::from_min_size(pos2(area.right() - 56.0, cy - 13.0), vec2(56.0, 26.0));
-            let ok = Rect::from_min_size(pos2(cancel.left() - 64.0, cy - 13.0), vec2(60.0, 26.0));
+            let cancel = Rect::from_min_size(pos2(area.right() - 52.0, cy - 13.0), vec2(52.0, 26.0));
+            let ok = Rect::from_min_size(pos2(cancel.left() - 60.0, cy - 13.0), vec2(56.0, 26.0));
             if text_button(ui, ok, "confirm-yes", yes, Color32::WHITE, RED, RED.gamma_multiply(0.85)) {
                 st.controls_confirm = None;
                 st.cmds.push(match what {

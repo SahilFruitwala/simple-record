@@ -454,6 +454,9 @@ struct App {
     /// What to do once the recording being finished is written.
     after_finish: Option<AfterFinish>,
     main_visible: bool,
+    /// The main window was hidden when the recording started: bring it
+    /// back once the recording is done.
+    main_hidden_for_recording: bool,
     st: State,
     menubar: Option<menubar::MenuBar>,
     /// Global shortcuts registered now.
@@ -574,6 +577,7 @@ impl App {
             controls_pos: None,
             after_finish: None,
             main_visible: true,
+            main_hidden_for_recording: false,
             st,
             menubar: None,
             hotkeys: vec![],
@@ -1104,6 +1108,12 @@ impl App {
                 self.st.pip_applied = Some(self.st.settings.pip_spec());
                 self.st.scene_started();
                 self.st.recording = Some(sess);
+                // The controls are on screen: get the window out of the way
+                // (the gear in the controls opens it again).
+                if self.st.settings.recording_controls && self.main_visible {
+                    self.main_hidden_for_recording = true;
+                    self.hide_main();
+                }
                 record::PAUSE_REQ.store(false, Ordering::SeqCst);
                 record::RESUME_REQ.store(false, Ordering::SeqCst);
             }
@@ -1197,7 +1207,10 @@ impl App {
             Cmd::RestartRecording | Cmd::DeleteRecording => {}
             Cmd::ExportGif => self.export_gif(),
             Cmd::TogglePause => self.toggle_pause(),
-            Cmd::ShowWindow => self.show_main(el),
+            Cmd::ShowWindow => {
+                self.main_hidden_for_recording = false;
+                self.show_main(el)
+            }
             Cmd::ShowSettings => self.show_settings(el),
             Cmd::RevealLast => {
                 if let Some(f) = &self.st.last_file {
@@ -1287,6 +1300,11 @@ impl App {
         let done = self.finished.lock().unwrap().take();
         if let Some((file, r)) = done {
             self.st.finishing = false;
+            let restarting = self.after_finish == Some(AfterFinish::Restart);
+            if self.main_hidden_for_recording && !restarting {
+                self.main_hidden_for_recording = false;
+                self.show_main(el);
+            }
             match (r, self.after_finish.take()) {
                 (r, Some(then)) => {
                     // Thrown away from the controls: to the Trash (not
@@ -1418,6 +1436,10 @@ impl App {
             Kind::Settings => ui::settings_window(ui, st),
             Kind::Controls => drag_controls = controls::bar(ui, st),
         });
+        if kind == Kind::Controls {
+            let solid = win.ctx.input(|i| i.pointer.has_pointer()) || st.controls_confirm.is_some();
+            macos::set_alpha(&win.window, if solid { 1.0 } else { controls::IDLE_ALPHA });
+        }
         win.egui.handle_platform_output(&win.window, out.platform_output);
         let delay = out.viewport_output.get(&egui::ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
         win.repaint_at = if delay < Duration::from_secs(60) { Some(Instant::now() + delay) } else { None };
