@@ -27,10 +27,10 @@ extern "C-unwind" fn should_terminate(_this: &AnyObject, _sel: Sel, _app: &AnyOb
 }
 
 /// -applicationShouldHandleReopen:hasVisibleWindows: (Dock icon click).
-extern "C-unwind" fn should_reopen(_this: &AnyObject, _sel: Sel, _app: &AnyObject, visible: Bool) -> Bool {
-    if !visible.as_bool() {
-        super::push(Cmd::ShowWindow);
-    }
+/// Always brings the main window back: the floating recording controls
+/// count as a visible window, so `hasVisibleWindows` can't tell.
+extern "C-unwind" fn should_reopen(_this: &AnyObject, _sel: Sel, _app: &AnyObject, _visible: Bool) -> Bool {
+    super::push(Cmd::ShowWindow);
     Bool::YES
 }
 
