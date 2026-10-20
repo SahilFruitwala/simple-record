@@ -200,6 +200,14 @@ The **main window** contains:
 - **Record / Stop** (⇧⌘R from anywhere by default), **Pause / Resume**, the recording timer,
   and **level meters** for system audio and mic with peak hold.
 - **Reveal Last** and **Open Folder**.
+- **Recording controls**: while recording, a small floating bar shows the stop button and the
+  recorded time, mic mute (with the mic's level), pause/resume, restart, delete and a button
+  that opens the Rec window. Drag it by its grip (⋮); it stays where you leave it until Rec
+  quits, on every Space and over full-screen apps. Restart and Delete ask first, then move the
+  take (and its camera file) to the Trash, so it can be put back. The bar is a Rec window, and
+  Rec leaves all of its own windows out of the capture, so it is never in the recording, the
+  preview or a stream. Mute applies to the file and the streams and isn't saved. Turn the bar
+  off in Settings > Video.
 - **Output**: the format, codec and folder at a glance. Click one to change it in Settings.
 - **Replay buffer**: keep the last 15–300 s (default 60) in memory, shown with its memory use.
   **Save Replay** or **⇧⌘S** from anywhere writes it to an MP4 in the output folder without
@@ -227,8 +235,8 @@ recording, except the camera overlay:
   background and transition with its length; Report a Problem… and Open Log; and **Restore
   Defaults…**, which asks first and keeps the output folder.
 - **Video**: resolution (720p, 1080p, 1440p, 4K or native), frame rate, codec (auto, H.264,
-  HEVC, ProRes), bitrate, HDR (experimental), cursor and click highlighting, and the low-power
-  preview. The frame always has the shape of the display or window (4K of a 16:10 display is
+  HEVC, ProRes), bitrate, HDR (experimental), cursor and click highlighting, the low-power
+  preview and the floating recording controls. The frame always has the shape of the display or window (4K of a 16:10 display is
   3456x2160): no black bars, nothing cropped.
 - **Audio**: system audio and microphone, track layout, gains, and the mic filters (low cut,
   noise suppression, a noise gate with its level, a compressor with its threshold, ratio and

@@ -117,6 +117,8 @@ pub struct Settings {
     pub clicks: bool,
     /// Preview at half resolution and 15 fps.
     pub preview_low_power: bool,
+    /// Show the floating recording controls while recording.
+    pub recording_controls: bool,
     /// Keep the last `replay_secs` of the live encode in memory.
     pub replay_enabled: bool,
     pub replay_secs: u32,
@@ -195,6 +197,7 @@ impl Default for Settings {
             cursor: true,
             clicks: false,
             preview_low_power: false,
+            recording_controls: true,
             replay_enabled: false,
             replay_secs: 60,
             stream_dest: "youtube".into(),
@@ -399,6 +402,7 @@ impl Settings {
             transition: d.transition,
             transition_ms: d.transition_ms,
             preview_low_power: d.preview_low_power,
+            recording_controls: d.recording_controls,
             replay_enabled: d.replay_enabled,
             replay_secs: d.replay_secs,
             stream_dest: d.stream_dest.clone(),

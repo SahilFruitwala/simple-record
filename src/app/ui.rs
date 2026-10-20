@@ -1448,6 +1448,9 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 ui.label("Preview");
                 ui.add(w::Check::new(&mut s.preview_low_power, "Low power (half resolution, 15 fps)"));
                 ui.end_row();
+                ui.label("Controls").on_hover_text("A small floating bar with stop, mute, pause, restart and delete. It is never in the recording or a stream.");
+                ui.add(w::Check::new(&mut s.recording_controls, "Show floating controls while recording"));
+                ui.end_row();
             });
         }
 

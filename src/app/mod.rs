@@ -8,6 +8,7 @@
 //! it feeds the replay buffer and the streams, so they keep running across
 //! preview and recording sessions and while the window is closed.
 
+mod controls;
 mod dock;
 mod macos;
 mod menubar;
@@ -40,6 +41,10 @@ use crate::writer::Stats;
 pub enum Cmd {
     ToggleRecording,
     TogglePause,
+    /// Throw away the running recording and start a new one.
+    RestartRecording,
+    /// Stop the running recording and move its file to the Trash.
+    DeleteRecording,
     ShowWindow,
     ShowSettings,
     RevealLast,
@@ -240,6 +245,11 @@ pub struct State {
     /// device fallback warning last shown, so it isn't repeated on restarts.
     mic_in_use: Option<Option<String>>,
     mic_warned: Option<String>,
+    /// The mic is muted from the recording controls (this recording only).
+    pub mic_muted: bool,
+    /// A Restart or Delete in the recording controls waiting to be
+    /// confirmed, and when it was asked.
+    pub controls_confirm: Option<(controls::Confirm, Instant)>,
 }
 
 impl State {
@@ -351,10 +361,16 @@ impl State {
             sess.set_look(look.0, look.1, look.2 as f64 / 1000.0);
             self.look_applied = Some(look);
         }
-        if self.filters_applied != Some(s.mic_filters) {
-            sess.set_mic_filters(s.mic_filters);
-            self.filters_applied = Some(s.mic_filters);
+        let filters = self.mic_filters();
+        if self.filters_applied != Some(filters) {
+            sess.set_mic_filters(filters);
+            self.filters_applied = Some(filters);
         }
+    }
+
+    /// The mic filters from Settings, with the controls' mute.
+    fn mic_filters(&self) -> crate::filters::MicFilters {
+        crate::filters::MicFilters { mute: self.mic_muted, ..self.settings.mic_filters }
     }
 
     /// The running session was started with the current scene and look.
@@ -362,7 +378,7 @@ impl State {
         let s = &self.settings;
         self.scene_applied = Some((s.scene_id(), s.scene_spec()));
         self.look_applied = Some((s.background, s.transition, s.transition_ms));
-        self.filters_applied = Some(s.mic_filters);
+        self.filters_applied = Some(self.mic_filters());
         self.studio_applied = None;
     }
 
@@ -390,10 +406,32 @@ pub struct RegionSelect {
 /// A finalized recording: (file, outcome).
 type Finished = (PathBuf, Result<Stats, String>);
 
+/// The recording controls' Restart and Delete: the take is finished, then
+/// moved to the Trash (and for Restart, a new one starts).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterFinish {
+    Delete,
+    Restart,
+}
+
+/// Which of the app's windows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Main,
+    Settings,
+    Controls,
+}
+
 struct App {
     gpu: Option<Gpu>,
     main: Option<Win>,
     settings_win: Option<Win>,
+    /// The floating recording controls (see `controls.rs`).
+    controls: Option<Win>,
+    /// Where the controls were last left, to reopen them there.
+    controls_pos: Option<winit::dpi::PhysicalPosition<i32>>,
+    /// What to do once the recording being finished is written.
+    after_finish: Option<AfterFinish>,
     main_visible: bool,
     st: State,
     menubar: Option<menubar::MenuBar>,
@@ -494,6 +532,8 @@ impl App {
             notice: None,
             mic_in_use: None,
             mic_warned: None,
+            mic_muted: false,
+            controls_confirm: None,
         };
         st.live.set_config(st.settings.live_config());
         load_devices(&mut st);
@@ -505,6 +545,9 @@ impl App {
             gpu: None,
             main: None,
             settings_win: None,
+            controls: None,
+            controls_pos: None,
+            after_finish: None,
             main_visible: true,
             st,
             menubar: None,
@@ -551,6 +594,12 @@ impl App {
             .with_fullsize_content_view(true)
             .with_title_hidden(true);
         let window = Arc::new(el.create_window(attrs).expect("create window"));
+        self.wrap_window(window, false)
+    }
+
+    /// Render `window` with egui; `transparent`: what egui doesn't draw
+    /// shows what is behind the window.
+    fn wrap_window(&mut self, window: Arc<Window>, transparent: bool) -> Win {
         // A throwaway instance creates the first surface; the shared one
         // after that (surfaces must come from the adapter's instance).
         let surface = match &self.gpu {
@@ -584,7 +633,14 @@ impl App {
             height: px.height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: if transparent {
+                [wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
+                    .into_iter()
+                    .find(|m| caps.alpha_modes.contains(m))
+                    .unwrap_or(caps.alpha_modes[0])
+            } else {
+                caps.alpha_modes[0]
+            },
             view_formats: vec![],
             color_space: Default::default(),
         };
@@ -607,6 +663,53 @@ impl App {
         macos::tag_layers_srgb(&window);
         window.request_redraw();
         Win { window, surface, config, egui, ctx, renderer, repaint_at: None, occluded: false }
+    }
+
+    /// Show the recording controls while recording (if wanted), and close
+    /// them otherwise.
+    fn sync_controls(&mut self, el: &ActiveEventLoop) {
+        if self.st.recording.is_some() && self.st.settings.recording_controls {
+            self.open_controls(el);
+        } else {
+            if let Some(w) = self.controls.take() {
+                self.controls_pos = w.window.outer_position().ok();
+            }
+            self.st.controls_confirm = None;
+        }
+    }
+
+    fn open_controls(&mut self, el: &ActiveEventLoop) {
+        if self.controls.is_some() {
+            return;
+        }
+        use winit::platform::macos::WindowAttributesExtMacOS;
+        let (w, h) = controls::SIZE;
+        let mut attrs = Window::default_attributes()
+            .with_title("Rec Controls")
+            .with_inner_size(winit::dpi::LogicalSize::new(w, h))
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_active(false)
+            .with_has_shadow(false)
+            .with_accepts_first_mouse(true);
+        // Where it was left, else centered near the bottom of the screen
+        // Rec's window is on (above the Dock).
+        let pos = self.controls_pos.or_else(|| {
+            let m = self.main.as_ref().and_then(|w| w.window.current_monitor()).or_else(|| el.primary_monitor())?;
+            let (mp, ms, k) = (m.position(), m.size(), m.scale_factor());
+            let (pw, ph) = ((w * k) as i32, (h * k) as i32);
+            Some(winit::dpi::PhysicalPosition::new(mp.x + (ms.width as i32 - pw) / 2, mp.y + ms.height as i32 - ph - (96.0 * k) as i32))
+        });
+        if let Some(p) = pos {
+            attrs = attrs.with_position(p);
+        }
+        let Ok(window) = el.create_window(attrs) else { return };
+        let window = Arc::new(window);
+        macos::make_floating_panel(&window);
+        let win = self.wrap_window(window, true);
+        self.controls = Some(win);
     }
 
     fn show_main(&mut self, el: &ActiveEventLoop) {
@@ -936,18 +1039,20 @@ impl App {
         }
     }
 
-    fn toggle_recording(&mut self) {
+    fn toggle_recording(&mut self, el: &ActiveEventLoop) {
         if self.st.finishing {
             return;
         }
         if self.st.recording.is_some() {
             self.stop_recording();
         } else {
-            self.start_recording();
+            self.start_recording(el);
         }
     }
 
-    fn start_recording(&mut self) {
+    fn start_recording(&mut self, el: &ActiveEventLoop) {
+        self.st.mic_muted = false;
+        self.st.controls_confirm = None;
         // One capture session at a time: the recording feeds the preview,
         // and takes over its camera (already exposed for the room).
         let mut cam = self.st.spare_cam.take();
@@ -958,6 +1063,11 @@ impl App {
         self.st.preview_settings = None;
         self.st.error = None;
         let file = self.st.settings.new_output_file();
+        // The controls open before the capture starts: it leaves out every
+        // window of Rec, found by the windows it has on screen.
+        if self.st.settings.recording_controls {
+            self.open_controls(el);
+        }
         let cb = preview::callback(Arc::new(wake));
         let r = std::fs::create_dir_all(&self.st.settings.output_dir)
             .map_err(anyhow::Error::from)
@@ -1033,7 +1143,12 @@ impl App {
 
     fn handle(&mut self, el: &ActiveEventLoop, c: Cmd) {
         match c {
-            Cmd::ToggleRecording => self.toggle_recording(),
+            Cmd::ToggleRecording => self.toggle_recording(el),
+            Cmd::RestartRecording | Cmd::DeleteRecording if self.st.recording.is_some() => {
+                self.after_finish = Some(if c == Cmd::RestartRecording { AfterFinish::Restart } else { AfterFinish::Delete });
+                self.stop_recording();
+            }
+            Cmd::RestartRecording | Cmd::DeleteRecording => {}
             Cmd::TogglePause => self.toggle_pause(),
             Cmd::ShowWindow => self.show_main(el),
             Cmd::ShowSettings => self.show_settings(el),
@@ -1111,14 +1226,35 @@ impl App {
         let done = self.finished.lock().unwrap().take();
         if let Some((file, r)) = done {
             self.st.finishing = false;
-            match r {
-                Ok(stats) => {
+            match (r, self.after_finish.take()) {
+                (r, Some(then)) => {
+                    // Thrown away from the controls: to the Trash (not
+                    // deleted, in case it was a slip), with its camera file.
+                    let camera = r.ok().and_then(|s| s.camera_file);
+                    let mut trashed = false;
+                    for f in std::iter::once(&file).chain(camera.as_ref()).filter(|f| f.exists()) {
+                        match macos::trash(f) {
+                            Ok(()) => {
+                                eprintln!("rec: moved to the Trash {}", f.display());
+                                trashed = true;
+                            }
+                            Err(e) => self.st.error = Some(format!("Could not move {} to the Trash: {e}", f.display())),
+                        }
+                    }
+                    if trashed {
+                        self.st.notice = Some(("Recording moved to the Trash".into(), Instant::now()));
+                    }
+                    if then == AfterFinish::Restart {
+                        self.start_recording(el);
+                    }
+                }
+                (Ok(stats), None) => {
                     if let Some(c) = &stats.camera_file {
                         eprintln!("rec: camera saved {}", c.display());
                     }
                     self.st.last_file = Some(file);
                 }
-                Err(e) => self.st.error = Some(format!("Recording failed: {e}")),
+                (Err(e), None) => self.st.error = Some(format!("Recording failed: {e}")),
             }
         }
         let failed = self.st.recording.as_ref().is_some_and(|s| s.failed());
@@ -1151,6 +1287,7 @@ impl App {
         }
         self.st.onboarding = onboarding::wanted(&mut self.st);
         self.sync_preview();
+        self.sync_controls(el);
         self.st.apply_pip();
         self.st.apply_scene();
         let clock = self.st.clock();
@@ -1168,8 +1305,22 @@ impl App {
         }
     }
 
+    fn kind(&self, id: WindowId) -> Option<Kind> {
+        let is = |w: &Option<Win>| w.as_ref().is_some_and(|w| w.window.id() == id);
+        if is(&self.main) {
+            Some(Kind::Main)
+        } else if is(&self.settings_win) {
+            Some(Kind::Settings)
+        } else if is(&self.controls) {
+            Some(Kind::Controls)
+        } else {
+            None
+        }
+    }
+
     fn redraw(&mut self, which: WindowId) {
-        let is_main = self.main.as_ref().is_some_and(|w| w.window.id() == which);
+        let Some(kind) = self.kind(which) else { return };
+        let is_main = kind == Kind::Main;
         let Some(gpu) = self.gpu.as_ref() else { return };
         preview::set_low_power(self.st.settings.preview_low_power);
         if is_main
@@ -1192,16 +1343,19 @@ impl App {
             }
             self.st.frames_shown += 1;
         }
-        let win = if is_main { self.main.as_mut() } else { self.settings_win.as_mut() };
+        let win = match kind {
+            Kind::Main => self.main.as_mut(),
+            Kind::Settings => self.settings_win.as_mut(),
+            Kind::Controls => self.controls.as_mut(),
+        };
         let Some(win) = win else { return };
         let input = win.egui.take_egui_input(&win.window);
         let st = &mut self.st;
-        let out = win.ctx.run_ui(input, |ui| {
-            if is_main {
-                ui::main_window(ui, st);
-            } else {
-                ui::settings_window(ui, st);
-            }
+        let mut drag_controls = false;
+        let out = win.ctx.run_ui(input, |ui| match kind {
+            Kind::Main => ui::main_window(ui, st),
+            Kind::Settings => ui::settings_window(ui, st),
+            Kind::Controls => drag_controls = controls::bar(ui, st),
         });
         win.egui.handle_platform_output(&win.window, out.platform_output);
         let delay = out.viewport_output.get(&egui::ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
@@ -1234,6 +1388,9 @@ impl App {
         {
             let bg = theme::palette(win.ctx.theme() == egui::Theme::Dark).window;
             let [r, g, b, _] = bg.to_normalized_gamma_f32();
+            // The controls are a floating bar: clear around it.
+            let a = if kind == Kind::Controls { 0.0 } else { 1.0 };
+            let (r, g, b) = (r * a, g * a, b * a);
             let mut pass = enc
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("egui"),
@@ -1242,7 +1399,7 @@ impl App {
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: r as f64, g: g as f64, b: b as f64, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: r as f64, g: g as f64, b: b as f64, a: a as f64 }),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -1260,8 +1417,9 @@ impl App {
         for id in &out.textures_delta.free {
             win.renderer.free_texture(id);
         }
-        // Drag the window by the toolbar (the titlebar is transparent).
-        if ui::take_drag_request() {
+        // Drag the window by the toolbar (the titlebar is transparent), or
+        // the controls by their grip.
+        if (kind != Kind::Controls && ui::take_drag_request()) || drag_controls {
             let _ = win.window.drag_window();
         }
     }
@@ -1299,24 +1457,28 @@ impl ApplicationHandler for App {
         {
             w.window.request_redraw();
         }
-        if let Some(w) = &self.settings_win {
+        for w in [&self.settings_win, &self.controls].into_iter().flatten() {
             w.window.request_redraw();
         }
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let is_main = self.main.as_ref().is_some_and(|w| w.window.id() == id);
-        let win = if is_main { self.main.as_mut() } else { self.settings_win.as_mut() };
+        let Some(kind) = self.kind(id) else { return };
+        let is_main = kind == Kind::Main;
+        let win = match kind {
+            Kind::Main => self.main.as_mut(),
+            Kind::Settings => self.settings_win.as_mut(),
+            Kind::Controls => self.controls.as_mut(),
+        };
         let Some(win) = win else { return };
         let resp = win.egui.on_window_event(&win.window, &event);
         match event {
-            WindowEvent::CloseRequested => {
-                if is_main {
-                    self.hide_main();
-                } else {
-                    self.settings_win = None;
-                }
-            }
+            WindowEvent::CloseRequested => match kind {
+                Kind::Main => self.hide_main(),
+                Kind::Settings => self.settings_win = None,
+                // Not closable (no title bar); Stop or Settings hide it.
+                Kind::Controls => {}
+            },
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 let s = win.window.inner_size();
                 win.config.width = s.width.max(1);
@@ -1366,7 +1528,7 @@ impl ApplicationHandler for App {
         let mut next = now + Duration::from_millis(if live { 100 } else { 250 });
         // The occlusion event only reports changes (not a window created
         // while the screen is locked): ask AppKit each pass.
-        for (w, main) in [(self.main.as_mut(), true), (self.settings_win.as_mut(), false)] {
+        for (w, main) in [(self.main.as_mut(), true), (self.settings_win.as_mut(), false), (self.controls.as_mut(), false)] {
             if let Some(w) = w {
                 let o = macos::is_occluded(&w.window);
                 if o != w.occluded {
@@ -1377,7 +1539,7 @@ impl ApplicationHandler for App {
                 }
             }
         }
-        for w in [self.main.as_mut(), self.settings_win.as_mut()].into_iter().flatten() {
+        for w in [self.main.as_mut(), self.settings_win.as_mut(), self.controls.as_mut()].into_iter().flatten() {
             let visible = w.window.is_visible().unwrap_or(true) && !w.occluded;
             if live && visible {
                 // Timer, meters: ~15 fps; preview frames wake us on arrival.
@@ -1484,7 +1646,7 @@ impl SelfTest {
                 self.step = 1;
             }
             1 if t > 4.0 => {
-                println!("selftest: recording={} error={:?}", app.st.recording.is_some(), app.st.error);
+                println!("selftest: recording={} controls={} error={:?}", app.st.recording.is_some(), app.controls.is_some(), app.st.error);
                 push(Cmd::TogglePause);
                 self.step = 2;
             }
@@ -1505,7 +1667,7 @@ impl SelfTest {
                 self.step = 4;
             }
             4 if !app.st.finishing && app.st.recording.is_none() => {
-                println!("selftest: saved={:?} error={:?}", app.st.last_file, app.st.error);
+                println!("selftest: saved={:?} controls={} error={:?}", app.st.last_file, app.controls.is_some(), app.st.error);
                 push(Cmd::ShowSettings);
                 self.step = 5;
             }
