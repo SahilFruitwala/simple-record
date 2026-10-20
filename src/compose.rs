@@ -467,10 +467,14 @@ impl Compositor {
             let params = dict(vec![(&*ns("inputScale"), num_f(k)), (&*ns("inputAspectRatio"), num_f(1.0))]);
             let scaled = src.imageByApplyingFilter_withInputParameters(&ns("CILanczosScaleTransform"), &params);
             let s = scaled.extent();
-            let mut img = translate(&scaled, (self.w - s.size.width) / 2.0 - s.origin.x, (self.h - s.size.height) / 2.0 - s.origin.y);
+            // Lanczos leaves the outermost pixels partly transparent: cut
+            // them off and repeat the next ones outwards, so neither the
+            // frame's edges nor a blur let the colours under it through.
+            let mut img = translate(&scaled, (self.w - s.size.width) / 2.0 - s.origin.x, (self.h - s.size.height) / 2.0 - s.origin.y)
+                .imageByCroppingToRect(rect(1.0, 1.0, self.w - 2.0, self.h - 2.0))
+                .imageByClampingToExtent();
             if blur >= 0.5 {
-                // Clamped first, so the edges don't fade to transparent.
-                img = img.imageByClampingToExtent().imageByApplyingGaussianBlurWithSigma(blur);
+                img = img.imageByApplyingGaussianBlurWithSigma(blur);
             }
             let img = img.imageByCroppingToRect(canvas).imageByCompositingOverImage(under);
             let cg = self.ctx.createCGImage_fromRect(&img, canvas)?;
@@ -800,16 +804,16 @@ mod tests {
         let is_red = |v: [u8; 3]| v[2] > 200 && v[0] < 50 && v[1] < 50;
         let is_blue = |v: [u8; 3]| v[0] > 200 && v[2] < 50 && v[1] < 50;
         // Scaled to cover 320x180 (360x180, 20 px cut each side).
-        for (x, y) in [(2, 2), (40, 90), (150, 177)] {
+        for (x, y) in [(0, 0), (2, 2), (40, 90), (150, 179)] {
             assert!(is_red(pixel(&out, x, y)), "red at {x},{y}: {:?}", pixel(&out, x, y));
         }
-        for (x, y) in [(317, 2), (280, 90), (170, 177)] {
+        for (x, y) in [(319, 0), (317, 2), (280, 90), (170, 179)] {
             assert!(is_blue(pixel(&out, x, y)), "blue at {x},{y}: {:?}", pixel(&out, x, y));
         }
         // Blurred: the edges stay opaque (no dark or green fringe).
         c.set_background(Background { blur: 0.05, ..bg.clone() });
         c.render(0.1, None, None, &[], &out);
-        assert!(is_red(pixel(&out, 1, 1)) && is_blue(pixel(&out, 318, 178)), "{:?} {:?}", pixel(&out, 1, 1), pixel(&out, 318, 178));
+        assert!(is_red(pixel(&out, 0, 0)) && is_blue(pixel(&out, 319, 179)), "{:?} {:?}", pixel(&out, 0, 0), pixel(&out, 319, 179));
         // A file that can't be read: the colours.
         c.set_background(Background { image: Some(dir.join("missing.png").to_string_lossy().into_owned()), ..bg });
         c.render(0.2, None, None, &[], &out);
