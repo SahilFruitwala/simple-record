@@ -117,6 +117,8 @@ pub struct Settings {
     pub clicks: bool,
     /// Preview at half resolution and 15 fps.
     pub preview_low_power: bool,
+    /// Show the floating recording controls while recording.
+    pub recording_controls: bool,
     /// Keep the last `replay_secs` of the live encode in memory.
     pub replay_enabled: bool,
     pub replay_secs: u32,
@@ -195,6 +197,7 @@ impl Default for Settings {
             cursor: true,
             clicks: false,
             preview_low_power: false,
+            recording_controls: true,
             replay_enabled: false,
             replay_secs: 60,
             stream_dest: "youtube".into(),
@@ -399,6 +402,7 @@ impl Settings {
             transition: d.transition,
             transition_ms: d.transition_ms,
             preview_low_power: d.preview_low_power,
+            recording_controls: d.recording_controls,
             replay_enabled: d.replay_enabled,
             replay_secs: d.replay_secs,
             stream_dest: d.stream_dest.clone(),
@@ -529,6 +533,12 @@ impl Settings {
         a.extend(["--canvas".into(), value(self.canvas)]);
         let hex = |c: [u8; 3]| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
         a.extend(["--background".into(), format!("{},{}", hex(self.background.top), hex(self.background.bottom))]);
+        // A missing image falls back to the colours, rather than refusing
+        // to record.
+        if let Some(img) = self.background.image.as_ref().filter(|p| std::path::Path::new(p).is_file()) {
+            a.extend(["--background-image".into(), img.clone()]);
+            a.extend(["--background-blur".into(), format!("{}", self.background.blur * 100.0)]);
+        }
         a.extend(["--transition".into(), value(self.transition)]);
         a.extend(["--transition-ms".into(), self.transition_ms.to_string()]);
         if spec.uses_cam() {

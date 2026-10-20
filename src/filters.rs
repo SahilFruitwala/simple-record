@@ -26,6 +26,9 @@ pub struct MicFilters {
     pub comp_ratio: f32,
     /// Gain after compression (dB).
     pub comp_makeup_db: f32,
+    /// Silence the mic (the recording controls' mute); never saved.
+    #[serde(skip)]
+    pub mute: bool,
 }
 
 impl Default for MicFilters {
@@ -39,13 +42,14 @@ impl Default for MicFilters {
             comp_threshold_db: -20.0,
             comp_ratio: 3.0,
             comp_makeup_db: 6.0,
+            mute: false,
         }
     }
 }
 
 impl MicFilters {
     pub fn any(&self) -> bool {
-        self.low_cut || self.denoise || self.gate || self.compressor
+        self.low_cut || self.denoise || self.gate || self.compressor || self.mute
     }
 }
 
@@ -271,6 +275,10 @@ impl FilterChain {
                 f[1] *= g;
             }
         }
+        // Muted after the filters, so they stay settled for unmuting.
+        if self.cfg.mute {
+            frames.fill([0.0; 2]);
+        }
     }
 }
 
@@ -346,6 +354,22 @@ mod tests {
         let x = sine(440.0, 0.3, 4800, 48000.0);
         assert_eq!(run(MicFilters::default(), &x, 1024), x);
         assert!(!MicFilters::default().any());
+    }
+
+    #[test]
+    fn mute_silences_and_unmutes() {
+        let x = sine(440.0, 0.3, 4800, 48000.0);
+        let muted = MicFilters { mute: true, ..Default::default() };
+        assert!(muted.any());
+        assert!(run(muted, &x, 1024).iter().all(|f| *f == [0.0; 2]));
+        let mut c = FilterChain::new(muted);
+        c.set(MicFilters::default());
+        let mut p = x.clone();
+        c.process(48000.0, &mut p);
+        assert_eq!(p, x);
+        // Not saved: a settings file never comes back muted.
+        let json = serde_json::to_string(&muted).unwrap();
+        assert!(!json.contains("mute"));
     }
 
     #[test]

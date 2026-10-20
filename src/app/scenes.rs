@@ -26,7 +26,7 @@ fn env(st: &State, s: &Settings) -> Env {
         screen_aspect: if s.canvas == Canvas::Source { aspect } else { st.screen_aspect },
         cam_aspect: st.cam_aspect,
         pip: s.pip_spec(),
-        background: s.background,
+        background: s.background.clone(),
     }
 }
 
@@ -43,7 +43,10 @@ pub fn screen_rect(st: &State, preview: Rect) -> Option<Rect> {
 }
 
 /// Fill `rect` with a vertical gradient.
-pub(super) fn gradient(ui: &Ui, rect: Rect, bg: Background) {
+/// Image files a layer or the background can show.
+pub(super) const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "heic", "tiff", "gif", "bmp", "webp"];
+
+pub(super) fn gradient(ui: &Ui, rect: Rect, bg: &Background) {
     let c = |v: [u8; 3]| Color32::from_rgb(v[0], v[1], v[2]);
     let mut mesh = egui::Mesh::default();
     for (pos, col) in [(rect.left_top(), bg.top), (rect.right_top(), bg.top), (rect.right_bottom(), bg.bottom), (rect.left_bottom(), bg.bottom)] {
@@ -52,13 +55,34 @@ pub(super) fn gradient(ui: &Ui, rect: Rect, bg: Background) {
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     ui.painter().add(egui::Shape::mesh(mesh));
+    // The image over it, cropped to the rect's shape (as in the video).
+    if let Some(t) = bg.image.as_deref().and_then(|p| image_thumb(ui.ctx(), p)) {
+        let [iw, ih] = t.size().map(|v| v as f32);
+        let (ra, ia) = (rect.width() / rect.height(), iw / ih.max(1.0));
+        let (u, v) = if ia > ra { ((1.0 - ra / ia) / 2.0, 0.0) } else { (0.0, (1.0 - ia / ra) / 2.0) };
+        let uv = Rect::from_min_max(egui::pos2(u, v), egui::pos2(1.0 - u, 1.0 - v));
+        ui.painter().image(t.id(), rect, uv, Color32::WHITE);
+    }
+}
+
+/// A small texture of an image file, made once (None: unreadable).
+pub(super) fn image_thumb(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(("image-thumb", path));
+    if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return t;
+    }
+    let t = crate::compose::thumbnail_rgba(path, 256.0).map(|(w, h, px)| {
+        ctx.load_texture(format!("thumb {path}"), egui::ColorImage::from_rgba_premultiplied([w, h], &px), egui::TextureOptions::LINEAR)
+    });
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
 }
 
 /// A miniature of a resolved frame `fw` pixels wide: the screen as a window,
 /// the camera as a person, images and text as placeholders.
 fn thumb(ui: &Ui, rect: Rect, f: &Frame, fw: f64, screen_aspect: f64) {
     let k = rect.width() as f64 / fw;
-    gradient(ui, rect, f.background);
+    gradient(ui, rect, &f.background);
     let painter = ui.painter_at(rect);
     for l in &f.layers {
         let src = match l.content {
@@ -398,7 +422,7 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
             add = Some(Content::Camera);
         }
         if ui.small_button("Image…").clicked()
-            && let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "heic", "tiff", "gif", "bmp", "webp"]).pick_file()
+            && let Some(f) = rfd::FileDialog::new().add_filter("Images", &IMAGE_EXTENSIONS).pick_file()
         {
             add = Some(Content::Image(f.to_string_lossy().into_owned()));
         }
@@ -545,7 +569,7 @@ fn layer_settings(ui: &mut Ui, l: &mut Layer) {
             w::field(ui, "File", LABEL_W, |ui| {
                 let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 if ui.small_button("Choose…").clicked()
-                    && let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "heic", "tiff", "gif", "bmp", "webp"]).pick_file()
+                    && let Some(f) = rfd::FileDialog::new().add_filter("Images", &IMAGE_EXTENSIONS).pick_file()
                 {
                     *path = f.to_string_lossy().into_owned();
                 }

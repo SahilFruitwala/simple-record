@@ -168,7 +168,7 @@ fn background_picker(ui: &mut Ui, bg: &mut Background, labels: bool) {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         for (name, preset) in Background::PRESETS {
             let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-            super::scenes::gradient(ui, rect.shrink(3.0), preset);
+            super::scenes::gradient(ui, rect.shrink(3.0), &preset);
             let sel = bg.same_colors(&preset);
             let ring = if sel { Stroke::new(2.0, theme::accent()) } else if resp.hovered() { Stroke::new(1.0, p.secondary) } else { Stroke::new(1.0, p.control_border) };
             ui.painter().rect_stroke(rect, CornerRadius::same(4), ring, egui::StrokeKind::Inside);
@@ -177,7 +177,15 @@ fn background_picker(ui: &mut Ui, bg: &mut Background, labels: bool) {
             }
             if resp.on_hover_text(name).clicked() {
                 (bg.top, bg.bottom) = (preset.top, preset.bottom);
+                bg.image = None;
             }
+        }
+        // The image in use, as a swatch like the presets.
+        if bg.image.is_some() {
+            let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+            super::scenes::gradient(ui, rect.shrink(3.0), bg);
+            ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(2.0, theme::accent()), egui::StrokeKind::Inside);
+            resp.on_hover_text(bg.image.as_deref().unwrap_or_default());
         }
     });
     ui.horizontal(|ui| {
@@ -190,6 +198,36 @@ fn background_picker(ui: &mut Ui, bg: &mut Background, labels: bool) {
             ui.label(RichText::new("top, bottom").size(SECONDARY).color(p.secondary));
         }
     });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Image:").size(SECONDARY).color(p.secondary));
+        if ui.button("Choose…").on_hover_text("A picture (a wallpaper, a branded backdrop) filling the frame, cropped to its shape").clicked()
+            && let Some(f) = rfd::FileDialog::new().add_filter("Images", &super::scenes::IMAGE_EXTENSIONS).pick_file()
+        {
+            bg.image = Some(f.to_string_lossy().into_owned());
+        }
+        if ui.button("Desktop Picture").on_hover_text("This Mac's wallpaper").clicked()
+            && let Some(f) = super::macos::desktop_picture()
+        {
+            bg.image = Some(f.to_string_lossy().into_owned());
+        }
+        if bg.image.is_some() && ui.button("Remove").clicked() {
+            bg.image = None;
+        }
+    });
+    if let Some(path) = bg.image.clone() {
+        if super::scenes::image_thumb(ui.ctx(), &path).is_none() {
+            w::hint(ui, "Can't read this image: the colours show instead.");
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Blur").size(SECONDARY).color(p.secondary));
+            // Whole percent steps: each change renders the image again.
+            let max = (Background::MAX_BLUR * 100.0).round() as u32;
+            let mut pct = (bg.blur * 100.0).round().clamp(0.0, max as f64) as u32;
+            if ui.add(egui::Slider::new(&mut pct, 0..=max).suffix("%")).on_hover_text("Soften the image so the screen stands out").changed() {
+                bg.blur = pct as f64 / 100.0;
+            }
+        });
+    }
 }
 
 /// Drag the sidebar's left edge to resize it (double-click: default width).
@@ -663,7 +701,73 @@ fn controls(ui: &mut Ui, st: &mut State) {
             if st.last_file.is_some() && ui.button("Reveal Last").clicked() {
                 st.cmds.push(Cmd::RevealLast);
             }
+            if st.last_file.is_some() && !recording {
+                gif_button(ui, st);
+            }
         });
+    });
+}
+
+/// "Export GIF…": the last recording, or part of it, to a looping GIF next
+/// to it. The choices are in a popover; the export runs in the background.
+fn gif_button(ui: &mut Ui, st: &mut State) {
+    if let Some(p) = &st.gif_progress {
+        let done = p.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
+        ui.add(egui::ProgressBar::new(done).desired_width(120.0).text(format!("GIF {:.0}%", done * 100.0)));
+        return;
+    }
+    let resp = ui.button("Export GIF…").on_hover_text("Turn the last recording, or part of it, into a looping GIF");
+    if resp.clicked() {
+        st.gif_prepare();
+    }
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let Some((file, len)) = st.gif_source.clone() else { return };
+        let p = theme::pal(ui);
+        ui.set_min_width(300.0);
+        ui.label(RichText::new(file.file_name().unwrap_or_default().to_string_lossy()).strong());
+        if len <= 0.0 {
+            w::hint(ui, "This recording can't be read.");
+            return;
+        }
+        let o = &mut st.gif_opts;
+        let mut end = (o.start + o.duration.unwrap_or(len)).min(len);
+        egui::Grid::new("gif").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+            ui.label("From");
+            ui.add(egui::Slider::new(&mut o.start, 0.0..=len).step_by(0.1).suffix(" s"));
+            ui.end_row();
+            ui.label("To");
+            ui.add(egui::Slider::new(&mut end, 0.0..=len).step_by(0.1).suffix(" s"));
+            ui.end_row();
+            ui.label("Width");
+            ui.horizontal(|ui| {
+                for wd in [480, 720, 1080] {
+                    ui.selectable_value(&mut o.width, wd, format!("{wd} px"));
+                }
+            });
+            ui.end_row();
+            ui.label("Frame rate");
+            ui.horizontal(|ui| {
+                for f in [10, 15, 20, 25] {
+                    ui.selectable_value(&mut o.fps, f, format!("{f} fps"));
+                }
+            });
+            ui.end_row();
+        });
+        // Dragging From past To moves To along.
+        end = end.max(o.start + 0.1).min(len);
+        o.start = o.start.min(end - 0.1).max(0.0);
+        o.duration = Some(end - o.start);
+        let secs = end - o.start;
+        let frames = (secs * o.fps as f64).ceil();
+        ui.label(RichText::new(format!("{secs:.1} s, {frames:.0} frames, no sound")).size(SECONDARY).color(p.secondary));
+        if secs > 30.0 {
+            w::hint(ui, "Long GIFs get very large: a few seconds is usual.");
+        }
+        ui.add_space(4.0);
+        if w::primary_button(ui, "Export GIF").clicked() {
+            st.cmds.push(Cmd::ExportGif);
+            egui::Popup::close_all(ui.ctx());
+        }
     });
 }
 
@@ -1447,6 +1551,9 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 ui.end_row();
                 ui.label("Preview");
                 ui.add(w::Check::new(&mut s.preview_low_power, "Low power (half resolution, 15 fps)"));
+                ui.end_row();
+                ui.label("Controls").on_hover_text("A small floating bar with stop, mute, pause, restart and delete. It is never in the recording or a stream.");
+                ui.add(w::Check::new(&mut s.recording_controls, "Show floating controls while recording"));
                 ui.end_row();
             });
         }

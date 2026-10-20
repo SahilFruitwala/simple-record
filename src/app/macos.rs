@@ -93,6 +93,35 @@ pub fn inset_traffic_lights(window: &Window, x: f64, bar_h: f64) {
 }
 
 
+/// Make a borderless window a floating panel: on every Space and over
+/// full-screen apps, out of ⌘` and the Window menu, and kept out of screen
+/// sharing. (ScreenCaptureKit on macOS 15 ignores the sharing type; Rec's
+/// own captures leave it out because they exclude the whole app.)
+pub fn make_floating_panel(window: &Window) {
+    use objc2_app_kit::{NSWindowCollectionBehavior as B, NSWindowSharingType};
+    let Some(w) = ns_window(window) else { return };
+    w.setCollectionBehavior(B::CanJoinAllSpaces | B::FullScreenAuxiliary | B::Stationary | B::IgnoresCycle);
+    w.setSharingType(NSWindowSharingType::None);
+    w.setHidesOnDeactivate(false);
+    w.setExcludedFromWindowsMenu(true);
+}
+
+/// The main screen's desktop picture.
+pub fn desktop_picture() -> Option<std::path::PathBuf> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let screen = objc2_app_kit::NSScreen::mainScreen(mtm)?;
+    let url = objc2_app_kit::NSWorkspace::sharedWorkspace().desktopImageURLForScreen(&screen)?;
+    url.path().map(|p| std::path::PathBuf::from(p.to_string()))
+}
+
+/// Move a file to the Trash (it can be put back from there).
+pub fn trash(path: &std::path::Path) -> Result<(), String> {
+    let url = objc2_foundation::NSURL::fileURLWithPath(&crate::util::ns(&path.to_string_lossy()));
+    objc2_foundation::NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|e| e.localizedDescription().to_string())
+}
+
 /// Bring the app (an accessory app without a Dock icon) to the front.
 pub fn activate() {
     if let Some(mtm) = objc2::MainThreadMarker::new() {

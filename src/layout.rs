@@ -327,8 +327,9 @@ pub struct Placed {
     pub effects: Effects,
 }
 
-/// Vertical gradient (a solid color when both ends are equal).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// Vertical gradient (a solid color when both ends are equal), or an
+/// image over it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Background {
     pub top: [u8; 3],
@@ -337,6 +338,12 @@ pub struct Background {
     /// Screen + Camera scenes, as a fraction of the frame's shorter side,
     /// so the background shows around it. 0: edge to edge (full frame).
     pub inset: f64,
+    /// An image file (a wallpaper) filling the frame, cropped to its shape;
+    /// the gradient shows if it can't be read. None: the gradient.
+    pub image: Option<String>,
+    /// How much the image is blurred, as a fraction of the frame's shorter
+    /// side (0: sharp; 0.05 is soft).
+    pub blur: f64,
 }
 
 impl Default for Background {
@@ -351,12 +358,20 @@ impl Background {
 
     /// A gradient with the screen edge to edge.
     pub const fn gradient(top: [u8; 3], bottom: [u8; 3]) -> Background {
-        Background { top, bottom, inset: 0.0 }
+        Background { top, bottom, inset: 0.0, image: None, blur: 0.0 }
     }
 
-    /// Same colours (the inset aside).
+    /// The most the image can be blurred.
+    pub const MAX_BLUR: f64 = 0.1;
+
+    /// Same colours and image (the inset aside).
     pub fn same_colors(&self, other: &Background) -> bool {
-        self.top == other.top && self.bottom == other.bottom
+        self.top == other.top && self.bottom == other.bottom && self.image == other.image
+    }
+
+    /// The image's blur radius in pixels for a `w`×`h` frame.
+    pub fn blur_px(&self, w: f64, h: f64) -> f64 {
+        self.blur.clamp(0.0, Self::MAX_BLUR) * w.min(h)
     }
 
     /// Ready-made backgrounds, the default first.
@@ -529,7 +544,7 @@ impl Layout {
             let effects = if l.content == Content::Camera && l.effects.is_none() { env.pip.effects } else { l.effects };
             layers.push(Placed { content: l.content.clone(), rect, fit: l.fit, style: l.style, mirror, opacity: 1.0, effects });
         }
-        Frame { background: self.background.unwrap_or(env.background), layers }
+        Frame { background: self.background.clone().unwrap_or_else(|| env.background.clone()), layers }
     }
 
     /// This template as an editable custom scene.
@@ -619,7 +634,7 @@ impl Scene {
                 vec![cam(full, Fit::Cover, Style::default()), screen(r, style)]
             }
         };
-        Frame { background: env.background, layers }
+        Frame { background: env.background.clone(), layers }
     }
 }
 
@@ -740,6 +755,15 @@ pub fn blend(a: &Frame, b: &Frame, t: f64) -> Frame {
         top: lerp_color(a.background.top, b.background.top, t),
         bottom: lerp_color(a.background.bottom, b.background.bottom, t),
         inset: lerp(a.background.inset, b.background.inset, t),
+        // An image can't be mixed: it changes halfway.
+        image: if t < 0.5 { a.background.image.clone() } else { b.background.image.clone() },
+        blur: if a.background.image == b.background.image {
+            lerp(a.background.blur, b.background.blur, t)
+        } else if t < 0.5 {
+            a.background.blur
+        } else {
+            b.background.blur
+        },
     };
     Frame { background, layers }
 }
@@ -821,6 +845,25 @@ mod tests {
 
     fn overlap(a: [f64; 4], b: [f64; 4]) -> bool {
         a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+    }
+
+    #[test]
+    fn background_image_blends_at_half() {
+        let img = |p: &str, blur: f64| Background { image: Some(p.into()), blur, ..Background::default() };
+        let f = |bg: Background| Frame { background: bg, layers: vec![] };
+        let (a, b) = (f(img("a.png", 0.0)), f(img("b.png", 0.08)));
+        assert_eq!(blend(&a, &b, 0.4).background.image.as_deref(), Some("a.png"));
+        assert_eq!(blend(&a, &b, 0.4).background.blur, 0.0);
+        assert_eq!(blend(&a, &b, 0.6).background.image.as_deref(), Some("b.png"));
+        assert_eq!(blend(&a, &b, 0.6).background.blur, 0.08);
+        // The same image: the blur eases.
+        let c = f(img("a.png", 0.08));
+        assert!((blend(&a, &c, 0.5).background.blur - 0.04).abs() < 1e-9);
+        assert_eq!(Background::default().blur_px(1920.0, 1080.0), 0.0);
+        assert_eq!(img("a.png", 1.0).blur_px(1920.0, 1080.0), 108.0);
+        // Saved settings from before images still load.
+        let old: Background = serde_json::from_str(r#"{"top":[1,2,3],"bottom":[4,5,6],"inset":0.05}"#).unwrap();
+        assert_eq!((old.image, old.blur), (None, 0.0));
     }
 
     #[test]

@@ -653,7 +653,7 @@ impl Sink {
     /// composing).
     pub fn set_look(&mut self, background: crate::layout::Background, transition: crate::layout::Transition, secs: f64) {
         for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
-            c.set_background(background);
+            c.set_background(background.clone());
             c.set_transition(transition, secs);
         }
     }

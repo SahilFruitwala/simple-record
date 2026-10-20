@@ -181,8 +181,12 @@ The **main window** contains:
     shows around it.
   - **Background**: a gradient behind whatever doesn't cover the frame. Pick one of eight
     presets (Midnight, Graphite, Ocean, Forest, Sunset, Peach, Paper, Black) or your own top
-    and bottom colours, live, also while recording. The card says when the background is
-    hidden because the screen or camera fills the frame.
+    and bottom colours, live, also while recording. Or an **image** (Choose…, or **Desktop
+    Picture** for this Mac's wallpaper): it fills the frame, cropped to its shape, with an
+    optional **Blur** (0–10%) so the screen stands out. It is scaled with Lanczos and rendered
+    once per size, so it costs nothing per frame; an image that can't be read shows the colours
+    instead. The card says when the background is hidden because the screen or camera fills
+    the frame.
   - Scene switches are live, also while recording (provided the recording started with the
     sources the scene needs), with a **Move** (layers glide to their new places), **Fade** or
     **Cut** transition. Everything is baked into the recording by the CoreImage compositor, so
@@ -200,6 +204,17 @@ The **main window** contains:
 - **Record / Stop** (⇧⌘R from anywhere by default), **Pause / Resume**, the recording timer,
   and **level meters** for system audio and mic with peak hold.
 - **Reveal Last** and **Open Folder**.
+- **Export GIF…**: the last recording, or part of it (From/To), as a looping GIF next to it,
+  480, 720 or 1080 px wide at 10–25 fps. It runs in the background with a progress bar and
+  shows the GIF in Finder when done. GIFs have no sound.
+- **Recording controls**: while recording, a small floating bar shows the stop button and the
+  recorded time, mic mute (with the mic's level), pause/resume, restart, delete and a button
+  that opens the Rec window. Drag it by its grip (⋮); it stays where you leave it until Rec
+  quits, on every Space and over full-screen apps. Restart and Delete ask first, then move the
+  take (and its camera file) to the Trash, so it can be put back. The bar is a Rec window, and
+  Rec leaves all of its own windows out of the capture, so it is never in the recording, the
+  preview or a stream. Mute applies to the file and the streams and isn't saved. Turn the bar
+  off in Settings > Video.
 - **Output**: the format, codec and folder at a glance. Click one to change it in Settings.
 - **Replay buffer**: keep the last 15–300 s (default 60) in memory, shown with its memory use.
   **Save Replay** or **⇧⌘S** from anywhere writes it to an MP4 in the output folder without
@@ -227,8 +242,8 @@ recording, except the camera overlay:
   background and transition with its length; Report a Problem… and Open Log; and **Restore
   Defaults…**, which asks first and keeps the output folder.
 - **Video**: resolution (720p, 1080p, 1440p, 4K or native), frame rate, codec (auto, H.264,
-  HEVC, ProRes), bitrate, HDR (experimental), cursor and click highlighting, and the low-power
-  preview. The frame always has the shape of the display or window (4K of a 16:10 display is
+  HEVC, ProRes), bitrate, HDR (experimental), cursor and click highlighting, the low-power
+  preview and the floating recording controls. The frame always has the shape of the display or window (4K of a 16:10 display is
   3456x2160): no black bars, nothing cropped.
 - **Audio**: system audio and microphone, track layout, gains, and the mic filters (low cut,
   noise suppression, a noise gate with its level, a compressor with its threshold, ratio and
@@ -307,6 +322,7 @@ frames, and pauses don't count.
 | `--scene-file FILE` | | A custom scene (JSON, as the app exports it). |
 | `--canvas` | `source` | Frame shape: `source`, `16:9`, `9:16`, `1:1`, `4:5`. A preset resolution names the short side (1080p of 9:16 is 1080x1920). |
 | `--background` | dark gradient | Behind layers: `RRGGBB` or `RRGGBB,RRGGBB` (top, bottom). |
+| `--background-image FILE`, `--background-blur PCT` | | An image filling the background (cropped to the frame's shape), blurred by 0–10% of the frame's shorter side. |
 | `--transition`, `--transition-ms` | `move`, `400` | Scene switch animation: `cut`, `fade`, `move`. |
 | `--app APP` | | Every window of an app (bundle ID or name) on the display. |
 | `--camera-resolution` | `720p` | `720p`, `1080p`, `4k` (the largest the camera supports up to it). |
@@ -335,6 +351,10 @@ frames, and pauses don't count.
 | `--audio-bitrate` | `192` | Live AAC/Opus kb/s. |
 
 Other commands:
+
+- `rec-rs gif FILE [-o OUT] [--fps 15] [--width 720] [--start S] [-t SECS]` turns a recording
+  (or part of it) into a looping GIF: AVAssetReader decodes it, CoreImage's Lanczos filter
+  scales it, ImageIO writes it, with frame delays that keep the frame rate exact on average.
 
 - `rec-rs devices` lists displays, windows, cameras and mics.
 - `rec-rs probe FILE` checks a file with AVFoundation, QuickTime's engine, and decodes every
