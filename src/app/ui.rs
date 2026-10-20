@@ -152,6 +152,11 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::same(16)))
         .show(ui, |ui| if st.onboarding { super::onboarding::show(ui, st) } else { preview(ui, st) });
+    // A permission answered elsewhere (the macOS prompt, System Settings)
+    // shows up without waiting for the pointer to move.
+    if !st.perms().all_granted() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+    }
     sidebar_resize(ui, st, panel.response.rect, max_w);
     // Keyboard: ⌘, settings, ⌘W close (handled as hide by the app), space
     // does nothing (avoid accidental recordings).
