@@ -12,10 +12,10 @@ missing ones. Nothing here is implemented.
 | Local recording and processing | Yes: everything runs on the Mac; nothing is uploaded unless you stream | None | — |
 | Precision timeline editor | No: there is no editor | Trim, cut and export of a take | Medium (trim/cut), large (full editor) |
 | Multiple camera angles, layout changed after recording | Partly: scenes and layouts switch live, and `--camera-file` saves the camera alone on the same timeline | The screen is saved already composited, so the layout can't be changed after recording | Large |
-| Custom backgrounds and branding | Mostly: gradient backgrounds (8 presets plus custom colors), screen inset with rounded corners and shadow, image, text and color layers, 5 frame shapes | Wallpaper or image as the background, and saved brand presets (logo, colors, name tag) | Small |
+| Custom backgrounds and branding | Mostly: gradient backgrounds (8 presets plus custom colors), **image or wallpaper backgrounds with blur (done)**, screen inset with rounded corners and shadow, image, text and color layers, 5 frame shapes | Saved brand presets (logo, colors, name tag) | Small |
 | Separate audio levels, noise reduction | Yes, and more: per-source gain, RNNoise, gate, compressor, low cut, stems on separate tracks, per-app audio | None | — |
 | Smart auto-zoom | No | Zoom in on the cursor or clicks, live or afterwards | Medium (live), large (in an editor) |
-| Export to MP4, GIF, shareable link | MP4 and MOV only | GIF export; shareable links | Small (GIF); links need a hosting service |
+| Export to MP4, GIF, shareable link | MP4, MOV and **GIF (done)** | Shareable links | Links need a hosting service |
 
 ## Feature by feature
 
@@ -81,7 +81,8 @@ layers, and global shortcuts.
 
 ## Suggested order
 
-1. GIF export and image backgrounds (small, visible wins).
+1. ~~GIF export and image backgrounds~~ (done: Export GIF…, `rec-rs gif`, image and
+   desktop-picture backgrounds with blur).
 2. Live auto-zoom on clicks (the most "Cap-like" feature, and it also helps streams).
 3. Trim and cut editor with passthrough export.
 4. Raw source recording, then the full editor with layout changes and zoom afterwards.

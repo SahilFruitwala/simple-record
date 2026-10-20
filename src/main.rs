@@ -5,6 +5,7 @@ mod camera;
 mod compose;
 mod effects;
 mod filters;
+mod gif;
 mod hotkey;
 mod layout;
 mod live;
@@ -91,6 +92,25 @@ enum Cmd {
     },
     /// Check a recording with AVFoundation (the engine QuickTime uses).
     Probe { file: PathBuf },
+    /// Turn a recording (or part of it) into a looping GIF.
+    Gif {
+        file: PathBuf,
+        /// Output file. Default: the recording's name with .gif.
+        #[arg(short, long, visible_alias = "out")]
+        output: Option<PathBuf>,
+        /// Frames per second (1-50).
+        #[arg(short, long, default_value_t = 15)]
+        fps: u32,
+        /// Largest width in pixels (never upscaled).
+        #[arg(short, long, default_value_t = 720)]
+        width: u32,
+        /// Start, in seconds into the recording.
+        #[arg(long, default_value_t = 0.0)]
+        start: f64,
+        /// Seconds to export (default: to the end).
+        #[arg(short = 't', long)]
+        duration: Option<f64>,
+    },
     /// Play a file in an AVPlayer window (reference player for sync tests).
     #[command(hide = true)]
     Play {
@@ -184,6 +204,14 @@ pub struct RecordArgs {
     /// for a gradient.
     #[arg(long, value_name = "RRGGBB[,RRGGBB]")]
     background: Option<String>,
+    /// An image filling the background (cropped to the frame's shape),
+    /// over the colors.
+    #[arg(long, value_name = "FILE")]
+    background_image: Option<PathBuf>,
+    /// Blur the background image, in percent of the frame's shorter side
+    /// (0-10).
+    #[arg(long, value_name = "PCT", default_value_t = 0.0)]
+    background_blur: f64,
     /// How live scene switches animate.
     #[arg(long, value_enum, default_value_t = layout::Transition::Move)]
     transition: layout::Transition,
@@ -569,9 +597,19 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         gains_db: [a.system_gain, a.mic_gain],
         mic_backend: if a.test_pattern { record::MicBackend::Avcapture } else { a.mic_backend },
         scene,
-        background: match &a.background {
-            Some(b) => parse_background(b)?,
-            None => layout::Background::default(),
+        background: {
+            let mut bg = match &a.background {
+                Some(b) => parse_background(b)?,
+                None => layout::Background::default(),
+            };
+            if let Some(f) = &a.background_image {
+                if !f.is_file() {
+                    bail!("--background-image: {} not found", f.display());
+                }
+                bg.image = Some(f.to_string_lossy().into_owned());
+            }
+            bg.blur = (a.background_blur / 100.0).clamp(0.0, layout::Background::MAX_BLUR);
+            bg
         },
         transition: a.transition,
         transition_secs: a.transition_ms.min(3000) as f64 / 1000.0,
@@ -861,6 +899,14 @@ fn main() {
             Ok(())
         }
         Cmd::Probe { file } => probe::probe(&file),
+        Cmd::Gif { file, output, fps, width, start, duration } => {
+            let out = output.unwrap_or_else(|| gif::gif_path(&file));
+            let o = gif::GifOptions { fps, width, start, duration };
+            gif::export(&file, &out, &o, &|p| eprint!("\rrec: GIF {:>3.0}%", p * 100.0)).map(|s| {
+                eprintln!();
+                println!("{} ({}x{}, {} frames, {:.1} MB)", out.display(), s.size.0, s.size.1, s.frames, s.bytes as f64 / 1e6);
+            })
+        }
         Cmd::Play { file, secs, size } => play::play(&file, secs, &size),
     };
     if let Err(e) = r {
@@ -955,6 +1001,8 @@ mod tests {
 
     #[test]
     fn mic_filter_options() {
+        let a = parse_record_args(&["--background-image", "/tmp/w.png", "--background-blur", "4"]).unwrap();
+        assert_eq!((a.background_image.as_deref(), a.background_blur), (Some(std::path::Path::new("/tmp/w.png")), 4.0));
         let a = parse_record_args(&["--denoise", "--gate", "--compressor", "-24", "--low-cut"]).unwrap();
         assert!(a.denoise && a.low_cut);
         assert_eq!(a.gate, Some(-45.0));

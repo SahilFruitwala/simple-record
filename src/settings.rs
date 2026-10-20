@@ -533,6 +533,12 @@ impl Settings {
         a.extend(["--canvas".into(), value(self.canvas)]);
         let hex = |c: [u8; 3]| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
         a.extend(["--background".into(), format!("{},{}", hex(self.background.top), hex(self.background.bottom))]);
+        // A missing image falls back to the colours, rather than refusing
+        // to record.
+        if let Some(img) = self.background.image.as_ref().filter(|p| std::path::Path::new(p).is_file()) {
+            a.extend(["--background-image".into(), img.clone()]);
+            a.extend(["--background-blur".into(), format!("{}", self.background.blur * 100.0)]);
+        }
         a.extend(["--transition".into(), value(self.transition)]);
         a.extend(["--transition-ms".into(), self.transition_ms.to_string()]);
         if spec.uses_cam() {

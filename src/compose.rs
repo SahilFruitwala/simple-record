@@ -151,6 +151,10 @@ impl Default for CornerFill {
     }
 }
 
+/// What a rendered background image was made from: path, blur, width and
+/// height (as bits).
+type WallpaperKey = (String, u64, u64, u64);
+
 pub struct Compositor {
     ctx: Retained<CIContext>,
     cs: CFRetained<CGColorSpace>,
@@ -170,6 +174,9 @@ pub struct Compositor {
     decor: Vec<Decor>,
     /// Image files (None: could not be read).
     images: HashMap<String, Option<Retained<CIImage>>>,
+    /// The background image, scaled and blurred for this frame size, and
+    /// what it was made from (path, blur, width, height).
+    wallpaper: Option<(WallpaperKey, Retained<CIImage>)>,
     texts: Vec<((TextSpec, u64), Retained<CIImage>)>,
     /// Aspect ratio of the last camera frame (16:9 until one arrives).
     cam_aspect: f64,
@@ -191,6 +198,38 @@ const CUBE_CACHE: usize = 4;
 
 /// Decorations kept for reuse (a few layers, plus a transition's sizes).
 const DECOR_CACHE: usize = 12;
+
+/// An image file scaled to fit `max` pixels, as premultiplied RGBA rows
+/// from the top: (width, height, pixels). For thumbnails in the UI.
+pub fn thumbnail_rgba(path: &str, max: f64) -> Option<(usize, usize, Vec<u8>)> {
+    unsafe {
+        let url = objc2_foundation::NSURL::fileURLWithPath(&ns(path));
+        let img = CIImage::imageWithContentsOfURL(&url)?;
+        let e = img.extent();
+        if e.size.width < 1.0 || e.size.height < 1.0 {
+            return None;
+        }
+        let k = (max / e.size.width.max(e.size.height)).min(1.0);
+        let (w, h) = ((e.size.width * k).round().max(1.0), (e.size.height * k).round().max(1.0));
+        let img = translate(&img, -e.origin.x, -e.origin.y)
+            .imageByApplyingTransform(CGAffineTransform { a: w / e.size.width, b: 0.0, c: 0.0, d: h / e.size.height, tx: 0.0, ty: 0.0 });
+        let (wu, hu) = (w as usize, h as usize);
+        let mut px = vec![0u8; wu * hu * 4];
+        let cs = CGColorSpace::with_name(Some(kCGColorSpaceSRGB))?;
+        let ctx = CIContext::contextWithOptions(None);
+        // CoreImage's origin is the bottom left; the bitmap's first row is
+        // the top.
+        ctx.render_toBitmap_rowBytes_bounds_format_colorSpace(
+            &img,
+            std::ptr::NonNull::new(px.as_mut_ptr().cast()).unwrap(),
+            (wu * 4) as isize,
+            rect(0.0, 0.0, w, h),
+            objc2_core_image::kCIFormatRGBA8,
+            Some(&cs),
+        );
+        Some((wu, hu, px))
+    }
+}
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> CGRect {
     CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
@@ -238,6 +277,7 @@ impl Compositor {
                 now: 0.0,
                 decor: vec![],
                 images: HashMap::new(),
+                wallpaper: None,
                 texts: vec![],
                 cam_aspect: 16.0 / 9.0,
                 screen_aspect: width as f64 / height.max(1) as f64,
@@ -296,7 +336,7 @@ impl Compositor {
     }
 
     fn env(&self) -> Env {
-        Env { w: self.w, h: self.h, screen_aspect: self.screen_aspect, cam_aspect: self.cam_aspect, pip: self.pip.clone(), background: self.background }
+        Env { w: self.w, h: self.h, screen_aspect: self.screen_aspect, cam_aspect: self.cam_aspect, pip: self.pip.clone(), background: self.background.clone() }
     }
 
     /// Whether the scene (or the one being left) shows the screen: without
@@ -394,7 +434,51 @@ impl Compositor {
         Some(img)
     }
 
-    fn background_image(&self, bg: Background) -> Retained<CIImage> {
+    fn background_image(&mut self, bg: &Background) -> Retained<CIImage> {
+        let gradient = self.gradient_image(bg);
+        let Some(path) = &bg.image else { return gradient };
+        let blur = bg.blur_px(self.w, self.h);
+        let key = (path.clone(), blur.to_bits(), self.w.to_bits(), self.h.to_bits());
+        if let Some((k, img)) = &self.wallpaper
+            && *k == key
+        {
+            return img.clone();
+        }
+        // Unreadable: the gradient (the image cache warns once).
+        let Some(img) = self.wallpaper_image(path, blur, &gradient) else { return gradient };
+        self.wallpaper = Some((key, img.clone()));
+        img
+    }
+
+    /// `path` filling the frame (cropped to its shape, centered), blurred
+    /// by `blur` pixels, over `under` (for transparent images). Rendered
+    /// once into a bitmap: it's a still, and scaling a 6K wallpaper every
+    /// frame would cost as much as the screen.
+    fn wallpaper_image(&mut self, path: &str, blur: f64, under: &CIImage) -> Option<Retained<CIImage>> {
+        let src = self.image(path)?;
+        let canvas = rect(0.0, 0.0, self.w, self.h);
+        unsafe {
+            let e = src.extent();
+            if e.size.width < 1.0 || e.size.height < 1.0 {
+                return None;
+            }
+            let k = (self.w / e.size.width).max(self.h / e.size.height);
+            let src = translate(&src, -e.origin.x, -e.origin.y);
+            let params = dict(vec![(&*ns("inputScale"), num_f(k)), (&*ns("inputAspectRatio"), num_f(1.0))]);
+            let scaled = src.imageByApplyingFilter_withInputParameters(&ns("CILanczosScaleTransform"), &params);
+            let s = scaled.extent();
+            let mut img = translate(&scaled, (self.w - s.size.width) / 2.0 - s.origin.x, (self.h - s.size.height) / 2.0 - s.origin.y);
+            if blur >= 0.5 {
+                // Clamped first, so the edges don't fade to transparent.
+                img = img.imageByClampingToExtent().imageByApplyingGaussianBlurWithSigma(blur);
+            }
+            let img = img.imageByCroppingToRect(canvas).imageByCompositingOverImage(under);
+            let cg = self.ctx.createCGImage_fromRect(&img, canvas)?;
+            Some(CIImage::imageWithCGImage(&cg))
+        }
+    }
+
+    fn gradient_image(&self, bg: &Background) -> Retained<CIImage> {
         let canvas = rect(0.0, 0.0, self.w, self.h);
         unsafe {
             let img = if bg.top == bg.bottom {
@@ -534,7 +618,7 @@ impl Compositor {
 
     /// Draw a resolved frame.
     fn draw(&mut self, f: &Frame, screen: Option<&Retained<CIImage>>, cam: Option<&Retained<CIImage>>, extras: &[(&Source, Retained<CIImage>)], k: f64) -> Retained<CIImage> {
-        let mut img = self.background_image(f.background);
+        let mut img = self.background_image(&f.background);
         // REC_DEBUG_LAYERS: each layer's source and placement, once a second.
         let debug = std::env::var_os("REC_DEBUG_LAYERS").is_some_and(|v| !v.is_empty()) && (self.now * 1.0).fract() < 0.034;
         for l in &f.layers {
@@ -578,7 +662,7 @@ impl Compositor {
     pub fn twin(&self) -> Compositor {
         let mut c = Compositor::new(self.w as usize, self.h as usize, self.pip.clone());
         c.cs = self.cs.clone();
-        c.background = self.background;
+        c.background = self.background.clone();
         c.transition = self.transition;
         c.transition_secs = self.transition_secs;
         c.main_cam = self.main_cam.clone();
@@ -688,6 +772,50 @@ mod tests {
             CVPixelBufferUnlockBaseAddress(b, CVPixelBufferLockFlags::ReadOnly);
             v
         }
+    }
+
+    /// An image background fills the frame (cropped to its shape), stays
+    /// filled when blurred, and an unreadable one shows the colours.
+    #[test]
+    fn image_background() {
+        let dir = std::env::temp_dir().join(format!("rec-bg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 64x32: red on the left half, blue on the right.
+        let file = dir.join("wall.png");
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=32x32", "-f", "lavfi", "-i", "color=blue:s=32x32"])
+            .args(["-filter_complex", "[0][1]hstack", "-frames:v", "1"])
+            .arg(&file)
+            .status()
+            .expect("ffmpeg (brew install ffmpeg)");
+        assert!(ok.success());
+        let (out, _p) = solid(320, 180, [0, 0, 0, 255]);
+        let empty = SceneSpec::Custom(crate::layout::Layout::default());
+        let mut c = Compositor::new(320, 180, PipSpec::default());
+        c.set_scene(empty, false);
+        let mut bg = Background::gradient([0, 200, 0], [0, 200, 0]);
+        bg.image = Some(file.to_string_lossy().into_owned());
+        c.set_background(bg.clone());
+        c.render(0.0, None, None, &[], &out);
+        let is_red = |v: [u8; 3]| v[2] > 200 && v[0] < 50 && v[1] < 50;
+        let is_blue = |v: [u8; 3]| v[0] > 200 && v[2] < 50 && v[1] < 50;
+        // Scaled to cover 320x180 (360x180, 20 px cut each side).
+        for (x, y) in [(2, 2), (40, 90), (150, 177)] {
+            assert!(is_red(pixel(&out, x, y)), "red at {x},{y}: {:?}", pixel(&out, x, y));
+        }
+        for (x, y) in [(317, 2), (280, 90), (170, 177)] {
+            assert!(is_blue(pixel(&out, x, y)), "blue at {x},{y}: {:?}", pixel(&out, x, y));
+        }
+        // Blurred: the edges stay opaque (no dark or green fringe).
+        c.set_background(Background { blur: 0.05, ..bg.clone() });
+        c.render(0.1, None, None, &[], &out);
+        assert!(is_red(pixel(&out, 1, 1)) && is_blue(pixel(&out, 318, 178)), "{:?} {:?}", pixel(&out, 1, 1), pixel(&out, 318, 178));
+        // A file that can't be read: the colours.
+        c.set_background(Background { image: Some(dir.join("missing.png").to_string_lossy().into_owned()), ..bg });
+        c.render(0.2, None, None, &[], &out);
+        let [b, g, r] = pixel(&out, 160, 90);
+        assert!(g > 150 && r < 40 && b < 40, "the gradient: {:?}", [b, g, r]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The camera keyed out over the background, and color correction.

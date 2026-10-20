@@ -270,7 +270,7 @@ impl Session {
             if let Some((_, cs)) = &hdr {
                 c.set_color_space(cs);
             }
-            c.set_background(o.background);
+            c.set_background(o.background.clone());
             c.set_transition(o.transition, o.transition_secs);
             c.set_scene(o.scene.clone(), false);
             c

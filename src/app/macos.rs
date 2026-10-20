@@ -106,6 +106,14 @@ pub fn make_floating_panel(window: &Window) {
     w.setExcludedFromWindowsMenu(true);
 }
 
+/// The main screen's desktop picture.
+pub fn desktop_picture() -> Option<std::path::PathBuf> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let screen = objc2_app_kit::NSScreen::mainScreen(mtm)?;
+    let url = objc2_app_kit::NSWorkspace::sharedWorkspace().desktopImageURLForScreen(&screen)?;
+    url.path().map(|p| std::path::PathBuf::from(p.to_string()))
+}
+
 /// Move a file to the Trash (it can be put back from there).
 pub fn trash(path: &std::path::Path) -> Result<(), String> {
     let url = objc2_foundation::NSURL::fileURLWithPath(&crate::util::ns(&path.to_string_lossy()));

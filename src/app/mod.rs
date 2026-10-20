@@ -43,6 +43,8 @@ pub enum Cmd {
     TogglePause,
     /// Throw away the running recording and start a new one.
     RestartRecording,
+    /// Export the last recording (as `State::gif_opts` says) to a GIF.
+    ExportGif,
     /// Stop the running recording and move its file to the Trash.
     DeleteRecording,
     ShowWindow,
@@ -250,6 +252,13 @@ pub struct State {
     /// A Restart or Delete in the recording controls waiting to be
     /// confirmed, and when it was asked.
     pub controls_confirm: Option<(controls::Confirm, Instant)>,
+    /// The GIF export's choices, for the recording in `gif_source`.
+    pub gif_opts: crate::gif::GifOptions,
+    /// The recording the GIF choices are for, and its length in seconds.
+    pub gif_source: Option<(PathBuf, f64)>,
+    /// The running GIF export's progress, in thousandths.
+    pub gif_progress: Option<Arc<std::sync::atomic::AtomicU32>>,
+    gif_job: Option<std::thread::JoinHandle<Result<(PathBuf, crate::gif::GifStats)>>>,
 }
 
 impl State {
@@ -298,6 +307,18 @@ impl State {
     /// Permissions as last read (at most once a second).
     pub fn perms(&mut self) -> onboarding::Perms {
         onboarding::refresh(self)
+    }
+
+    /// Set the GIF choices up for the last recording (its whole length, or
+    /// the first 30 s of a longer one), unless they already are.
+    pub fn gif_prepare(&mut self) {
+        let Some(file) = self.last_file.clone() else { return };
+        if self.gif_source.as_ref().is_some_and(|(f, _)| *f == file) {
+            return;
+        }
+        let len = crate::gif::duration(&file).unwrap_or(0.0);
+        self.gif_opts = crate::gif::GifOptions { start: 0.0, duration: Some(len.min(30.0)), ..self.gif_opts.clone() };
+        self.gif_source = Some((file, len));
     }
 
     pub fn is_paused(&self) -> bool {
@@ -356,9 +377,9 @@ impl State {
             }
         }
         let s = &self.settings;
-        let look = (s.background, s.transition, s.transition_ms);
-        if self.look_applied != Some(look) {
-            sess.set_look(look.0, look.1, look.2 as f64 / 1000.0);
+        let look = (s.background.clone(), s.transition, s.transition_ms);
+        if self.look_applied.as_ref() != Some(&look) {
+            sess.set_look(look.0.clone(), look.1, look.2 as f64 / 1000.0);
             self.look_applied = Some(look);
         }
         let filters = self.mic_filters();
@@ -377,7 +398,7 @@ impl State {
     fn scene_started(&mut self) {
         let s = &self.settings;
         self.scene_applied = Some((s.scene_id(), s.scene_spec()));
-        self.look_applied = Some((s.background, s.transition, s.transition_ms));
+        self.look_applied = Some((s.background.clone(), s.transition, s.transition_ms));
         self.filters_applied = Some(self.mic_filters());
         self.studio_applied = None;
     }
@@ -534,6 +555,10 @@ impl App {
             mic_warned: None,
             mic_muted: false,
             controls_confirm: None,
+            gif_opts: Default::default(),
+            gif_source: None,
+            gif_progress: None,
+            gif_job: None,
         };
         st.live.set_config(st.settings.live_config());
         load_devices(&mut st);
@@ -783,7 +808,7 @@ impl App {
         o.mic_filters = self.st.settings.mic_filters;
         o.pip.effects = self.st.settings.camera_effects;
         // The command line has the colours only; the screen's inset too.
-        o.background = self.st.settings.background;
+        o.background = self.st.settings.background.clone();
         // The mic is optional: without permission, record without it (the
         // Audio card says so) rather than refuse to start.
         if o.mic.is_some() && crate::tcc::mic_status() != crate::tcc::Status::Granted {
@@ -1108,6 +1133,27 @@ impl App {
         });
     }
 
+    fn export_gif(&mut self) {
+        let Some((file, _)) = self.st.gif_source.clone() else { return };
+        if self.st.gif_job.is_some() {
+            return;
+        }
+        let out = crate::gif::gif_path(&file);
+        let opts = self.st.gif_opts.clone();
+        let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        self.st.gif_progress = Some(progress.clone());
+        self.st.gif_job = Some(std::thread::spawn(move || {
+            let r = objc2::rc::autoreleasepool(|_| {
+                crate::gif::export(&file, &out, &opts, &|p| {
+                    progress.store((p * 1000.0) as u32, Ordering::Relaxed);
+                    wake();
+                })
+            });
+            wake();
+            r.map(|s| (out, s))
+        }));
+    }
+
     fn toggle_pause(&mut self) {
         if let Some(s) = &self.st.recording {
             if s.is_paused() {
@@ -1149,6 +1195,7 @@ impl App {
                 self.stop_recording();
             }
             Cmd::RestartRecording | Cmd::DeleteRecording => {}
+            Cmd::ExportGif => self.export_gif(),
             Cmd::TogglePause => self.toggle_pause(),
             Cmd::ShowWindow => self.show_main(el),
             Cmd::ShowSettings => self.show_settings(el),
@@ -1221,6 +1268,20 @@ impl App {
                 }
                 Ok(Err(e)) => self.st.error = Some(format!("Replay: {e:#}")),
                 Err(_) => self.st.error = Some("Replay: the writer crashed".into()),
+            }
+        }
+        if self.st.gif_job.as_ref().is_some_and(|h| h.is_finished()) {
+            let h = self.st.gif_job.take().unwrap();
+            self.st.gif_progress = None;
+            match h.join() {
+                Ok(Ok((out, s))) => {
+                    eprintln!("rec: GIF saved {} ({} frames, {} bytes)", out.display(), s.frames, s.bytes);
+                    let name = out.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    self.st.notice = Some((format!("GIF saved: {name} ({:.1} MB)", s.bytes as f64 / 1e6), Instant::now()));
+                    macos::reveal(&out);
+                }
+                Ok(Err(e)) => self.st.error = Some(format!("GIF export: {e:#}")),
+                Err(_) => self.st.error = Some("GIF export: the exporter crashed".into()),
             }
         }
         let done = self.finished.lock().unwrap().take();
