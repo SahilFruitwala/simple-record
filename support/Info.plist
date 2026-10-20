@@ -5,7 +5,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Rec</string>
 	<key>CFBundleExecutable</key>
-	<string>rec-rs</string>
+	<string>simple-record</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>

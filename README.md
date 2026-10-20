@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/logo/logo.svg" alt="Rec logo" width="128"></p>
 
-# Rec (rec-rs)
+# Rec (simple-record)
 
 A simple, fast, reliable screen and camera recorder for macOS, written in Rust, as an alternative
 to OBS for recording YouTube videos. It records the screen, system audio, microphone and webcam
@@ -69,7 +69,7 @@ background controls and the Settings tabs. They are described under [The app](#t
 
 ## Reverse-engineered origin
 
-rec-rs is an independent, clean-room-style reimplementation. It was reverse engineered from
+simple-record is an independent, clean-room-style reimplementation. It was reverse engineered from
 [OBS Studio](https://obsproject.com) by studying its architecture and behavior with
 [REA](https://github.com/morluto/rea) and Claude Code. It is not affiliated with or endorsed by
 the OBS Project. No original OBS code or assets are included in this repository.
@@ -78,7 +78,7 @@ the OBS Project. No original OBS code or assets are included in this repository.
 
 ```sh
 ./scripts/build.sh          # cargo build --release, then assemble and sign dist/Rec.app
-dist/rec-rs --help          # dist/rec is a short alias
+dist/simple-record --help          # dist/rec is a short alias
 ```
 
 `./scripts/package.sh` also wraps the app in `dist/Rec-<version>-macos-arm64.dmg`. Pushing a tag
@@ -86,7 +86,7 @@ such as `v0.1.0` runs the Release workflow, which builds the DMG and attaches it
 release (ad-hoc signed there, so the first launch needs right-click, Open). `scripts/make-icons.sh`
 regenerates the logo and icons from `assets/logo/make_logo.py`.
 
-Build output goes to `~/.cache/rec-rs-target` (`CARGO_TARGET_DIR`), never into the repo,
+Build output goes to `~/.cache/simple-record-target` (`CARGO_TARGET_DIR`), never into the repo,
 because the repo is synced between machines. The script signs `dist/Rec.app` with your Apple
 Development identity, so the macOS privacy grants survive rebuilds. Override it with
 `REC_SIGN_IDENTITY`.
@@ -101,7 +101,7 @@ scripts/soak.sh 1800             # 30-minute 4K60 soak with CPU/memory sampling 
 scripts/synccheck.py FILE        # A/V offset of a flash + beep recording
 ```
 
-Test recordings go to `~/Movies/rec-rs-tests/`.
+Test recordings go to `~/Movies/simple-record-tests/`.
 
 The platform-independent parts (scene layouts, shapes, mic filters, shortcuts, MPEG-TS, SRT)
 also build and test on any OS, Linux included, from `portable/`; the SRT output is checked end
@@ -125,21 +125,21 @@ Settings**. Without the microphone, Rec records without it, and the Audio card s
 the command line:
 
 ```sh
-dist/rec-rs permissions --request
+dist/simple-record permissions --request
 ```
 
 Then enable **Rec** under **System Settings → Privacy & Security → Screen & System Audio
 Recording**. Microphone and camera are approved from the system prompts.
 
-- `rec-rs` re-launches itself with responsibility disclaimed. macOS therefore asks about and
+- `simple-record` re-launches itself with responsibility disclaimed. macOS therefore asks about and
   remembers the signed **Rec** app rather than your terminal.
 - If macOS asks whether Rec may "bypass the system private window picker", click **Allow**.
-- `dist/rec-rs permissions` shows the current status.
+- `dist/simple-record permissions` shows the current status.
 
 ## The app
 
 ```sh
-open dist/Rec.app          # or: dist/rec-rs   (or: dist/rec-rs gui [--settings] [--start-recording] [--window ID])
+open dist/Rec.app          # or: dist/simple-record   (or: dist/simple-record gui [--settings] [--start-recording] [--window ID])
 ```
 
 The **main window** contains:
@@ -255,7 +255,7 @@ recording, except the camera overlay:
 - **Camera**: the camera, plus the overlay: shape, roundness, size, border, shadow, corner
   presets, mirroring and filters.
 
-Settings persist in `~/Library/Application Support/rec-rs/settings.json`.
+Settings persist in `~/Library/Application Support/simple-record/settings.json`.
 
 Rec is a regular app with a Dock icon and an app menu (Settings… ⌘,, Hide ⌘H, Quit ⌘Q, Window ▸
 Minimize, Close, Show Rec Window). Closing the main window keeps Rec running, in the Dock and the
@@ -269,15 +269,15 @@ Last, Open Folder and Quit. While streaming without recording it shows LIVE.
 You can also control a running recording, from the app or the CLI, from any shell:
 
 ```sh
-rec-rs pause      # SIGUSR1
-rec-rs resume     # SIGUSR2
-rec-rs stop       # finalizes, prints the file
-rec-rs save-replay  # SIGINFO: write the replay buffer to an MP4
+simple-record pause      # SIGUSR1
+simple-record resume     # SIGUSR2
+simple-record stop       # finalizes, prints the file
+simple-record save-replay  # SIGINFO: write the replay buffer to an MP4
 ```
 
 Quitting the app or sending it SIGTERM mid-recording finalizes the file first.
 
-The app logs to `~/Library/Logs/rec-rs/rec.log` (timestamped, rotated at 5 MB). **Help >
+The app logs to `~/Library/Logs/simple-record/rec.log` (timestamped, rotated at 5 MB). **Help >
 Report a Problem…** (also in Settings) saves the logs, a description of the Mac and its
 devices, the settings without secrets (URL queries cut; stream keys are never in them) and
 recent crash reports to a folder on the Desktop, ready to attach. After a crash, the next
@@ -291,14 +291,14 @@ says so.
 
 ```sh
 # the canonical example
-rec-rs record --display 1 --mic default --system-audio --cam --out file.mp4 --duration 10
+simple-record record --display 1 --mic default --system-audio --cam --out file.mp4 --duration 10
 
-# 4K60 HEVC, screen + webcam, Ctrl-C (or `rec-rs stop`) to finish
-rec-rs record -r 4k --cam
+# 4K60 HEVC, screen + webcam, Ctrl-C (or `simple-record stop`) to finish
+simple-record record -r 4k --cam
 
 # one window at native resolution, camera-only scene, ProRes
-rec-rs record --window "Safari" -r native --codec prores
-rec-rs record --scene cam -o talking-head.mov
+simple-record record --window "Safari" -r native --codec prores
+simple-record record --scene cam -o talking-head.mov
 ```
 
 The default output is `~/Movies/rec-YYYY-MM-DD-HHMMSS.mov`. A live status line shows the
@@ -308,7 +308,7 @@ frames, and pauses don't count.
 | Option | Default | Notes |
 |---|---|---|
 | `-o, --out, --output` | `~/Movies/rec-….mov` | `.mov` or `.mp4`. |
-| `-d, --display N` | `1` | Display number from `rec-rs devices` (1 = main). |
+| `-d, --display N` | `1` | Display number from `simple-record devices` (1 = main). |
 | `--window W` | | Window ID or app/title substring. |
 | `--region X,Y,W,H` | | Crop a display region (points from top-left). |
 | `-r, --resolution` | `1080p` | `720p`, `1080p`, `1440p`, `4k`, `native`, `WxH`: the largest frame with the display's (or window's) shape that fits that size, e.g. 1670x1080 for a 4112x2658 display. Never black bars, never cropped, never upscaled. |
@@ -340,7 +340,7 @@ frames, and pauses don't count.
 | `-t, --duration` | | Seconds of output. |
 | `--mic-backend` | `sck` | `sck` (ScreenCaptureKit) or `avcapture`. |
 | `--test-pattern [--noise]` | | Synthetic source: the frame flashes white and the "system audio" beeps once a second, for self-tests and sync checks. |
-| `--replay SECS` | off | Keep the last 15–300 s of the live encode in memory; `rec-rs save-replay` writes them to an MP4 next to the output. |
+| `--replay SECS` | off | Keep the last 15–300 s of the live encode in memory; `simple-record save-replay` writes them to an MP4 next to the output. |
 | `--stream DEST` | | Stream to `youtube`, `twitch`, an `rtmp://`/`rtmps://` URL, an `srt://host:port?streamid=…&passphrase=…&latency=MS` URL or a WHIP `http(s)://` URL. Repeatable: one encode feeds every destination. |
 | `--no-record` | | Write no file (replay buffer and/or streaming only). |
 | `--live-resolution` | `1080p` | Live encode bounding size: the frame keeps its shape and is never above the capture. |
@@ -352,26 +352,26 @@ frames, and pauses don't count.
 
 Other commands:
 
-- `rec-rs gif FILE [-o OUT] [--fps 15] [--width 720] [--start S] [-t SECS]` turns a recording
+- `simple-record gif FILE [-o OUT] [--fps 15] [--width 720] [--start S] [-t SECS]` turns a recording
   (or part of it) into a looping GIF: AVAssetReader decodes it, CoreImage's Lanczos filter
   scales it, ImageIO writes it, with frame delays that keep the frame rate exact on average.
 
-- `rec-rs devices` lists displays, windows, cameras and mics.
-- `rec-rs probe FILE` checks a file with AVFoundation, QuickTime's engine, and decodes every
+- `simple-record devices` lists displays, windows, cameras and mics.
+- `simple-record probe FILE` checks a file with AVFoundation, QuickTime's engine, and decodes every
   sample.
-- `rec-rs permissions [--request]` shows or requests the privacy grants.
-- `rec-rs stop`, `rec-rs pause` and `rec-rs resume` control a running recording.
-- `rec-rs save-replay` saves the replay buffer of the running recorder (CLI or app).
-- `rec-rs stream-key DEST [--delete]` stores a stream key in the Keychain (read from the
+- `simple-record permissions [--request]` shows or requests the privacy grants.
+- `simple-record stop`, `simple-record pause` and `simple-record resume` control a running recording.
+- `simple-record save-replay` saves the replay buffer of the running recorder (CLI or app).
+- `simple-record stream-key DEST [--delete]` stores a stream key in the Keychain (read from the
   terminal with echo off). `REC_STREAM_KEY` overrides it for one run.
 
 ### Replay buffer and streaming
 
 ```sh
-rec-rs stream-key youtube                         # once; key goes to the Keychain
-rec-rs record --stream youtube --replay 60        # record, stream and keep a replay buffer
-rec-rs record --no-record --stream rtmp://localhost/live --stream http://localhost:8889/live/whip
-rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphrase=correct-horse&latency=300'
+simple-record stream-key youtube                         # once; key goes to the Keychain
+simple-record record --stream youtube --replay 60        # record, stream and keep a replay buffer
+simple-record record --no-record --stream rtmp://localhost/live --stream http://localhost:8889/live/whip
+simple-record record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphrase=correct-horse&latency=300'
 ```
 
 - **One encode.** Every composited frame goes once through a real-time VideoToolbox session,
@@ -421,17 +421,17 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 - **Track grouping.** With one audio source there is a single audio track. The audio tracks
   share an alternate group with the mix as default, so QuickTime plays the mix and editors see
   every track.
-- **Constant frame rate.** ScreenCaptureKit only sends a frame when pixels change. rec-rs
+- **Constant frame rate.** ScreenCaptureKit only sends a frame when pixels change. simple-record
   writes on an exact 1/fps grid and repeats the newest frame when needed. Measured frame spacing
   is exactly 16.667 ms.
 - **Single clock.** Screen, system audio, mic and webcam are all stamped on the host clock, and
   audio is never stretched. The flash/beep sync test measures 0.0 ms between video and audio in
   the file, including across pauses.
 - **System audio latency.** ScreenCaptureKit captures system audio when it is mixed, which is
-  one output latency before you hear it. rec-rs shifts it later by the output device's latency,
+  one output latency before you hear it. simple-record shifts it later by the output device's latency,
   read from CoreAudio (about 27 ms on built-in speakers, more on Bluetooth), so the audio lines
   up with the picture you saw. It is re-read every second while capturing, so switching to
-  AirPods mid-recording keeps the sync. `rec-rs devices` prints the latency.
+  AirPods mid-recording keeps the sync. `simple-record devices` prints the latency.
 - **Webcam sync.** Emission runs a little behind real time, so the webcam frame captured at each
   instant is the one used. Webcams deliver frames 70–120 ms late, and the lag adapts to the
   slowest source.
@@ -454,7 +454,7 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 
 ## Feature comparison with OBS (macOS)
 
-| Feature | OBS 32 | rec-rs |
+| Feature | OBS 32 | simple-record |
 |---|---|---|
 | Display capture | ✅ | ✅ ScreenCaptureKit, zero-copy |
 | Window capture | ✅ | ✅ |
@@ -486,7 +486,7 @@ rec-rs record --stream 'srt://ingest.example.com:9000?streamid=live/me&passphras
 | Global hotkey | ✅ configurable | ✅ configurable: record, pause, save replay, go live, next/previous scene, transition |
 | Separate camera file | ✅ (source record plugin) | ✅ `…-camera.mov` on the recording's timeline |
 | Menu bar control | ❌ | ✅ menu bar item plus Dock app |
-| Headless CLI | ❌ (obs-cli via websocket) | ✅ `rec-rs record …`, `stop`, `pause`, `resume` |
+| Headless CLI | ❌ (obs-cli via websocket) | ✅ `simple-record record …`, `stop`, `pause`, `resume` |
 | Footprint | about 300 MB app | about 22 MB app; about 6% of one core at 4K60 screen-only, about 34% with the webcam overlay (see [PERFORMANCE.md](PERFORMANCE.md)) |
 | Encoder input | frames copied back to the CPU for encoding | IOSurface passed straight to VideoToolbox |
 

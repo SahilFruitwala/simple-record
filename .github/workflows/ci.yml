@@ -43,5 +43,5 @@ jobs:
       - name: Tests
         run: cargo test --locked
       - name: Scene sources end to end (video file, web page, chroma key)
-        run: scripts/sources-check.sh target/debug/rec-rs
+        run: scripts/sources-check.sh target/debug/simple-record
       # The SRT end to end runs on Linux: Homebrew's ffmpeg has no libsrt.

@@ -100,8 +100,8 @@ pub fn push(c: Cmd) {
     wake();
 }
 
-/// SIGINT (`rec-rs stop`) stops the recording; SIGTERM/SIGHUP quit after
-/// saving it. SIGUSR1/2 (`rec-rs pause`/`resume`) use record's flags.
+/// SIGINT (`simple-record stop`) stops the recording; SIGTERM/SIGHUP quit after
+/// saving it. SIGUSR1/2 (`simple-record pause`/`resume`) use record's flags.
 static SIG_STOP: AtomicBool = AtomicBool::new(false);
 static SIG_QUIT: AtomicBool = AtomicBool::new(false);
 extern "C" fn on_sigint(_: libc::c_int) {
@@ -599,7 +599,7 @@ impl App {
             }))
             .expect("no compatible GPU adapter");
             let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("rec-rs"),
+                label: Some("simple-record"),
                 required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 ..Default::default()
             }))
@@ -638,7 +638,7 @@ impl App {
                 }))
                 .expect("no compatible GPU adapter");
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    label: Some("rec-rs"),
+                    label: Some("simple-record"),
                     required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                     ..Default::default()
                 }))
@@ -1246,7 +1246,7 @@ impl App {
                 self.st.recording.as_ref().unwrap().resume();
             }
         }
-        // `rec-rs save-replay` (SIGINFO).
+        // `simple-record save-replay` (SIGINFO).
         if record::REPLAY_REQ.swap(false, Ordering::SeqCst) {
             push(Cmd::SaveReplay);
         }

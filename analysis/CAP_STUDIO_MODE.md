@@ -26,7 +26,7 @@ The biggest gap. Two steps make sense:
 - **Trim and cut (medium).** Open a finished take in a window with a filmstrip and waveform,
   mark in/out points and cuts, and export with `AVMutableComposition` plus
   `AVAssetExportSession` in passthrough mode. Nothing is re-encoded, so export is instant and
-  lossless, and the files are already `AVFoundation`-friendly (`rec-rs probe` checks this). The
+  lossless, and the files are already `AVFoundation`-friendly (`simple-record probe` checks this). The
   separate audio tracks are kept. Cuts land on keyframes in passthrough (every 2 s), so
   frame-exact cuts need a re-encode of the GOPs around them.
 - **Full editor (large).** Several tracks, zoom segments, layout changes and captions. This
@@ -81,7 +81,7 @@ layers, and global shortcuts.
 
 ## Suggested order
 
-1. ~~GIF export and image backgrounds~~ (done: Export GIF…, `rec-rs gif`, image and
+1. ~~GIF export and image backgrounds~~ (done: Export GIF…, `simple-record gif`, image and
    desktop-picture backgrounds with blur).
 2. Live auto-zoom on clicks (the most "Cap-like" feature, and it also helps streams).
 3. Trim and cut editor with passthrough export.

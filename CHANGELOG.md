@@ -10,4 +10,4 @@ packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
   delete (to the Trash), open Rec. Never captured. Settings > Video turns them off.
 - Image backgrounds: a picture or the desktop wallpaper fills the frame behind scenes, with an
   optional blur (`--background-image`, `--background-blur`).
-- GIF export: Export GIF… in the app and `rec-rs gif`, for the whole recording or a part.
+- GIF export: Export GIF… in the app and `simple-record gif`, for the whole recording or a part.

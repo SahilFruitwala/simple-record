@@ -245,7 +245,7 @@ pub enum Content {
     /// The capture target: a display, a region, a window or an app.
     Screen,
     Camera,
-    /// Another display, whole (1-based, as `rec-rs devices` numbers them).
+    /// Another display, whole (1-based, as `simple-record devices` numbers them).
     Display(usize),
     /// An image file (PNG, JPEG, HEIC...): a logo or a frame.
     Image(String),

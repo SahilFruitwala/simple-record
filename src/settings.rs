@@ -1,4 +1,4 @@
-//! App settings, persisted as JSON in ~/Library/Application Support/rec-rs.
+//! App settings, persisted as JSON in ~/Library/Application Support/simple-record.
 //! The app turns them into the same `record` arguments the CLI takes, so
 //! both share one code path (`crate::prepare`).
 
@@ -146,7 +146,7 @@ pub struct Settings {
     /// Global shortcuts; an action missing here has its default, None
     /// means none.
     pub hotkeys: BTreeMap<Action, Option<Combo>>,
-    /// Window to record (ID from `rec-rs devices`); not persisted because
+    /// Window to record (ID from `simple-record devices`); not persisted because
     /// window IDs change between launches.
     #[serde(skip)]
     pub window: Option<u32>,
@@ -260,13 +260,13 @@ impl Settings {
         }
     }
 
-    /// $REC_SETTINGS, else ~/Library/Application Support/rec-rs/settings.json.
+    /// $REC_SETTINGS, else ~/Library/Application Support/simple-record/settings.json.
     pub fn path() -> PathBuf {
         if let Some(p) = std::env::var_os("REC_SETTINGS") {
             return PathBuf::from(p);
         }
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-        home.join("Library/Application Support/rec-rs/settings.json")
+        home.join("Library/Application Support/simple-record/settings.json")
     }
 
     pub fn load() -> Self {
@@ -502,7 +502,7 @@ impl Settings {
         self.output_dir.join(timestamped("rec", ext))
     }
 
-    /// `rec-rs record` arguments for these settings (`output` None = preview).
+    /// `simple-record record` arguments for these settings (`output` None = preview).
     pub fn record_args(&self, output: Option<&std::path::Path>) -> Vec<String> {
         let mut a: Vec<String> = vec!["-q".into(), "-r".into(), self.resolution.clone()];
         a.extend(["--fps".into(), self.fps.to_string()]);

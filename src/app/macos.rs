@@ -164,7 +164,7 @@ pub fn open_folder(dir: &std::path::Path) {
 }
 
 /// Dock icon for the running app (the bundle's AppIcon.icns covers Finder;
-/// this also covers `rec-rs gui` outside the bundle and a stale Dock cache).
+/// this also covers `simple-record gui` outside the bundle and a stale Dock cache).
 pub fn set_dock_icon() {
     static ICON: &[u8] = include_bytes!("../../support/icon.png");
     let Some(mtm) = objc2::MainThreadMarker::new() else { return };

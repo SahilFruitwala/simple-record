@@ -11,7 +11,7 @@
 # gradients over the whole frame).
 set -eu
 cd "$(dirname "$0")/.."
-OUT="${REC_TEST_DIR:-$HOME/Movies/rec-rs-tests}/encquality"
+OUT="${REC_TEST_DIR:-$HOME/Movies/simple-record-tests}/encquality"
 mkdir -p "$OUT"
 CASES=${*:-"h264-6m:h264:6000:basic h264-6m:h264:6000 h264-40m:h264:40000:basic h264-40m:h264:40000 hevc-30m:hevc:30000"}
 [ -f "$OUT/card.png" ] || swift scripts/testcard.swift "$OUT/card.png"
@@ -19,7 +19,7 @@ CASES=${*:-"h264-6m:h264:6000:basic h264-6m:h264:6000 h264-40m:h264:40000:basic 
   -vf "scale=3840:2160:flags=lanczos,scroll=v=0.0028,format=bgra" -c:v ffv1 "$OUT/scroll.mkv"
 [ -f "$OUT/motion.mkv" ] || ffmpeg -v error -f lavfi -i "testsrc2=s=3840x2160:r=60" -t 2 \
   -vf format=bgra -c:v ffv1 "$OUT/motion.mkv"
-CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/rec-rs-target}
+CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/simple-record-target}
 export CARGO_TARGET_DIR
 cargo test --release --no-run -q 2>/dev/null
 for src in scroll motion; do

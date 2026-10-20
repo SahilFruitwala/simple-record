@@ -3,9 +3,9 @@
 # (rec probe) and ffmpeg. Usage: scripts/selftest.sh [--no-screen]
 set -eu
 cd "$(dirname "$0")/.."
-REC=dist/rec-rs
+REC=dist/simple-record
 # Test recordings never go inside the (synced) repo.
-OUT="${REC_TEST_DIR:-$HOME/Movies/rec-rs-tests}/selftest"
+OUT="${REC_TEST_DIR:-$HOME/Movies/simple-record-tests}/selftest"
 rm -rf "$OUT"; mkdir -p "$OUT"
 pass=0; fail=0; skip=0
 PERMS=$("$REC" permissions)
@@ -52,7 +52,7 @@ if scripts/synccheck.py "$OUT/pause.mov" --max-ms 1 >"$OUT/pause.check" 2>&1 \
 else
   echo "FAIL  pause-resume  (see $OUT/pause.check)"; fail=$((fail+1))
 fi
-# Replay buffer: no file recorded, `rec-rs save-replay` mid-run writes the
+# Replay buffer: no file recorded, `simple-record save-replay` mid-run writes the
 # last seconds to an MP4 that is in sync.
 mkdir -p "$OUT/replay"
 "$REC" record -q --test-pattern --no-mic --no-record --replay 15 -t 9 -o "$OUT/replay/none.mov" >/dev/null 2>"$OUT/replay.log" &

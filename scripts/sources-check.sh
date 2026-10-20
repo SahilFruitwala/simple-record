@@ -7,7 +7,7 @@
 # Usage: scripts/sources-check.sh [REC_BINARY]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-REC=${1:-target/debug/rec-rs}
+REC=${1:-target/debug/simple-record}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 ffmpeg -v error -y -f lavfi -i color=c=red:size=320x180:rate=30 -t 2 -pix_fmt yuv420p "$WORK/red.mp4"

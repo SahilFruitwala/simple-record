@@ -1,8 +1,8 @@
-# The platform-independent parts of rec-rs (scene layouts, shapes, mic
+# The platform-independent parts of simple-record (scene layouts, shapes, mic
 # filters, shortcuts, MPEG-TS and SRT), compiled from ../src so their tests
 # run on any OS, including Linux CI. The app itself needs macOS.
 [package]
-name = "rec-rs-portable"
+name = "simple-record-portable"
 version = "0.1.0"
 edition = "2024"
 publish = false

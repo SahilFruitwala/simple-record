@@ -1,5 +1,5 @@
 //! The app's log. Everything written to stderr also goes, timestamped, to
-//! `~/Library/Logs/rec-rs/rec.log` (rotated at 5 MB, one old file kept), so
+//! `~/Library/Logs/simple-record/rec.log` (rotated at 5 MB, one old file kept), so
 //! a problem in an app opened from Finder, where stderr goes nowhere, can
 //! still be diagnosed. Panics are logged with a backtrace and leave a
 //! marker, so the next launch can offer to report them; `diagnostics`
@@ -15,13 +15,13 @@ const LOG: &str = "rec.log";
 const OLD_LOG: &str = "rec.1.log";
 const CRASH_MARKER: &str = "last-crash.txt";
 
-/// $REC_LOG_DIR, else ~/Library/Logs/rec-rs.
+/// $REC_LOG_DIR, else ~/Library/Logs/simple-record.
 pub fn log_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("REC_LOG_DIR") {
         return PathBuf::from(d);
     }
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join("Library/Logs/rec-rs")
+    home.join("Library/Logs/simple-record")
 }
 
 pub fn log_path() -> PathBuf {
@@ -91,7 +91,7 @@ pub fn start() {
         }
         libc::close(fds[1]);
         let read_fd = fds[0];
-        let _ = writeln!(file, "[{}] --- rec-rs {} started (pid {})", timestamp(), env!("CARGO_PKG_VERSION"), std::process::id());
+        let _ = writeln!(file, "[{}] --- simple-record {} started (pid {})", timestamp(), env!("CARGO_PKG_VERSION"), std::process::id());
         let thread = std::thread::Builder::new().name("log".into()).spawn(move || {
             use std::os::fd::FromRawFd;
             let mut pipe = std::fs::File::from_raw_fd(read_fd);
@@ -217,13 +217,13 @@ pub fn diagnostics(parent: &Path, system: &str, settings_json: Option<&str>, cra
     if let Some(s) = settings_json {
         std::fs::write(dir.join("settings.json"), redact_settings(s))?;
     }
-    // macOS writes native crashes (not panics) as rec-rs-….ips.
+    // macOS writes native crashes (not panics) as simple-record-….ips.
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
     if let Ok(entries) = std::fs::read_dir(crash_reports) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             let recent = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= cutoff);
-            if recent && name.starts_with("rec-rs") && (name.ends_with(".ips") || name.ends_with(".crash")) {
+            if recent && name.starts_with("simple-record") && (name.ends_with(".ips") || name.ends_with(".crash")) {
                 let _ = std::fs::copy(e.path(), dir.join(&name));
             }
         }
@@ -276,11 +276,11 @@ mod tests {
         let d = temp("diag");
         let reports = d.join("reports");
         std::fs::create_dir_all(&reports).unwrap();
-        std::fs::write(reports.join("rec-rs-2026-10-18.ips"), "crash").unwrap();
+        std::fs::write(reports.join("simple-record-2026-10-18.ips"), "crash").unwrap();
         std::fs::write(reports.join("Safari-2026.ips"), "other app").unwrap();
         let out = diagnostics(&d, "macOS 15", Some(r#"{"stream_custom_url":"rtmp://h/app?k=secret"}"#), &reports, 7).unwrap();
         assert!(out.join("system.txt").exists());
-        assert!(out.join("rec-rs-2026-10-18.ips").exists());
+        assert!(out.join("simple-record-2026-10-18.ips").exists());
         assert!(!out.join("Safari-2026.ips").exists(), "only Rec's crash reports");
         assert!(!std::fs::read_to_string(out.join("settings.json")).unwrap().contains("secret"));
         let _ = std::fs::remove_dir_all(&d);

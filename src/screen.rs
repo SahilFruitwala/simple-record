@@ -104,13 +104,13 @@ pub fn find_window(sel: &str) -> Result<WindowInfo> {
         if let Some(w) = ws.into_iter().find(|w| w.id == id) {
             return Ok(w);
         }
-        bail!("no on-screen window with id {id} (see `rec-rs devices`)");
+        bail!("no on-screen window with id {id} (see `simple-record devices`)");
     }
     let lower = sel.to_lowercase();
     ws.into_iter()
         .filter(|w| format!("{} {}", w.app, w.title).to_lowercase().contains(&lower))
         .max_by(|a, b| (a.size.0 * a.size.1).total_cmp(&(b.size.0 * b.size.1)))
-        .ok_or_else(|| anyhow!("no on-screen window matches {sel:?} (see `rec-rs devices`)"))
+        .ok_or_else(|| anyhow!("no on-screen window matches {sel:?} (see `simple-record devices`)"))
 }
 
 pub struct AppInfo {
@@ -151,7 +151,7 @@ pub fn find_app(sel: &str) -> Result<AppInfo> {
     }
     apps.into_iter()
         .find(|a| a.name.to_lowercase().contains(&lower))
-        .ok_or_else(|| anyhow!("no app with a window on screen matches {sel:?} (see `rec-rs devices`)"))
+        .ok_or_else(|| anyhow!("no app with a window on screen matches {sel:?} (see `simple-record devices`)"))
 }
 
 pub enum Target {
