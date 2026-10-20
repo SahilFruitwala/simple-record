@@ -4,7 +4,7 @@
 //!
 //! Usage: srt_e2e MEDIA_DIR (OUT.ts | srt://...) [hevc]
 //! (H.264 from MEDIA_DIR/v.h264, or HEVC from v.hevc; AAC from a.aac.)
-use rec_rs_portable::{srt, ts};
+use simple_record_portable::{srt, ts};
 use std::time::{Duration, Instant};
 
 fn nals(data: &[u8]) -> Vec<&[u8]> {

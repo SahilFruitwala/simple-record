@@ -8,7 +8,7 @@ interactively in the app.
 
 | Feature | Where | Verified |
 |---|---|---|
-| Log file (`~/Library/Logs/rec-rs/rec.log`, rotated), crash marker and banner, Help > Report a Problem (diagnostics folder, secrets removed) | `logging.rs`, `app/` | Unit tests: rotation, redaction, diagnostics folder |
+| Log file (`~/Library/Logs/simple-record/rec.log`, rotated), crash marker and banner, Help > Report a Problem (diagnostics folder, secrets removed) | `logging.rs`, `app/` | Unit tests: rotation, redaction, diagnostics folder |
 | First-run welcome screen: Screen Recording, microphone, camera; status, prompt, System Settings, restart | `app/onboarding.rs`, `tcc.rs` | Unit test of the offers; not seen on a fresh Mac yet |
 | HDR file is HEVC Main 10, BT.2020, PQ | `writer.rs` test | CI (macOS): ffprobe on a written file |
 | SRT with HEVC; against MediaMTX (publish over SRT, read back over RTSP) | `scripts/srt-e2e.sh` | CI (Linux) |
@@ -65,7 +65,7 @@ To check on a Mac, in order of risk:
 
 ## Your fix list (2026-10-12 evening): done
 
-Every item was measured on real recordings in `~/Movies/rec-rs-tests/goal/` (camera clips
+Every item was measured on real recordings in `~/Movies/simple-record-tests/goal/` (camera clips
 deleted after checking).
 
 | Item | Cause | Fix | Check |
@@ -170,7 +170,7 @@ Details are in [PERFORMANCE.md](PERFORMANCE.md#picture-quality-2026-10-12).
     - the app's **Save Replay** button (with the memory in use);
     - **⇧⌘S** from anywhere, held only while the buffer is on;
     - the menu bar menu;
-    - `rec-rs save-replay` (the CLI flag is `--replay SECS`).
+    - `simple-record save-replay` (the CLI flag is `--replay SECS`).
   - Works with or without a recording, and keeps running with the window closed.
   - Clips are H.264 + AAC MP4, and both AVFoundation and ffmpeg measure them at **0.0 ms**
     A/V offset.
@@ -182,12 +182,12 @@ Details are in [PERFORMANCE.md](PERFORMANCE.md#picture-quality-2026-10-12).
   - **Encode settings:** bitrate, keyframe interval, CBR/VBR, resolution and audio bitrate.
   - **Resilience:** auto-reconnect with backoff, and a live status showing state, bitrate,
     dropped frames and duration.
-  - **Stream keys:** stored in the Keychain (`rec-rs stream-key DEST`, or the app's key field),
+  - **Stream keys:** stored in the Keychain (`simple-record stream-key DEST`, or the app's key field),
     never in settings, and redacted from every log line and error.
   - **Recording at the same time:** recording and streaming run together. Starting or stopping a
     recording doesn't interrupt the stream (short capture gaps are bridged).
 - **Tested against a local MediaMTX** (installed with brew; all its files are under
-  `~/Movies/rec-rs-tests/`):
+  `~/Movies/simple-record-tests/`):
 
   | Check | Result |
   |---|---|
@@ -209,7 +209,7 @@ Details are in [PERFORMANCE.md](PERFORMANCE.md#picture-quality-2026-10-12).
   replay, stream-rtmp, stream-whip and gui-replay cases (the stream cases need `mediamtx`).
 - **Not tested: streaming to the real YouTube or Twitch** (no keys here). They use the same
   RTMPS path as the local test. A first real stream is worth a short private test. To set up:
-  1. Run `rec-rs stream-key youtube`, or paste the key in the app.
+  1. Run `simple-record stream-key youtube`, or paste the key in the app.
   2. Choose YouTube and click Go Live.
 - ⇧⌘S overrides Save As in other apps only while the replay buffer is on.
 
@@ -246,7 +246,7 @@ Details are in [PERFORMANCE.md](PERFORMANCE.md#picture-quality-2026-10-12).
 ## Status (2026-10-11 ~10:25 EDT)
 
 All 7 milestones of the goal are built and verified by automated tests on this MacBook Pro.
-`rec-rs` records 1080p60 or 4K60 screen + mic + system audio + webcam into a `.mov`/`.mp4` that
+`simple-record` records 1080p60 or 4K60 screen + mic + system audio + webcam into a `.mov`/`.mp4` that
 AVFoundation (QuickTime's engine) and ffmpeg both play and decode completely.
 
 Two checks still need a person, because they need eyes, ears or a physical keypress:
@@ -260,8 +260,8 @@ See "Your manual check" below.
 
 ```sh
 ./scripts/build.sh
-open dist/Rec.app                                  # app: preview, sources, ⇧⌘R, pause, meters, settings
-dist/rec-rs record --display 1 --mic default --system-audio --cam --out ~/Movies/demo.mp4 --duration 10
+open dist/SimpleRecord.app                                  # app: preview, sources, ⇧⌘R, pause, meters, settings
+dist/simple-record record --display 1 --mic default --system-audio --cam --out ~/Movies/demo.mp4 --duration 10
 ```
 
 ## Goal milestones
@@ -298,13 +298,13 @@ permissions granted. The suite covers:
 - Dock Quit, ⌘Q and logout finalize a running recording first. Self-test `app-dock-quit`
   passes.
 - Your pinned Dock tile showed the generic icon until the app ran, because the Dock had cached
-  it. It shows your icon while Rec runs; after your next login it shows it at all times.
+  it. It shows your icon while SimpleRecord runs; after your next login it shows it at all times.
 
 ## Permissions
 
 | Permission | Status |
 |---|---|
-| Screen & System Audio Recording | granted to **Rec** |
+| Screen & System Audio Recording | granted to **SimpleRecord** |
 | Microphone | granted (re-approved by you after the 09:12 request) |
 | Camera | granted (macOS reset it; requested once on 2026-10-12 at 18:40 and approved) |
 
@@ -313,17 +313,17 @@ permissions granted. The suite covers:
   and camera grants, I ran the request once more at 09:12. Both are granted again as of about
   10:00. Between 08:35 and 09:10 macOS had reset them, probably because the bundle changed from a
   menu bar-only app to a Dock app (`LSUIElement`). If they reset again, run
-  `dist/rec-rs permissions --request`.
-- **Picker prompt.** If macOS shows "Rec is requesting to bypass the system private window
+  `dist/simple-record permissions --request`.
+- **Picker prompt.** If macOS shows "SimpleRecord is requesting to bypass the system private window
   picker", click **Allow**. macOS repeats this periodically for every recorder.
 - **System Events prompt.** If you see a prompt asking whether a terminal process may **control
   "System Events"**, click **Don't Allow**. On 2026-10-11 at about 08:32 I ran a simulated
   keystroke again by mistake, the same thing I had already documented as not to do. It was
-  killed within seconds. Rec never needs that permission.
+  killed within seconds. SimpleRecord never needs that permission.
 
 ## Your manual check (about 3 minutes)
 
-1. Run `open dist/Rec.app`. The Rec window opens with a live preview. Press **⇧⌘R** in any app:
+1. Run `open dist/SimpleRecord.app`. The SimpleRecord window opens with a live preview. Press **⇧⌘R** in any app:
    the menu bar item turns red with a timer. Click **Pause**, then **Resume**, and press
    **⇧⌘R** again to stop. Then click **Reveal Last**.
 2. Open that file in **QuickTime Player** and drag it into **DaVinci Resolve**. Expect one video
@@ -338,10 +338,10 @@ permissions granted. The suite covers:
 | Goal CLI line (`--display 1 --mic default --system-audio --cam --out file.mp4 --duration 10`) | 1080p60 H.264 with 600 frames and 10.000 s; 3 AAC tracks at 10.000 s |
 | Pipeline sync (test pattern flashes and beeps at the same host time) | 8/8 flashes paired, offset **0.0 ms** in the mix and system tracks |
 | Sync across 2 pauses | 0.0 ms in the mix and system tracks; output exactly the requested duration |
-| Pause/resume via `rec-rs pause/resume` | Paused wall time removed from the output; all tracks end within 0.1 ms of each other |
+| Pause/resume via `simple-record pause/resume` | Paused wall time removed from the output; all tracks end within 0.1 ms of each other |
 | Camera-only scene | Webcam full frame, cropped to fill, mirrored |
 | App, scripted (`REC_GUI_SELFTEST=1`) | Preview frames shown; recording; paused=true; preview during recording; menu bar title " 00:03"; saved and probed; settings window opens; preview stops when the window is hidden |
-| App, visual check (captured with rec-rs's own window capture) | Toolbar under a transparent titlebar, live preview, scene picker, sources, meters. Rec's window is absent from its own preview. |
+| App, visual check (captured with simple-record's own window capture) | Toolbar under a transparent titlebar, live preview, scene picker, sources, meters. SimpleRecord's window is absent from its own preview. |
 | `scripts/selftest.sh` | 11/11 pass |
 | 30-minute soak at 4K60 HEVC (screen, system audio, mic, webcam) | 107,955 of 108,000 frames (one 5-s encoder stall, now handled); A/V end within 0.1 ms; CPU 34%; memory flat. See PERFORMANCE.md. |
 | Encoder stall handling | Single 4K60 noise stream: 0 retries, 0 drops. Overload (2–3 streams): files stay valid and timed, with drops only past 0.5 s of backlog. |
@@ -367,12 +367,12 @@ These are tracked in the README under "Known gaps".
 - **2026-10-11 00:30–01:10:** First menu bar app (AppKit) with preview and ⇧⌘R. Fixed the TCC
   disclaim check.
 - **2026-10-11 08:00–09:10:** Re-read the full goal; the first paste had been truncated.
-  - **Housekeeping.** Moved build output to `~/.cache/rec-rs-target` and test media to
-    `~/Movies/rec-rs-tests`, since both had been inside the synced repo. Added the
+  - **Housekeeping.** Moved build output to `~/.cache/simple-record-target` and test media to
+    `~/Movies/simple-record-tests`, since both had been inside the synced repo. Added the
     MIT/Apache-2.0 license.
   - **OBS study.** `analysis/OBS_ARCHITECTURE.md`, plus adopted takeaways: App Nap off,
     latency-critical activity, SCK frame interval at 0.9× the period, 2 s fragments.
-  - **Recording features.** Scenes; sample-accurate pause/resume; exact `--duration`; `rec-rs`
+  - **Recording features.** Scenes; sample-accurate pause/resume; exact `--duration`; `simple-record`
     CLI with the goal's flags and `pause`/`resume` commands.
   - **Sync test.** Flash/beep test pattern and `synccheck.py`.
   - **App rebuilt.** Replaced the AppKit menu bar app with the egui app: main window, settings
@@ -405,5 +405,5 @@ These are tracked in the README under "Known gaps".
   replace checkboxes; a raised-segment Scene control; pop-up chevrons on combos; slider rows
   with aligned label and value columns; full-width Go Live. Sidebar 304 pt. Fixed a latent
   overflow (the ↻ button's padding widened every card below it). Before/after shots at
-  1040×660 and 860×560 in `~/Movies/rec-rs-tests/sidebar/`. Light mode not visually checked
+  1040×660 and 860×560 in `~/Movies/simple-record-tests/sidebar/`. Light mode not visually checked
   (needs the system appearance switched).

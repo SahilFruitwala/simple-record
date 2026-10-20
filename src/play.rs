@@ -1,4 +1,4 @@
-//! `rec-rs play FILE`: show a file in an AVPlayer window (QuickTime's
+//! `simple-record play FILE`: show a file in an AVPlayer window (QuickTime's
 //! engine, with exact audio-output latency compensation). A reference
 //! player for end-to-end sync tests: record its window with system audio
 //! and run scripts/synccheck.py on the result.

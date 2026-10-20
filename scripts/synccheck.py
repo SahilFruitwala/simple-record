@@ -3,7 +3,7 @@
 
 Finds the frames where the picture flashes to white and the onsets of beeps
 in each audio track, pairs each flash with the nearest beep, and reports the
-offset (audio minus video, ms). Sources: `rec-rs record --test-pattern`
+offset (audio minus video, ms). Sources: `simple-record record --test-pattern`
 (pipeline check) or a played-back flash/beep clip (end-to-end capture check).
 
 Usage: synccheck.py FILE [--max-ms 20] [--audio 0,1] [--region x,y,w,h (0..1 fractions)]

@@ -6,18 +6,18 @@
 # Shows scripts/testcard.swift's static text card 1:1 on a 5K (2x) display,
 # behind other windows, takes a lossless `screencapture` of it (converted
 # to sRGB, the color space recordings are made in) as the reference, then
-# records that window with rec-rs in several configurations and scores the
+# records that window with simple-record in several configurations and scores the
 # middle second of each against the reference scaled to the output size
 # with Lanczos: SSIM (Y), PSNR (Y) and VMAF (4K model).
 #
 # A case is NAME:ARGS (ARGS with commas for spaces), recorded with
-# `rec-rs record --window ID --no-mic --no-system-audio -t 4 ARGS`.
+# `simple-record record --window ID --no-mic --no-system-audio -t 4 ARGS`.
 # Stream cases (NAME:stream:ARGS) publish to a local MediaMTX and score the
 # server's recording instead.
 set -eu
 cd "$(dirname "$0")/.."
-REC=${REC:-dist/rec-rs}
-OUT="${REC_TEST_DIR:-$HOME/Movies/rec-rs-tests}/quality"
+REC=${REC:-dist/simple-record}
+OUT="${REC_TEST_DIR:-$HOME/Movies/simple-record-tests}/quality"
 mkdir -p "$OUT"
 CASES=${*:-"4k-auto:-r,4k 4k-prores:-r,4k,--codec,prores 1080-auto:-r,1080p"}
 

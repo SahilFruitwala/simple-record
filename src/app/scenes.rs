@@ -498,7 +498,7 @@ pub fn layers_panel(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) {
     w::divider(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().button_padding.x = 8.0;
-        if ui.button("Export…").on_hover_text("Save as JSON for `rec-rs record --scene-file`").clicked()
+        if ui.button("Export…").on_hover_text("Save as JSON for `simple-record record --scene-file`").clicked()
             && let Some(f) = rfd::FileDialog::new().add_filter("Scene", &["json"]).set_file_name(format!("{}.json", s.custom_scenes[ci].name)).save_file()
         {
             let json = serde_json::to_string_pretty(&s.custom_scenes[ci]).unwrap_or_default();

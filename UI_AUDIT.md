@@ -1,7 +1,7 @@
 # UI audit (2026-10-18)
 
-Method: built `dist/Rec.app` (release), launched it, and drove it with real mouse events and screenshots.
-Screen Recording and Microphone were **not granted** to Rec, so I could not see the live preview, the
+Method: built `dist/SimpleRecord.app` (release), launched it, and drove it with real mouse events and screenshots.
+Screen Recording and Microphone were **not granted** to SimpleRecord, so I could not see the live preview, the
 camera scenes, or a recording in progress. Everything below is visible without those permissions.
 Not covered: recording, the live preview, scene editing, stream destinations, the menu bar item.
 
@@ -20,7 +20,7 @@ Fixed and checked in the running app (screenshots): 1-4, 6-20, 22, 24, 26-30.
   jumps. The window is now 520x600 instead of 520x820.
 - **12** Format, Codec and Folder in the main window show a `›` and open Settings at the matching tab.
 - **13** "1080p" in lower case everywhere. Gains show one decimal, and Settings headings match the sidebar's.
-- **15** Without microphone permission, Rec records without the mic instead of blocking the preview. The Audio
+- **15** Without microphone permission, SimpleRecord records without the mic instead of blocking the preview. The Audio
   card says so and offers Allow… or Open System Settings.
 - **16** On the welcome page, the missing required permission gets the primary button.
   "Continue without Screen Recording" is now a plain button. Not seen in the app: all permissions are now
@@ -45,7 +45,7 @@ Not bugs or not changed:
 - **21** The space around the preview comes from keeping the video's shape. Left as is.
 - **23** Disabled pickers are now clearly dimmer with the new text colours. No separate change.
 - **25** Wrong diagnosis: the crossed-out camera picture was OBS Virtual Camera's own idle image. "Default
-  camera" had picked that device, so it wasn't Rec's placeholder.
+  camera" had picked that device, so it wasn't SimpleRecord's placeholder.
 - **31** The Split template fits the whole screen into half the frame, so the bars are expected. Changing
   it would crop the screen.
 
@@ -82,7 +82,7 @@ Nothing found in the retest is still open. The welcome page (16) was not checked
    off, and so are the Audio bitrate and Camera dropdowns. The Camera Overlay row of shape buttons
    is cut off (the fourth button is half visible). Shadow and Mirror show only a label, with no visible control.
 2. **Main window shows the onboarding page and the full scene panel at once.** The right-hand
-   panel stays live and clickable while "Welcome to Rec" is up. A user can change scene or output
+   panel stays live and clickable while "Welcome to SimpleRecord" is up. A user can change scene or output
    settings before granting any permission.
 3. **Scene labels are truncated:** "Screen + Came", "Camera + Scre". The "Frame" dropdown
    shows "Source sha...". The Screen source dropdown is empty with no placeholder.
@@ -118,13 +118,13 @@ Nothing found in the retest is still open. The welcome page (16) was not checked
 ## Confusing wording
 
 14. **The preview error shows a CLI command to a GUI user:** "run \`rec permissions --request\`,
-    then enable Rec in System Settings > Privacy & Security". Source: `src/record.rs:158`. The banner
+    then enable SimpleRecord in System Settings > Privacy & Security". Source: `src/record.rs:158`. The banner
     below it already has a "Request Permissions" button, so the instruction conflicts with it.
 15. **Microphone is "optional" on onboarding but is listed as a missing permission** in the banner,
     and it is on by default. A user who skipped it is told the preview is unavailable because of it.
 16. **"Continue without Screen Recording" is the blue primary button.** It is the path that
     leaves the app unusable. The primary should be the one that fixes the problem (Allow, or Open
-    System Settings). "Restart Rec" has no explanation of when it is needed.
+    System Settings). "Restart SimpleRecord" has no explanation of when it is needed.
 17. **Jargon without explanation:** "Studio mode", "Frame: Source shape", "Gate opens at",
     "threshold", "Keyframe every", "Tracks: Mix + separate system & mic", "Live encode
     (replay & streaming)". A short hint under each, or hover text, would help.
@@ -150,7 +150,7 @@ Nothing found in the retest is still open. The welcome page (16) was not checked
 
 - No fixes were made. The only change in the working tree besides this file is your own
   uncommitted edit to `src/app/onboarding.rs`, which was included in the build I tested.
-- Re-run the audit after granting Rec Screen Recording and Microphone, to check the preview,
+- Re-run the audit after granting SimpleRecord Screen Recording and Microphone, to check the preview,
   scenes, recording flow and the menu bar item.
 
 ## Found with permissions granted (live preview, scenes, recording)

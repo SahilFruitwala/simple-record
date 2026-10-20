@@ -471,7 +471,7 @@ impl Conn {
                 obj(&[
                     ("app", Amf::Str(u.app.clone())),
                     ("type", Amf::Str("nonprivate".into())),
-                    ("flashVer", Amf::Str("FMLE/3.0 (compatible; rec-rs)".into())),
+                    ("flashVer", Amf::Str("FMLE/3.0 (compatible; simple-record)".into())),
                     ("tcUrl", Amf::Str(u.tc_url.clone())),
                     // Enhanced RTMP: codecs we can send.
                     ("fourCcList", Amf::Array(vec![Amf::Str("hvc1".into()), Amf::Str("avc1".into())])),
@@ -666,7 +666,7 @@ fn run(u: RtmpUrl, key: String, shared: Arc<(Mutex<Shared>, Condvar)>, stop: Arc
                         ("audiocodecid".into(), Amf::Number(10.0)),
                         ("audiosamplerate".into(), Amf::Number(48000.0)),
                         ("stereo".into(), Amf::Bool(true)),
-                        ("encoder".into(), Amf::Str("rec-rs".into())),
+                        ("encoder".into(), Amf::Str("simple-record".into())),
                     ]),
                 ]);
                 let sid = conn.stream_id;

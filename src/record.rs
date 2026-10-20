@@ -40,10 +40,10 @@ impl Shared {
 
 /// Set by SIGINT/SIGTERM/SIGHUP in CLI mode.
 static STOP: AtomicBool = AtomicBool::new(false);
-/// Pause/resume requests (SIGUSR1/SIGUSR2 from `rec-rs pause`/`resume`).
+/// Pause/resume requests (SIGUSR1/SIGUSR2 from `simple-record pause`/`resume`).
 pub static PAUSE_REQ: AtomicBool = AtomicBool::new(false);
 pub static RESUME_REQ: AtomicBool = AtomicBool::new(false);
-/// Save-replay request (SIGINFO from `rec-rs save-replay`).
+/// Save-replay request (SIGINFO from `simple-record save-replay`).
 pub static REPLAY_REQ: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_info_signal(_: libc::c_int) {
@@ -155,7 +155,7 @@ pub fn check_permissions(o: &Options) -> Result<()> {
     }
     if !missing.is_empty() {
         bail!(
-            "missing permission(s): {}\n  run `rec permissions --request`, then enable Rec in System Settings > Privacy & Security",
+            "missing permission(s): {}\n  run `rec permissions --request`, then enable SimpleRecord in System Settings > Privacy & Security",
             missing.join(", ")
         );
     }
@@ -770,7 +770,7 @@ pub fn run(o: Options, target: Option<screen::Target>) -> Result<Stats> {
         pump_main(Duration::from_millis(20));
         // Requests wait for the first frame (the timeline starts there).
         if sess.has_frames() && PAUSE_REQ.swap(false, Ordering::SeqCst) && sess.pause() && !o.quiet {
-            eprint!("\r\x1b[2Krec: paused (`rec-rs resume` to continue)\n");
+            eprint!("\r\x1b[2Krec: paused (`simple-record resume` to continue)\n");
         }
         if sess.has_frames() && RESUME_REQ.swap(false, Ordering::SeqCst) && sess.resume() && !o.quiet {
             eprint!("\r\x1b[2Krec: resumed\n");

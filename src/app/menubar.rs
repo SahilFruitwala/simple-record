@@ -121,7 +121,7 @@ impl MenuBar {
         let stream = item("Go Live", Some(sel!(toggleStream:)), "");
         menu.addItem(&stream);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        menu.addItem(&item("Show Rec Window", Some(sel!(showWindow:)), ""));
+        menu.addItem(&item("Show SimpleRecord Window", Some(sel!(showWindow:)), ""));
         menu.addItem(&item("Settings…", Some(sel!(showSettings:)), ","));
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         let reveal = item("Reveal Last Recording", Some(sel!(revealLast:)), "");
@@ -131,7 +131,7 @@ impl MenuBar {
         let hotkey = item("Global hotkey: ⇧⌘R", None, "");
         hotkey.setEnabled(false);
         menu.addItem(&hotkey);
-        menu.addItem(&item("Quit Rec", Some(sel!(quit:)), "q"));
+        menu.addItem(&item("Quit SimpleRecord", Some(sel!(quit:)), "q"));
         status.setMenu(Some(&menu));
         let mut mb = MenuBar { status, record, pause, reveal, replay, stream, hotkey, _target: target, last: None };
         mb.update(&View { recording: false, paused: false, finishing: false, clock: "", has_last: false, replay: false, live: false });
@@ -208,7 +208,7 @@ impl MenuBar {
         } else {
             ("record.circle", String::new(), false)
         };
-        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns(symbol), Some(&ns("Rec"))) {
+        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns(symbol), Some(&ns("SimpleRecord"))) {
             img.setTemplate(!red);
             button.setImage(Some(&img));
         }
@@ -219,7 +219,7 @@ impl MenuBar {
 }
 
 /// The app's main menu (it has a Dock icon, so it needs a menu bar):
-/// Rec (About, Settings…, Hide, Quit) and Window (Minimize, Close, Show).
+/// SimpleRecord (About, Settings…, Hide, Quit) and Window (Minimize, Close, Show).
 /// Settings, Show and Quit go through `Cmd`s; the rest are standard
 /// first-responder actions.
 pub fn install_main_menu(mtm: MainThreadMarker) -> Retained<Target> {
@@ -245,17 +245,17 @@ pub fn install_main_menu(mtm: MainThreadMarker) -> Retained<Target> {
     let hide_others = item("Hide Others", Some(sel!(hideOtherApplications:)), "h", false);
     hide_others.setKeyEquivalentModifierMask(NSEventModifierFlags::Command | NSEventModifierFlags::Option);
     let (app_item, _) = submenu(
-        "Rec",
+        "SimpleRecord",
         vec![
-            item("About Rec", Some(sel!(orderFrontStandardAboutPanel:)), "", false),
+            item("About SimpleRecord", Some(sel!(orderFrontStandardAboutPanel:)), "", false),
             NSMenuItem::separatorItem(mtm),
             item("Settings…", Some(sel!(showSettings:)), ",", true),
             NSMenuItem::separatorItem(mtm),
-            item("Hide Rec", Some(sel!(hide:)), "h", false),
+            item("Hide SimpleRecord", Some(sel!(hide:)), "h", false),
             hide_others,
             item("Show All", Some(sel!(unhideAllApplications:)), "", false),
             NSMenuItem::separatorItem(mtm),
-            item("Quit Rec", Some(sel!(quit:)), "q", true),
+            item("Quit SimpleRecord", Some(sel!(quit:)), "q", true),
         ],
     );
     let (win_item, win_menu) = submenu(
@@ -264,7 +264,7 @@ pub fn install_main_menu(mtm: MainThreadMarker) -> Retained<Target> {
             item("Minimize", Some(sel!(performMiniaturize:)), "m", false),
             item("Close", Some(sel!(performClose:)), "w", false),
             NSMenuItem::separatorItem(mtm),
-            item("Show Rec Window", Some(sel!(showWindow:)), "0", true),
+            item("Show SimpleRecord Window", Some(sel!(showWindow:)), "0", true),
         ],
     );
     let (help_item, help_menu) = submenu(

@@ -1,6 +1,6 @@
 # Third-party notices
 
-rec-rs is MIT OR Apache-2.0. It is built with these crates, whose licenses
+simple-record is MIT OR Apache-2.0. It is built with these crates, whose licenses
 ask for their notice in binary distributions. (Crates under MIT and/or
 Apache-2.0, such as str0m and the RustCrypto crates `aes`, `ctr`, `pbkdf2`,
 `sha1`, `hmac` and `aes-kw`, carry their notices in their sources.)

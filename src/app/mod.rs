@@ -100,8 +100,8 @@ pub fn push(c: Cmd) {
     wake();
 }
 
-/// SIGINT (`rec-rs stop`) stops the recording; SIGTERM/SIGHUP quit after
-/// saving it. SIGUSR1/2 (`rec-rs pause`/`resume`) use record's flags.
+/// SIGINT (`simple-record stop`) stops the recording; SIGTERM/SIGHUP quit after
+/// saving it. SIGUSR1/2 (`simple-record pause`/`resume`) use record's flags.
 static SIG_STOP: AtomicBool = AtomicBool::new(false);
 static SIG_QUIT: AtomicBool = AtomicBool::new(false);
 extern "C" fn on_sigint(_: libc::c_int) {
@@ -599,7 +599,7 @@ impl App {
             }))
             .expect("no compatible GPU adapter");
             let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("rec-rs"),
+                label: Some("simple-record"),
                 required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 ..Default::default()
             }))
@@ -638,7 +638,7 @@ impl App {
                 }))
                 .expect("no compatible GPU adapter");
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    label: Some("rec-rs"),
+                    label: Some("simple-record"),
                     required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                     ..Default::default()
                 }))
@@ -710,7 +710,7 @@ impl App {
         use winit::platform::macos::WindowAttributesExtMacOS;
         let (w, h) = controls::SIZE;
         let mut attrs = Window::default_attributes()
-            .with_title("Rec Controls")
+            .with_title("SimpleRecord Controls")
             .with_inner_size(winit::dpi::LogicalSize::new(w, h))
             .with_resizable(false)
             .with_decorations(false)
@@ -720,7 +720,7 @@ impl App {
             .with_has_shadow(false)
             .with_accepts_first_mouse(true);
         // Where it was left, else centered near the bottom of the screen
-        // Rec's window is on (above the Dock).
+        // SimpleRecord's window is on (above the Dock).
         let pos = self.controls_pos.or_else(|| {
             let m = self.main.as_ref().and_then(|w| w.window.current_monitor()).or_else(|| el.primary_monitor())?;
             let (mp, ms, k) = (m.position(), m.size(), m.scale_factor());
@@ -744,7 +744,7 @@ impl App {
                 .ok()
                 .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
                 .unwrap_or((1040.0, 660.0));
-            let w = self.open_window(el, "Rec", size, (860.0, 560.0));
+            let w = self.open_window(el, "SimpleRecord", size, (860.0, 560.0));
             if std::env::var("REC_MAIN_SIZE").as_deref() == Ok("full") {
                 w.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
             }
@@ -776,7 +776,7 @@ impl App {
 
     fn show_settings(&mut self, el: &ActiveEventLoop) {
         if self.settings_win.is_none() {
-            let w = self.open_window(el, "Rec Settings", (520.0, 600.0), (460.0, 420.0));
+            let w = self.open_window(el, "SimpleRecord Settings", (520.0, 600.0), (460.0, 420.0));
             self.settings_win = Some(w);
         }
         if let Some(w) = &self.settings_win {
@@ -952,7 +952,7 @@ impl App {
         };
         let (screen, mic, cam) = crate::tcc::report();
         let mut sys = format!(
-            "Rec {}\nmacOS {} ({})\nModel {}\nPermissions: screen {screen}, microphone {mic}, camera {cam}\n",
+            "SimpleRecord {}\nmacOS {} ({})\nModel {}\nPermissions: screen {screen}, microphone {mic}, camera {cam}\n",
             env!("CARGO_PKG_VERSION"),
             run("sw_vers", &["-productVersion"]),
             run("sw_vers", &["-buildVersion"]),
@@ -1089,7 +1089,7 @@ impl App {
         self.st.error = None;
         let file = self.st.settings.new_output_file();
         // The controls open before the capture starts: it leaves out every
-        // window of Rec, found by the windows it has on screen.
+        // window of SimpleRecord, found by the windows it has on screen.
         if self.st.settings.recording_controls {
             self.open_controls(el);
         }
@@ -1246,7 +1246,7 @@ impl App {
                 self.st.recording.as_ref().unwrap().resume();
             }
         }
-        // `rec-rs save-replay` (SIGINFO).
+        // `simple-record save-replay` (SIGINFO).
         if record::REPLAY_REQ.swap(false, Ordering::SeqCst) {
             push(Cmd::SaveReplay);
         }
@@ -1802,5 +1802,5 @@ pub fn run(start_recording: bool, settings: bool, window: Option<u32>) -> Result
 /// layer, whose own text names a command-line tool.
 fn permission_hint(msg: &str) -> Option<String> {
     let list = msg.split("missing permission(s): ").nth(1)?.lines().next()?.trim();
-    Some(format!("Rec needs your permission for: {list}. Click Request Permissions, then turn Rec on in System Settings > Privacy & Security."))
+    Some(format!("SimpleRecord needs your permission for: {list}. Click Request Permissions, then turn SimpleRecord on in System Settings > Privacy & Security."))
 }

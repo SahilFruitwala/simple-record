@@ -665,7 +665,7 @@ pub fn resolve_destination(dest: &str) -> Result<(String, String)> {
     match key {
         Some(k) => Ok((url, k)),
         None if url.starts_with("http") || url.starts_with("srt://") => Ok((url, String::new())),
-        None => anyhow::bail!("no stream key for {url}: set REC_STREAM_KEY or run `rec-rs stream-key {dest}`"),
+        None => anyhow::bail!("no stream key for {url}: set REC_STREAM_KEY or run `simple-record stream-key {dest}`"),
     }
 }
 

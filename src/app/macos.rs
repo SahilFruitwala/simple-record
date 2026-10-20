@@ -95,7 +95,7 @@ pub fn inset_traffic_lights(window: &Window, x: f64, bar_h: f64) {
 
 /// Make a borderless window a floating panel: on every Space and over
 /// full-screen apps, out of ⌘` and the Window menu, and kept out of screen
-/// sharing. (ScreenCaptureKit on macOS 15 ignores the sharing type; Rec's
+/// sharing. (ScreenCaptureKit on macOS 15 ignores the sharing type; SimpleRecord's
 /// own captures leave it out because they exclude the whole app.)
 pub fn make_floating_panel(window: &Window) {
     use objc2_app_kit::{NSWindowCollectionBehavior as B, NSWindowSharingType};
@@ -147,7 +147,7 @@ pub fn open_url(url: &str) {
 /// quits). macOS applies a Screen Recording grant only to a new process.
 pub fn relaunch() {
     let Ok(exe) = std::env::current_exe() else { return };
-    // Inside Rec.app: open the bundle (as Finder would); else the binary.
+    // Inside SimpleRecord.app: open the bundle (as Finder would); else the binary.
     let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf());
     let cmd = match &bundle {
         Some(b) => format!("sleep 1; open \"{}\"", b.display()),
@@ -164,7 +164,7 @@ pub fn open_folder(dir: &std::path::Path) {
 }
 
 /// Dock icon for the running app (the bundle's AppIcon.icns covers Finder;
-/// this also covers `rec-rs gui` outside the bundle and a stale Dock cache).
+/// this also covers `simple-record gui` outside the bundle and a stale Dock cache).
 pub fn set_dock_icon() {
     static ICON: &[u8] = include_bytes!("../../support/icon.png");
     let Some(mtm) = objc2::MainThreadMarker::new() else { return };

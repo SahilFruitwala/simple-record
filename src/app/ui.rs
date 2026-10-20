@@ -79,7 +79,7 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
         .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::symmetric(12, 0)))
         .show(ui, |ui| {
             toolbar(ui, |ui| {
-                ui.label(RichText::new("Rec").font(theme::semibold(BODY)));
+                ui.label(RichText::new("SimpleRecord").font(theme::semibold(BODY)));
                 ui.add_space(6.0);
                 if st.finishing {
                     pill(ui, "SAVING…", p.control, p.secondary);
@@ -263,7 +263,7 @@ fn preview(ui: &mut Ui, st: &mut State) {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Rec quit unexpectedly last time. Reporting it helps fix it.").color(p.text));
+                    ui.label(RichText::new("SimpleRecord quit unexpectedly last time. Reporting it helps fix it.").color(p.text));
                     if ui.button("Report a Problem…").clicked() {
                         st.cmds.push(Cmd::ReportProblem);
                         st.crashed_last_time = false;
@@ -1059,7 +1059,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
         }
         if s.mic_enabled && st.perms().mic != crate::tcc::Status::Granted {
             let asked = st.perms().mic != crate::tcc::Status::NotDetermined;
-            w::hint(ui, "Rec isn't allowed to use the microphone, so it records without it.");
+            w::hint(ui, "SimpleRecord isn't allowed to use the microphone, so it records without it.");
             ui.horizontal(|ui| {
                 if !asked && ui.button("Allow…").clicked() {
                     crate::tcc::request_all(false, true, false, std::time::Duration::ZERO);
@@ -1495,7 +1495,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
             note(ui, &tilde(&crate::logging::log_path()));
 
             section(ui, "RESET");
-            note(ui, "Puts every setting back to how Rec came, except the output folder. Custom scenes and shortcuts are reset too.");
+            note(ui, "Puts every setting back to how SimpleRecord came, except the output folder. Custom scenes and shortcuts are reset too.");
             ui.add_space(4.0);
             if w::confirm_button(ui, "restore-defaults", "Restore Defaults…", "Reset all settings?", "Restore Defaults", true) {
                 s = crate::settings::Settings { output_dir: s.output_dir.clone(), onboarded: s.onboarded, ..Default::default() };

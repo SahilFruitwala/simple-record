@@ -440,24 +440,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rec-rs-portable"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aes-kw",
- "anyhow",
- "clap",
- "ctr",
- "getrandom",
- "libc",
- "nnnoiseless",
- "pbkdf2",
- "serde",
- "serde_json",
- "sha1",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -538,6 +520,24 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "simple-record-portable"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-kw",
+ "anyhow",
+ "clap",
+ "ctr",
+ "getrandom",
+ "libc",
+ "nnnoiseless",
+ "pbkdf2",
+ "serde",
+ "serde_json",
+ "sha1",
 ]
 
 [[package]]

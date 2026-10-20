@@ -35,7 +35,7 @@ use compose::{Corner, PipSpec, Shape};
 use writer::Codec;
 
 #[derive(Parser)]
-#[command(name = "rec-rs", version, about = "Native macOS screen recorder (ScreenCaptureKit + VideoToolbox + AVAssetWriter)")]
+#[command(name = "simple-record", version, about = "Native macOS screen recorder (ScreenCaptureKit + VideoToolbox + AVAssetWriter)")]
 struct Cli {
     /// Without a subcommand, rec starts the menu bar app.
     #[command(subcommand)]
@@ -49,7 +49,7 @@ enum Cmd {
     /// Record the screen (plus system audio, mic, and optional webcam overlay).
     Record(RecordArgs),
     /// The app: window with live preview and sources, settings, menu bar
-    /// item and a global Cmd+Shift+R hotkey (what `open dist/Rec.app` starts).
+    /// item and a global Cmd+Shift+R hotkey (what `open dist/SimpleRecord.app` starts).
     Gui {
         /// Start recording immediately (e.g. from a Login Item or script).
         #[arg(long)]
@@ -57,7 +57,7 @@ enum Cmd {
         /// Open the settings window at launch.
         #[arg(long)]
         settings: bool,
-        /// Capture this window (ID from `rec-rs devices`) instead of the display.
+        /// Capture this window (ID from `simple-record devices`) instead of the display.
         #[arg(long, value_name = "ID")]
         window: Option<u32>,
     },
@@ -77,7 +77,7 @@ enum Cmd {
         #[arg(long)]
         delete: bool,
     },
-    /// Pause the running recording (resume with `rec-rs resume`).
+    /// Pause the running recording (resume with `simple-record resume`).
     Pause,
     /// Resume a paused recording.
     Resume,
@@ -128,7 +128,7 @@ pub struct RecordArgs {
     /// Output file (.mov or .mp4). Default: ~/Movies/rec-<timestamp>.mov
     #[arg(short, long, visible_alias = "out")]
     output: Option<PathBuf>,
-    /// Display number from `rec-rs devices` (1 = main display).
+    /// Display number from `simple-record devices` (1 = main display).
     #[arg(short, long, default_value_t = 1)]
     display: usize,
     /// Record only this region of the display: X,Y,WIDTH,HEIGHT in points
@@ -291,13 +291,13 @@ pub struct RecordArgs {
     #[arg(long, value_name = "MS", default_value_t = 0.0, allow_hyphen_values = true)]
     mic_offset_ms: f64,
     /// Keep the last SECS seconds (15-300) of encoded video and audio in
-    /// memory; `rec-rs save-replay` writes them to an MP4.
+    /// memory; `simple-record save-replay` writes them to an MP4.
     #[arg(long, value_name = "SECS")]
     replay: Option<f64>,
     /// Stream to an RTMP(S) URL, an SRT URL
     /// (srt://host:port?streamid=...&passphrase=...&latency=MS) or a WHIP
     /// endpoint (http(s)://.../whip). youtube and twitch are shortcuts. The
-    /// key comes from $REC_STREAM_KEY or the Keychain (`rec-rs stream-key
+    /// key comes from $REC_STREAM_KEY or the Keychain (`simple-record stream-key
     /// URL`); for SRT it is the stream ID if the URL has none.
     #[arg(long, value_name = "URL")]
     stream: Vec<String>,
@@ -458,7 +458,7 @@ fn live_box(s: &str) -> Result<(usize, usize)> {
     })
 }
 
-/// `rec-rs stream-key DEST`: store (or delete) a stream key in the Keychain.
+/// `simple-record stream-key DEST`: store (or delete) a stream key in the Keychain.
 fn stream_key(dest: &str, delete: bool) -> Result<()> {
     let url = live::destination_url(dest);
     if delete {
@@ -638,7 +638,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
     } else {
         let mut displays = screen::displays()?;
         if a.display == 0 || a.display > displays.len() {
-            bail!("display {} not found: displays are numbered 1..={} (see `rec-rs devices`)", a.display, displays.len());
+            bail!("display {} not found: displays are numbered 1..={} (see `simple-record devices`)", a.display, displays.len());
         }
         let d = displays.swap_remove(a.display - 1);
         let scale = d.pixels.0 as f64 / d.points.0.max(1) as f64;
@@ -763,7 +763,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
 
 /// Parse a `rec record ...` argument list (used by the GUI).
 pub fn parse_record_args(args: &[&str]) -> Result<RecordArgs> {
-    let mut v = vec!["rec-rs", "record"];
+    let mut v = vec!["simple-record", "record"];
     v.extend_from_slice(args);
     match Cli::try_parse_from(v)?.cmd {
         Some(Cmd::Record(a)) => Ok(a),

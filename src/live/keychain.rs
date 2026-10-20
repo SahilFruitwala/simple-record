@@ -4,7 +4,7 @@
 use anyhow::{Result, anyhow};
 use security_framework::passwords;
 
-const SERVICE: &str = "rec-rs stream key";
+const SERVICE: &str = "simple-record stream key";
 
 /// Keychain account for a destination (service id or server URL).
 pub fn account(dest: &str) -> String {
@@ -29,7 +29,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let dest = format!("rec-rs-test://{}", std::process::id());
+        let dest = format!("simple-record-test://{}", std::process::id());
         set(&dest, "sk_live_123").unwrap();
         assert_eq!(get(&dest).as_deref(), Some("sk_live_123"));
         set(&dest, "sk_live_456").unwrap();

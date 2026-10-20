@@ -1,7 +1,7 @@
 # PERFORMANCE
 
 All numbers come from this machine: a MacBook Pro with an M4 Pro, macOS 27, and a Retina
-display at 4112×2658 pixels. Builds are release builds of `rec-rs`.
+display at 4112×2658 pixels. Builds are release builds of `simple-record`.
 
 ## How the numbers are measured
 
@@ -13,7 +13,7 @@ display at 4112×2658 pixels. Builds are release builds of `rec-rs`.
   - Frame count against the expected `duration × 60`.
   - Every gap between consecutive video timestamps; at constant 60 fps each must be 16.667 ms.
   - Per-stream durations, which shows how far apart audio and video end.
-- **AVFoundation.** `rec-rs probe` opens each file with QuickTime's engine and decodes every
+- **AVFoundation.** `simple-record probe` opens each file with QuickTime's engine and decodes every
   sample.
 - **A/V sync** (`scripts/synccheck.py`). The test pattern flashes white and beeps at the same
   host-clock instant once a second. The script pairs each flash frame with the nearest beep
@@ -70,7 +70,7 @@ Soak 1, whose only stall was the encoder's (now handled), and soak 2, a clean 10
 How to read these:
 
 - **Screen-only capture is about 6% of one core at 4K60.** ScreenCaptureKit hands over
-  IOSurface-backed frames, and rec-rs passes them to VideoToolbox without copying or converting
+  IOSurface-backed frames, and simple-record passes them to VideoToolbox without copying or converting
   them.
 - **The webcam overlay is the expensive part, at about 34%.** Each output frame is composited by
   CoreImage on the GPU into a BGRA buffer, and the 4:2:0 conversion then happens in the encoder.
@@ -112,7 +112,7 @@ decoded it with no errors.
 | Sync across two pauses | 0.0 ms |
 | Every 50th audio buffer dropped (a simulated glitching device) | 0.0 ms. The 20 gaps were filled with silence, so audio stays on the capture clock. |
 | Soak 1, 30 min, real devices | All audio tracks end within 0.1 ms of the 1800.000 s video, so there is no drift |
-| End to end through the real capture path: AVPlayer plays a flash/beep clip, rec-rs records its window and system audio | Before the output-latency fix: audio early by 25.0, 15.9 and 16.7 ms (mean about -19 ms). After: +4.0, -0.9, -10.4 and -16.0 ms (mean about -6 ms). |
+| End to end through the real capture path: AVPlayer plays a flash/beep clip, simple-record records its window and system audio | Before the output-latency fix: audio early by 25.0, 15.9 and 16.7 ms (mean about -19 ms). After: +4.0, -0.9, -10.4 and -16.0 ms (mean about -6 ms). |
 
 **Reading the end-to-end numbers.** Flash detection is quantized to the 60 fps capture grid,
 and AVPlayer's frame presentation shifts by up to a frame from run to run. Single runs therefore
@@ -122,7 +122,7 @@ came out 64–81 ms late; ffplay's own A/V sync is looser, so AVPlayer is the re
 
 **Output-latency fix** (commit `f56977a`). ScreenCaptureKit captures system audio when it is
 mixed. It is heard one output latency later, and players schedule audio ahead by that amount so
-it matches the picture. rec-rs now shifts system audio later by the default output device's
+it matches the picture. simple-record now shifts system audio later by the default output device's
 presentation latency, as reported by the CoreAudio HAL: 27.3 ms on the built-in speakers here.
 On Bluetooth headphones the latency is far larger, often 150 ms or more, and without the shift
 the recording would have audio that early. `--system-audio-offset-ms` and `--mic-offset-ms`
@@ -266,5 +266,5 @@ preview_pixels -- --ignored --nocapture` with `REC_PV_SRC`, `REC_PV_OUT`,
 scripts/soak.sh 1800                    # 4K60 + webcam + mic + system audio, 30 min
 scripts/soak.sh 1800 -r 4k --no-mic     # screen + system audio only
 scripts/selftest.sh                     # includes sync, pause, audio-gap and app cases
-REC_DEBUG=1 dist/rec-rs record ...      # prints latencies, encoder retries, gaps filled
+REC_DEBUG=1 dist/simple-record record ...      # prints latencies, encoder retries, gaps filled
 ```

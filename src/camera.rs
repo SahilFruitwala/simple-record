@@ -239,7 +239,7 @@ impl Camera {
                 })
             }
         }
-        .ok_or_else(|| anyhow!("no camera found (see `rec-rs devices`)"))
+        .ok_or_else(|| anyhow!("no camera found (see `simple-record devices`)"))
     }
 
     /// The unique ID of the camera `sel` names (see `device`).
