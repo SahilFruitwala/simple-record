@@ -214,6 +214,8 @@ pub struct State {
     studio_applied: Option<Option<crate::layout::SceneSpec>>,
     /// Permissions as last read, and when (the welcome screen).
     pub perms: Option<(onboarding::Perms, Instant)>,
+    /// Permissions as the app last acted on them (see `permissions_changed`).
+    perms_seen: Option<onboarding::Perms>,
     /// The welcome screen is up.
     pub onboarding: bool,
     /// The Settings window's open tab.
@@ -540,6 +542,7 @@ impl App {
             staged: None,
             studio_applied: None,
             perms: None,
+            perms_seen: None,
             onboarding: false,
             settings_tab: Default::default(),
             layer_drag: None,
@@ -1023,6 +1026,24 @@ impl App {
         self.sync_preview();
     }
 
+    /// A permission was answered (a prompt, System Settings) since the last
+    /// look: the error it caused is stale, and the preview, which was refused
+    /// or opened without the mic or camera, starts again to use it.
+    fn permissions_changed(&mut self) {
+        let now = self.st.perms();
+        let before = self.st.perms_seen.replace(now);
+        if before.is_none_or(|b| b == now) {
+            return;
+        }
+        eprintln!("rec: permissions now: screen {}, microphone {}, camera {}", now.screen, now.mic, now.camera);
+        if self.st.permissions_missing {
+            self.st.permissions_missing = false;
+            self.st.error = None;
+        }
+        // Stale for `sync_preview`: a running preview restarts.
+        self.st.preview_settings = None;
+    }
+
     /// Run a preview session while the window is visible and nothing is
     /// recording; restart it when the settings change.
     fn sync_preview(&mut self) {
@@ -1364,6 +1385,7 @@ impl App {
         for (m, l) in self.st.meters.iter_mut().zip(lv) {
             m.feed(l, dt);
         }
+        self.permissions_changed();
         self.st.onboarding = onboarding::wanted(&mut self.st);
         self.sync_preview();
         self.sync_controls(el);
