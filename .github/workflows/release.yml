@@ -1,9 +1,10 @@
 name: Release
 
 # Builds SimpleRecord.app for Apple Silicon and publishes the .dmg as a GitHub release
-# named after the Cargo.toml version. A merge to main releases v<version> the first time
-# that version lands (bump `version` in Cargo.toml for the next release); pushing a tag
-# v<version> releases it too. Manual runs only upload the .dmg as a workflow artifact.
+# named after the Cargo.toml version. A merge to main releases when the merged PR's body has a
+# line "Release: major", "Release: minor" or "Release: patch": the version is bumped
+# accordingly (committed back to main) and released. No such line (or "Release: none") means
+# no release. Pushing a tag v<version> releases that version too. Manual runs only upload the .dmg as a workflow artifact.
 on:
   push:
     branches: [main]
@@ -12,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
   group: release
@@ -23,23 +25,56 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Bump version from the merged PR
+        id: bump
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].body // ""')
+          level=$(printf '%s\n' "$body" | sed -n 's/^[[:space:]]*[Rr]elease:[[:space:]]*\(major\|minor\|patch\|none\).*/\1/p' | head -1 | tr 'A-Z' 'a-z')
+          echo "PR release level: ${level:-<none given>}"
+          case "$level" in
+            major|minor|patch) ;;
+            *) echo "bumped=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          old=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          IFS=. read -r ma mi pa <<< "$old"
+          case "$level" in
+            major) ma=$((ma + 1)); mi=0; pa=0 ;;
+            minor) mi=$((mi + 1)); pa=0 ;;
+            patch) pa=$((pa + 1)) ;;
+          esac
+          new="$ma.$mi.$pa"
+          sed -i.bak "0,/^version = \"$old\"/s//version = \"$new\"/" Cargo.toml
+          awk -v old="$old" -v new="$new" '
+            /^name = "simple-record"$/ { hit = 1 }
+            hit && $0 == "version = \"" old "\"" { print "version = \"" new "\""; hit = 0; next }
+            { print }' Cargo.lock > Cargo.lock.new && mv Cargo.lock.new Cargo.lock
+          rm -f Cargo.toml.bak
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "Release v$new ($level)"
+          git push origin HEAD:main
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
+          echo "Bumped $old -> $new ($level)"
       - name: Version
         id: version
         run: |
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           case "$GITHUB_REF" in
             refs/tags/v*)
               [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
               echo "publish=true" >> "$GITHUB_OUTPUT" ;;
             refs/heads/main)
-              if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
-                echo "v$v is already released; bump the version in Cargo.toml to release again"
-                echo "publish=false" >> "$GITHUB_OUTPUT"
-              else
-                echo "publish=true" >> "$GITHUB_OUTPUT"
-              fi ;;
+              # Only a merged PR that asked for a release ("Release: major|minor|patch").
+              echo "publish=${{ steps.bump.outputs.bumped }}" >> "$GITHUB_OUTPUT" ;;
             *) echo "publish=false" >> "$GITHUB_OUTPUT" ;;
           esac
       - name: Package
@@ -57,7 +92,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ steps.version.outputs.sha }}
           name: SimpleRecord ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           files: |
