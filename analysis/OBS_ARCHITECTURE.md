@@ -101,7 +101,7 @@ no OBS source code. See section 9 for the licensing position.
   its hardened-runtime posture stays stronger than OBS's.
 - **Action items:**
   - **App Nap.** Add `LSAppNapIsDisabled` to `support/Info.plist`, or hold an
-    `NSProcessInfo beginActivityWithOptions` token while recording. Rec is an `LSUIElement`
+    `NSProcessInfo beginActivityWithOptions` token while recording. SimpleRecord is an `LSUIElement`
     menu-bar app with usually no visible window, exactly the case where App Nap throttles the
     pacer thread's timers.
   - **Camera reactions.** Consider setting `NSCameraReactionEffectGesturesEnabledDefault = false`,
@@ -170,10 +170,10 @@ audio-only source. `mac-sck-common.{h,m}` holds the shared `struct screen_captur
 - **Same zero-copy model.** `src/screen.rs` keeps the newest `CVPixelBuffer` for the
   compositor. It already goes further than OBS: it checks
   `SCStreamFrameInfoStatus == Complete` and excludes rec's own windows.
-- **Frame-interval headroom.** Rec sets `minimumFrameInterval` to exactly 1/fps. OBS's
+- **Frame-interval headroom.** SimpleRecord sets `minimumFrameInterval` to exactly 1/fps. OBS's
   0.9 × headroom stops SCK delivery jitter from causing a missed slot at 60 fps. The idea is
   worth adopting.
-- **Color.** OBS asks for P3 and half-float and converts on the GPU. Rec should tag the SCK color
+- **Color.** OBS asks for P3 and half-float and converts on the GPU. SimpleRecord should tag the SCK color
   space explicitly so CoreImage color-matches correctly into sRGB. Keep 8-bit or `420v`;
   half-float doubles bandwidth and only pays off for HDR or P3 output.
 - **Window resize.** Mirror OBS's handling for `--window`: on a size change, call
@@ -356,7 +356,7 @@ in an autorelease pool on macOS). Each tick:
 
 ### What simple-record does and what we take away
 
-- Rec is pull-based with a lag:
+- SimpleRecord is pull-based with a lag:
   - A pacer thread wakes every half period and calls `emit_until(now - lag)`.
   - For each CFR slot it picks the newest screen and camera buffers at or before the slot,
     composites them with CoreImage on Metal, and duplicates the previous output when nothing new
@@ -417,9 +417,9 @@ in an autorelease pool on macOS). Each tick:
 
 ### What simple-record does and what we take away
 
-- Rec hands IOSurface-backed pixel buffers straight to AVAssetWriter → VT. That is **zero-copy
+- SimpleRecord hands IOSurface-backed pixel buffers straight to AVAssetWriter → VT. That is **zero-copy
   end to end**, strictly better than OBS's readback + `memcpy` path on macOS. Keep it.
-- Rec already matches OBS's recording defaults: a 2 s `MaxKeyFrameIntervalDuration`, no frame
+- SimpleRecord already matches OBS's recording defaults: a 2 s `MaxKeyFrameIntervalDuration`, no frame
   reordering, and `ExpectedSourceFrameRate`.
 - **Quality mode.** OBS's CRF mode (VT `Quality` + spatial AQ) is the better default for local
   files. A `--quality` option mapped to `AVVideoQualityKey` could replace bitrate guessing.
@@ -481,18 +481,18 @@ containers with libavformat. `OBSBasic::AutoRemux` can convert finished recordin
 
 ### What simple-record does and what we take away
 
-- Rec uses AVAssetWriter with `movieFragmentInterval` = 5 s. That gives the same contract as
+- SimpleRecord uses AVAssetWriter with `movieFragmentInterval` = 5 s. That gives the same contract as
   OBS's hybrid mode: playable up to the last fragment after a crash, and a normal movie after
   `finishWriting`. MOV is also OBS's macOS default.
 - **Fragment interval.** OBS fragments every GOP (about 2 s), while rec can lose up to 5 s on a
   crash. Setting the interval to 2 s, aligned with keyint, costs almost nothing.
 - **Crash test.** Add a test that `kill -9`s rec mid-recording and checks the file with
   `rec probe`. It proves the crash-safety claim.
-- **Start alignment.** Rec achieves OBS-style alignment by starting the session at the first CFR
+- **Start alignment.** SimpleRecord achieves OBS-style alignment by starting the session at the first CFR
   slot, with audio on the same host origin (`t0`). Keep a regression test that the first audio
   and video PTS agree within one audio buffer.
 - **Back-pressure.** `isReadyForMoreMediaData` is AVAssetWriter's equivalent of OBS's skipped
-  frames. Rec already counts the resulting drops.
+  frames. SimpleRecord already counts the resulting drops.
 
 ---
 
@@ -524,10 +524,10 @@ containers with libavformat. `OBSBasic::AutoRemux` can convert finished recordin
 
 ### What simple-record does and what we take away
 
-- Rec uses the same principle: `host_now()` (mach time) is the only clock. Video slots and the
+- SimpleRecord uses the same principle: `host_now()` (mach time) is the only clock. Video slots and the
   mixer timeline share one origin, and capture PTS only *place* data; they never *time* output.
 - **Long-recording drift.** OBS's snap-then-reset means long recordings with devices that don't
-  stamp host time can drift up to 70 ms before correcting. Rec's 2 ms snap corrects more often,
+  stamp host time can drift up to 70 ms before correcting. SimpleRecord's 2 ms snap corrects more often,
   which is better for lip-sync but risks clicks. If clicks are reported, the principled fix is a
   slow per-source drift estimator with fractional resampling, not a wider snap. OBS doesn't have
   this either.
@@ -555,7 +555,7 @@ containers with libavformat. `OBSBasic::AutoRemux` can convert finished recordin
 ## Summary: the most useful takeaways for simple-record
 
 1. **Keep the core.** One host clock, a CFR slot grid with duplicate-on-late, a sample-timeline
-   mixer, and a crash-safe fragmented container all match OBS's design. Rec's zero-copy
+   mixer, and a crash-safe fragmented container all match OBS's design. SimpleRecord's zero-copy
    IOSurface → AVAssetWriter/VT path beats OBS's readback + `memcpy` path on macOS.
 2. **Pacing.** Sleep to absolute slot deadlines. Set SCK `minimumFrameInterval` to about 0.9 ×
    the frame period. Split stats into "no new frame" and "pacer late", as OBS splits lagged and

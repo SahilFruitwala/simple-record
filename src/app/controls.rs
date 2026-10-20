@@ -1,6 +1,6 @@
 //! The recording controls: a small floating bar (stop and timer, mic mute,
-//! pause, restart, delete, open Rec, and a grip to move it) shown while a
-//! recording runs. It belongs to Rec, whose windows are left out of every
+//! pause, restart, delete, open SimpleRecord, and a grip to move it) shown while a
+//! recording runs. It belongs to SimpleRecord, whose windows are left out of every
 //! capture, so it never appears in the recording, the preview or a stream.
 
 use std::time::{Duration, Instant};

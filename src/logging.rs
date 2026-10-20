@@ -205,7 +205,7 @@ pub fn redact_settings(json: &str) -> String {
 /// (a description of the machine and devices), the settings with secrets
 /// removed, and macOS crash reports of the last `days` days. Returns it.
 pub fn diagnostics(parent: &Path, system: &str, settings_json: Option<&str>, crash_reports: &Path, days: u64) -> std::io::Result<PathBuf> {
-    let dir = parent.join(format!("Rec Diagnostics {}", timestamp().replace(':', ".")));
+    let dir = parent.join(format!("SimpleRecord Diagnostics {}", timestamp().replace(':', ".")));
     std::fs::create_dir_all(&dir)?;
     for name in [LOG, OLD_LOG] {
         let p = log_dir().join(name);
@@ -281,7 +281,7 @@ mod tests {
         let out = diagnostics(&d, "macOS 15", Some(r#"{"stream_custom_url":"rtmp://h/app?k=secret"}"#), &reports, 7).unwrap();
         assert!(out.join("system.txt").exists());
         assert!(out.join("simple-record-2026-10-18.ips").exists());
-        assert!(!out.join("Safari-2026.ips").exists(), "only Rec's crash reports");
+        assert!(!out.join("Safari-2026.ips").exists(), "only SimpleRecord's crash reports");
         assert!(!std::fs::read_to_string(out.join("settings.json")).unwrap().contains("secret"));
         let _ = std::fs::remove_dir_all(&d);
     }

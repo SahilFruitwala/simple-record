@@ -1,6 +1,6 @@
-<p align="center"><img src="assets/logo/logo.svg" alt="Rec logo" width="128"></p>
+<p align="center"><img src="assets/logo/logo.svg" alt="SimpleRecord logo" width="128"></p>
 
-# Rec (simple-record)
+# SimpleRecord (simple-record)
 
 A simple, fast, reliable screen and camera recorder for macOS, written in Rust, as an alternative
 to OBS for recording YouTube videos. It records the screen, system audio, microphone and webcam
@@ -45,7 +45,7 @@ for its architecture only and no OBS code was copied. See
 
 ## Screenshots
 
-![Rec main window: live preview of the recorded screen, scene picker, sources, record button and level meters](docs/screenshots/main.png)
+![SimpleRecord main window: live preview of the recorded screen, scene picker, sources, record button and level meters](docs/screenshots/main.png)
 
 *The main window: a live preview of exactly what gets recorded (here a window showing a test
 card), the scene picker (Screen, Screen + Cam, Camera), sources, audio, replay buffer and
@@ -62,7 +62,7 @@ is live and baked into the recording. The camera here is a virtual camera with a
 
 | Settings | Menu bar |
 |---|---|
-| ![Settings window: output folder, format, resolution, frame rate, codec, bitrate, audio and camera options](docs/screenshots/settings.png) | ![Menu bar menu: Start Recording (⇧⌘R), Pause, Show Rec Window, Settings, Reveal Last Recording, Open Recordings Folder, Quit](docs/screenshots/menu.png) |
+| ![Settings window: output folder, format, resolution, frame rate, codec, bitrate, audio and camera options](docs/screenshots/settings.png) | ![Menu bar menu: Start Recording (⇧⌘R), Pause, Show SimpleRecord Window, Settings, Reveal Last Recording, Open Recordings Folder, Quit](docs/screenshots/menu.png) |
 
 *The main window and Settings screenshots predate the Scene card's frame shape, screen and
 background controls and the Settings tabs. They are described under [The app](#the-app).*
@@ -77,17 +77,19 @@ the OBS Project. No original OBS code or assets are included in this repository.
 ## Build
 
 ```sh
-./scripts/build.sh          # cargo build --release, then assemble and sign dist/Rec.app
+./scripts/build.sh          # cargo build --release, then assemble and sign dist/SimpleRecord.app
 dist/simple-record --help          # dist/rec is a short alias
 ```
 
-`./scripts/package.sh` also wraps the app in `dist/Rec-<version>-macos-arm64.dmg`. Pushing a tag
-such as `v0.1.0` runs the Release workflow, which builds the DMG and attaches it to a GitHub
-release (ad-hoc signed there, so the first launch needs right-click, Open). `scripts/make-icons.sh`
+`./scripts/package.sh` also wraps the app in `dist/SimpleRecord-<version>-macos-arm64.dmg`, with the
+app's version taken from `Cargo.toml`. Merging to `main` runs the Release workflow, which builds the
+DMG and publishes it as the GitHub release `v<version>` the first time that version lands; bump
+`version` in `Cargo.toml` to release again (pushing a tag such as `v0.2.0` also works). The app is
+ad-hoc signed there, so the first launch needs right-click, Open. `scripts/make-icons.sh`
 regenerates the logo and icons from `assets/logo/make_logo.py`.
 
 Build output goes to `~/.cache/simple-record-target` (`CARGO_TARGET_DIR`), never into the repo,
-because the repo is synced between machines. The script signs `dist/Rec.app` with your Apple
+because the repo is synced between machines. The script signs `dist/SimpleRecord.app` with your Apple
 Development identity, so the macOS privacy grants survive rebuilds. Override it with
 `REC_SIGN_IDENTITY`.
 
@@ -117,35 +119,35 @@ scripts/srt-e2e.sh               # needs ffmpeg with SRT (ffmpeg -protocols | gr
 
 The app's first run shows a welcome screen with each permission's state, an **Allow…**
 button for the system prompt, **Open System Settings** for a permission that was turned down,
-and **Restart Rec** (macOS applies Screen Recording only after a restart). Only Screen
+and **Restart SimpleRecord** (macOS applies Screen Recording only after a restart). Only Screen
 Recording is required, and its button is the prominent one. **Continue without Screen
 Recording** skips the welcome screen. Until Screen Recording is allowed, the record button is
 dimmed and a banner says what is missing, with **Request Permissions** and **Open System
-Settings**. Without the microphone, Rec records without it, and the Audio card says so. From
+Settings**. Without the microphone, SimpleRecord records without it, and the Audio card says so. From
 the command line:
 
 ```sh
 dist/simple-record permissions --request
 ```
 
-Then enable **Rec** under **System Settings → Privacy & Security → Screen & System Audio
+Then enable **SimpleRecord** under **System Settings → Privacy & Security → Screen & System Audio
 Recording**. Microphone and camera are approved from the system prompts.
 
 - `simple-record` re-launches itself with responsibility disclaimed. macOS therefore asks about and
-  remembers the signed **Rec** app rather than your terminal.
-- If macOS asks whether Rec may "bypass the system private window picker", click **Allow**.
+  remembers the signed **SimpleRecord** app rather than your terminal.
+- If macOS asks whether SimpleRecord may "bypass the system private window picker", click **Allow**.
 - `dist/simple-record permissions` shows the current status.
 
 ## The app
 
 ```sh
-open dist/Rec.app          # or: dist/simple-record   (or: dist/simple-record gui [--settings] [--start-recording] [--window ID])
+open dist/SimpleRecord.app          # or: dist/simple-record   (or: dist/simple-record gui [--settings] [--start-recording] [--window ID])
 ```
 
 The **main window** contains:
 
 - **Live preview** of exactly what will be recorded, including the webcam overlay, edge to
-  edge in the source's shape. Rec's own windows are excluded from capture. It is rendered at
+  edge in the source's shape. SimpleRecord's own windows are excluded from capture. It is rendered at
   the preview's exact size in pixels (2x on Retina) with the Lanczos scaler and drawn 1:1,
   without copying frames through the CPU. Settings has a low-power option (half resolution, 15 fps),
   and nothing is drawn while the window is hidden or the screen is locked.
@@ -209,10 +211,10 @@ The **main window** contains:
   shows the GIF in Finder when done. GIFs have no sound.
 - **Recording controls**: while recording, a small floating bar shows the stop button and the
   recorded time, mic mute (with the mic's level), pause/resume, restart, delete and a button
-  that opens the Rec window. Drag it by its grip (⋮); it stays where you leave it until Rec
+  that opens the SimpleRecord window. Drag it by its grip (⋮); it stays where you leave it until SimpleRecord
   quits, on every Space and over full-screen apps. Restart and Delete ask first, then move the
-  take (and its camera file) to the Trash, so it can be put back. The bar is a Rec window, and
-  Rec leaves all of its own windows out of the capture, so it is never in the recording, the
+  take (and its camera file) to the Trash, so it can be put back. The bar is a SimpleRecord window, and
+  SimpleRecord leaves all of its own windows out of the capture, so it is never in the recording, the
   preview or a stream. Mute applies to the file and the streams and isn't saved. Turn the bar
   off in Settings > Video.
 - **Output**: the format, codec and folder at a glance. Click one to change it in Settings.
@@ -257,8 +259,8 @@ recording, except the camera overlay:
 
 Settings persist in `~/Library/Application Support/simple-record/settings.json`.
 
-Rec is a regular app with a Dock icon and an app menu (Settings… ⌘,, Hide ⌘H, Quit ⌘Q, Window ▸
-Minimize, Close, Show Rec Window). Closing the main window keeps Rec running, in the Dock and the
+SimpleRecord is a regular app with a Dock icon and an app menu (Settings… ⌘,, Hide ⌘H, Quit ⌘Q, Window ▸
+Minimize, Close, Show SimpleRecord Window). Closing the main window keeps SimpleRecord running, in the Dock and the
 menu bar, and stops the preview. Clicking the Dock icon brings the window back. Quitting from
 the Dock, the menu or a logout finalizes a running recording first.
 
@@ -283,8 +285,8 @@ devices, the settings without secrets (URL queries cut; stream keys are never in
 recent crash reports to a folder on the Desktop, ready to attach. After a crash, the next
 launch offers it.
 
-The shortcuts are registered system-wide while Rec runs (⇧⌘R records by default; a browser's
-hard reload therefore won't see it until Rec quits). If another app already owns one, Settings
+The shortcuts are registered system-wide while SimpleRecord runs (⇧⌘R records by default; a browser's
+hard reload therefore won't see it until SimpleRecord quits). If another app already owns one, Settings
 says so.
 
 ## Command line

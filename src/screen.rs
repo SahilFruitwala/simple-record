@@ -45,7 +45,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>> {
     match rx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(c)) => Ok(c.0),
         Ok(Err(e)) => bail!(
-            "ScreenCaptureKit refused: {e}\n  -> grant Screen & System Audio Recording to Rec (see `rec permissions`)"
+            "ScreenCaptureKit refused: {e}\n  -> grant Screen & System Audio Recording to SimpleRecord (see `rec permissions`)"
         ),
         Err(_) => bail!("timed out waiting for ScreenCaptureKit shareable content"),
     }

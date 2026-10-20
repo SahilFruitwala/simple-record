@@ -1,6 +1,6 @@
 # Platform support
 
-**Today Rec runs on macOS 15+ on Apple Silicon only.** Windows and Linux builds are not
+**Today SimpleRecord runs on macOS 15+ on Apple Silicon only.** Windows and Linux builds are not
 possible yet. This is an assessment of why, and what a port would take.
 
 ## Why it doesn't build elsewhere

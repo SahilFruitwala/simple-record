@@ -49,7 +49,7 @@ enum Cmd {
     /// Record the screen (plus system audio, mic, and optional webcam overlay).
     Record(RecordArgs),
     /// The app: window with live preview and sources, settings, menu bar
-    /// item and a global Cmd+Shift+R hotkey (what `open dist/Rec.app` starts).
+    /// item and a global Cmd+Shift+R hotkey (what `open dist/SimpleRecord.app` starts).
     Gui {
         /// Start recording immediately (e.g. from a Login Item or script).
         #[arg(long)]

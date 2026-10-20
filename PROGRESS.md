@@ -260,7 +260,7 @@ See "Your manual check" below.
 
 ```sh
 ./scripts/build.sh
-open dist/Rec.app                                  # app: preview, sources, ⇧⌘R, pause, meters, settings
+open dist/SimpleRecord.app                                  # app: preview, sources, ⇧⌘R, pause, meters, settings
 dist/simple-record record --display 1 --mic default --system-audio --cam --out ~/Movies/demo.mp4 --duration 10
 ```
 
@@ -298,13 +298,13 @@ permissions granted. The suite covers:
 - Dock Quit, ⌘Q and logout finalize a running recording first. Self-test `app-dock-quit`
   passes.
 - Your pinned Dock tile showed the generic icon until the app ran, because the Dock had cached
-  it. It shows your icon while Rec runs; after your next login it shows it at all times.
+  it. It shows your icon while SimpleRecord runs; after your next login it shows it at all times.
 
 ## Permissions
 
 | Permission | Status |
 |---|---|
-| Screen & System Audio Recording | granted to **Rec** |
+| Screen & System Audio Recording | granted to **SimpleRecord** |
 | Microphone | granted (re-approved by you after the 09:12 request) |
 | Camera | granted (macOS reset it; requested once on 2026-10-12 at 18:40 and approved) |
 
@@ -314,16 +314,16 @@ permissions granted. The suite covers:
   10:00. Between 08:35 and 09:10 macOS had reset them, probably because the bundle changed from a
   menu bar-only app to a Dock app (`LSUIElement`). If they reset again, run
   `dist/simple-record permissions --request`.
-- **Picker prompt.** If macOS shows "Rec is requesting to bypass the system private window
+- **Picker prompt.** If macOS shows "SimpleRecord is requesting to bypass the system private window
   picker", click **Allow**. macOS repeats this periodically for every recorder.
 - **System Events prompt.** If you see a prompt asking whether a terminal process may **control
   "System Events"**, click **Don't Allow**. On 2026-10-11 at about 08:32 I ran a simulated
   keystroke again by mistake, the same thing I had already documented as not to do. It was
-  killed within seconds. Rec never needs that permission.
+  killed within seconds. SimpleRecord never needs that permission.
 
 ## Your manual check (about 3 minutes)
 
-1. Run `open dist/Rec.app`. The Rec window opens with a live preview. Press **⇧⌘R** in any app:
+1. Run `open dist/SimpleRecord.app`. The SimpleRecord window opens with a live preview. Press **⇧⌘R** in any app:
    the menu bar item turns red with a timer. Click **Pause**, then **Resume**, and press
    **⇧⌘R** again to stop. Then click **Reveal Last**.
 2. Open that file in **QuickTime Player** and drag it into **DaVinci Resolve**. Expect one video
@@ -341,7 +341,7 @@ permissions granted. The suite covers:
 | Pause/resume via `simple-record pause/resume` | Paused wall time removed from the output; all tracks end within 0.1 ms of each other |
 | Camera-only scene | Webcam full frame, cropped to fill, mirrored |
 | App, scripted (`REC_GUI_SELFTEST=1`) | Preview frames shown; recording; paused=true; preview during recording; menu bar title " 00:03"; saved and probed; settings window opens; preview stops when the window is hidden |
-| App, visual check (captured with simple-record's own window capture) | Toolbar under a transparent titlebar, live preview, scene picker, sources, meters. Rec's window is absent from its own preview. |
+| App, visual check (captured with simple-record's own window capture) | Toolbar under a transparent titlebar, live preview, scene picker, sources, meters. SimpleRecord's window is absent from its own preview. |
 | `scripts/selftest.sh` | 11/11 pass |
 | 30-minute soak at 4K60 HEVC (screen, system audio, mic, webcam) | 107,955 of 108,000 frames (one 5-s encoder stall, now handled); A/V end within 0.1 ms; CPU 34%; memory flat. See PERFORMANCE.md. |
 | Encoder stall handling | Single 4K60 noise stream: 0 retries, 0 drops. Overload (2–3 streams): files stay valid and timed, with drops only past 0.5 s of backlog. |

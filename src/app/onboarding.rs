@@ -1,4 +1,4 @@
-//! First run: what Rec needs permission for, each permission's state (live),
+//! First run: what SimpleRecord needs permission for, each permission's state (live),
 //! and the way to grant it: the system prompt, or the right pane of System
 //! Settings when it was denied. Screen Recording takes effect only after a
 //! relaunch, which a button does.
@@ -123,7 +123,7 @@ fn row(ui: &mut Ui, title: &str, why: &str, s: Status, required: bool, always_as
                         }
                     }
                     Offer::OpenSettings => {
-                        if button(ui, "Open System Settings").on_hover_text("Turn Rec on in this list").clicked() {
+                        if button(ui, "Open System Settings").on_hover_text("Turn SimpleRecord on in this list").clicked() {
                             super::macos::open_url(pane);
                         }
                         if always_ask && ui.button("Ask Again").on_hover_text("Show the macOS prompt").clicked() {
@@ -146,11 +146,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.vertical_centered(|ui| {
             ui.set_max_width(560.0);
             ui.add_space(24.0);
-            ui.label(RichText::new("Welcome to Rec").size(26.0).strong());
+            ui.label(RichText::new("Welcome to SimpleRecord").size(26.0).strong());
             ui.add_space(6.0);
             ui.add(
                 egui::Label::new(
-                    RichText::new("macOS asks you to allow what Rec records. Only Screen Recording is required; the microphone and camera are for when you use them.")
+                    RichText::new("macOS asks you to allow what SimpleRecord records. Only Screen Recording is required; the microphone and camera are for when you use them.")
                         .color(p.secondary),
                 )
                 .wrap(),
@@ -162,7 +162,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             row(
                 ui,
                 "Screen & System Audio Recording",
-                "To record your screen, windows and the sound your Mac plays. After you turn Rec on in System Settings, Rec needs to restart.",
+                "To record your screen, windows and the sound your Mac plays. After you turn SimpleRecord on in System Settings, SimpleRecord needs to restart.",
                 perms.screen,
                 true,
                 true,
@@ -185,7 +185,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
                 if perms.screen != Status::Granted {
                     ui.add_space(8.0);
-                    if ui.add(egui::Button::new("Restart Rec").min_size(vec2(0.0, 30.0))).on_hover_text("Screen Recording takes effect after a restart: use this once Rec is on in System Settings").clicked() {
+                    if ui.add(egui::Button::new("Restart SimpleRecord").min_size(vec2(0.0, 30.0))).on_hover_text("Screen Recording takes effect after a restart: use this once SimpleRecord is on in System Settings").clicked() {
                         st.settings.onboarded = true;
                         let _ = st.settings.save();
                         super::macos::relaunch();

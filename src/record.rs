@@ -155,7 +155,7 @@ pub fn check_permissions(o: &Options) -> Result<()> {
     }
     if !missing.is_empty() {
         bail!(
-            "missing permission(s): {}\n  run `rec permissions --request`, then enable Rec in System Settings > Privacy & Security",
+            "missing permission(s): {}\n  run `rec permissions --request`, then enable SimpleRecord in System Settings > Privacy & Security",
             missing.join(", ")
         );
     }

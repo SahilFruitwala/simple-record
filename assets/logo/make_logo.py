@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Rec logo: assets/logo/logo.svg and support/icon.png (1024px).
+"""Generate the SimpleRecord logo: assets/logo/logo.svg and support/icon.png (1024px).
 
 Usage: python3 assets/logo/make_logo.py   (needs Pillow)
 A red record dot inside a timer ring that is open at the top right.
@@ -92,7 +92,7 @@ def build_svg():
     x1, y1 = pt(A1)
     large = 1 if (A1 - A0) > 180 else 0
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <title>Rec</title>
+  <title>SimpleRecord</title>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#34364a"/><stop offset="1" stop-color="#14151c"/>

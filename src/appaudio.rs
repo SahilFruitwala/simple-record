@@ -17,11 +17,11 @@ pub enum AppAudio {
 /// The running apps a capture filter names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pick {
-    /// No filter: every app but Rec.
+    /// No filter: every app but SimpleRecord.
     Everything,
     /// Only these (indices into the running apps).
     Include(Vec<usize>),
-    /// All but these (Rec included).
+    /// All but these (SimpleRecord included).
     Exclude(Vec<usize>),
 }
 
@@ -55,7 +55,7 @@ impl AppAudio {
         }
     }
 
-    /// The filter for these running apps (bundle IDs); `own` is Rec's.
+    /// The filter for these running apps (bundle IDs); `own` is SimpleRecord's.
     pub fn pick(&self, running: &[&str], own: Option<usize>) -> Pick {
         let named = |list: &[String]| -> Vec<usize> { (0..running.len()).filter(|&i| Some(i) != own && list.iter().any(|a| belongs(running[i], a))).collect() };
         match self {
@@ -97,7 +97,7 @@ mod tests {
         // Chrome and its helper, not another app sharing the prefix.
         assert_eq!(AppAudio::Only(vec!["com.google.Chrome".into()]).pick(&RUNNING, own), Pick::Include(vec![1, 2]));
         assert_eq!(AppAudio::Except(vec!["com.apple.Music".into()]).pick(&RUNNING, own), Pick::Exclude(vec![0, 4]));
-        // Rec itself is never included.
+        // SimpleRecord itself is never included.
         assert_eq!(AppAudio::Only(vec!["rs.rec".into()]).pick(&RUNNING, own), Pick::Include(vec![]));
         assert_eq!(AppAudio::Only(vec!["com.not.running".into()]).pick(&RUNNING, own), Pick::Include(vec![]));
     }

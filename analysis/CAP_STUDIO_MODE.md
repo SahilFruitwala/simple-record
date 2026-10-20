@@ -1,12 +1,12 @@
-# Cap Studio Mode: what Rec has and what it would take
+# Cap Studio Mode: what SimpleRecord has and what it would take
 
 Source: <https://cap.so/features/studio-mode> (read 2026-10-20). Cap lists eight Studio Mode
-features. This note compares each one with Rec as it is today and estimates the work for the
+features. This note compares each one with SimpleRecord as it is today and estimates the work for the
 missing ones. Nothing here is implemented.
 
 ## Summary
 
-| Cap feature | Rec today | Gap | Effort |
+| Cap feature | SimpleRecord today | Gap | Effort |
 |---|---|---|---|
 | 4K at 60 fps | Yes: 4K60 (and 120 fps), native 5K capture, Lanczos scaling, H.264/HEVC/ProRes | None | — |
 | Local recording and processing | Yes: everything runs on the Mac; nothing is uploaded unless you stream | None | — |
@@ -35,7 +35,7 @@ The biggest gap. Two steps make sense:
 
 ### 2. Change the layout after recording (partly there)
 
-Today the compositor bakes the scene into the file. To change it later, Rec would also have
+Today the compositor bakes the scene into the file. To change it later, SimpleRecord would also have
 to save each source raw: the screen at native size, each camera (already possible for one
 camera), and cursor and click positions with timestamps. It would also save the scene timeline:
 which scene and layer boxes were used, and when. The editor then re-renders through the same
@@ -53,7 +53,7 @@ Missing pieces, each small:
 
 ### 4. Smart auto-zoom (missing)
 
-- **Live (medium).** ScreenCaptureKit draws the cursor into the frames, so Rec doesn't know
+- **Live (medium).** ScreenCaptureKit draws the cursor into the frames, so SimpleRecord doesn't know
   where it is. It would read the cursor position (`NSEvent.mouseLocation`) and clicks (an
   event tap, which needs the Accessibility permission, or a passive `NSEvent` global monitor
   for clicks), then animate the screen layer's crop in `compose.rs` toward the click with
@@ -61,7 +61,7 @@ Missing pieces, each small:
   2x zoom stays sharp at 1080p. It would work in recordings and streams alike.
 - **Afterwards (large).** Needs the editor and the raw screen recording from point 2. Zoom
   segments would be suggested from the saved clicks and adjusted on the timeline.
-- Related polish from the same data: a smoothed or enlarged cursor drawn by Rec instead of
+- Related polish from the same data: a smoothed or enlarged cursor drawn by SimpleRecord instead of
   ScreenCaptureKit, and hiding the cursor when it is idle.
 
 ### 5. Export formats
@@ -70,12 +70,12 @@ Missing pieces, each small:
   `CGImageDestination` (frame delays, loop count). For short clips; long ones are huge.
 - **Shareable links (out of scope for now).** These need a server to upload to. A middle
   ground is "Upload to…" a service the user picks (YouTube upload API, an S3 bucket), which
-  keeps Rec local-first.
+  keeps SimpleRecord local-first.
 
 ## Not compared
 
 Cap's Instant Mode (cloud links, transcription, comments, team sharing) is a cloud product and
-not a Studio Mode feature. Rec has things Cap's page doesn't list: live streaming to several
+not a Studio Mode feature. SimpleRecord has things Cap's page doesn't list: live streaming to several
 destinations, a replay buffer, studio mode with transitions, chroma key, web page and video
 layers, and global shortcuts.
 

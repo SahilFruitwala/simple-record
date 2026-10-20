@@ -1,13 +1,21 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the macOS app and attach the .dmg to a GitHub release.
+# Builds SimpleRecord.app for Apple Silicon and publishes the .dmg as a GitHub release
+# named after the Cargo.toml version. A merge to main releases v<version> the first time
+# that version lands (bump `version` in Cargo.toml for the next release); pushing a tag
+# v<version> releases it too. Manual runs only upload the .dmg as a workflow artifact.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   macos:
@@ -16,23 +24,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check the tag matches Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Version
+        id: version
         run: |
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != Cargo.toml version v$v"; exit 1; }
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
+              echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            refs/heads/main)
+              if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+                echo "v$v is already released; bump the version in Cargo.toml to release again"
+                echo "publish=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "publish=true" >> "$GITHUB_OUTPUT"
+              fi ;;
+            *) echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+          esac
       - name: Package
         run: scripts/package.sh
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
-          name: Rec-macos-arm64
+          name: SimpleRecord-${{ steps.version.outputs.tag }}-macos-arm64
           path: |
             dist/*.dmg
             dist/*.dmg.sha256
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: SimpleRecord ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           files: |
             dist/*.dmg
