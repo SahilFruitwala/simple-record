@@ -35,7 +35,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           body=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].body // ""')
-          level=$(printf '%s\n' "$body" | sed -n 's/^[[:space:]]*[Rr]elease:[[:space:]]*\(major\|minor\|patch\|none\).*/\1/p' | head -1 | tr 'A-Z' 'a-z')
+          # Portable (BSD/macOS) tools only: BSD sed has no \| alternation or 0,/re/ address.
+          level=$(printf '%s\n' "$body" | tr -d '\r' | grep -iE '^[[:space:]]*release:[[:space:]]*(major|minor|patch|none)' | head -1 | sed -E 's/^[[:space:]]*[Rr][Ee][Ll][Ee][Aa][Ss][Ee]:[[:space:]]*([A-Za-z]+).*/\1/' | tr 'A-Z' 'a-z')
           echo "PR release level: ${level:-<none given>}"
           case "$level" in
             major|minor|patch) ;;
@@ -49,12 +50,13 @@ jobs:
             patch) pa=$((pa + 1)) ;;
           esac
           new="$ma.$mi.$pa"
-          sed -i.bak "0,/^version = \"$old\"/s//version = \"$new\"/" Cargo.toml
+          awk -v old="$old" -v new="$new" '
+            !done && $0 == "version = \"" old "\"" { print "version = \"" new "\""; done = 1; next }
+            { print }' Cargo.toml > Cargo.toml.new && mv Cargo.toml.new Cargo.toml
           awk -v old="$old" -v new="$new" '
             /^name = "simple-record"$/ { hit = 1 }
             hit && $0 == "version = \"" old "\"" { print "version = \"" new "\""; hit = 0; next }
             { print }' Cargo.lock > Cargo.lock.new && mv Cargo.lock.new Cargo.lock
-          rm -f Cargo.toml.bak
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
