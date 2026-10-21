@@ -220,6 +220,8 @@ pub struct State {
     pub onboarding: bool,
     /// The Settings window's open tab.
     pub settings_tab: ui::SettingsTab,
+    /// The main window sidebar's open tab.
+    pub sidebar_tab: ui::SidebarTab,
     /// A layer drag in progress: (layer, grip, its box when the drag
     /// began, the pointer's total movement as fractions of the frame).
     pub layer_drag: Option<(usize, crate::layout::Grip, [f64; 4], [f64; 2])>,
@@ -542,6 +544,7 @@ impl App {
             perms_seen: None,
             onboarding: false,
             settings_tab: Default::default(),
+            sidebar_tab: Default::default(),
             layer_drag: None,
             display_points: vec![],
             region_select: None,

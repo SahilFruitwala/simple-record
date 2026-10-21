@@ -136,6 +136,11 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
             let rect = ui.max_rect();
             let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)));
             inner.set_clip_rect(rect.intersect(ui.clip_rect()));
+            // The tabs stay put above the scrolling cards.
+            egui::Frame::NONE.inner_margin(Margin { left: 16, right: 16, top: 12, bottom: 4 }).show(&mut inner, |ui| {
+                ui.set_max_width(rect.width() - 32.0);
+                ui.add_enabled_ui(!st.onboarding, |ui| sidebar_tabs(ui, st));
+            });
             egui::ScrollArea::vertical().auto_shrink(false).show(&mut inner, |ui| {
                 // 16 pt gutters; the floating scroll bar sits in the right one.
                 egui::Frame::NONE.inner_margin(Margin { left: 16, right: 16, top: 0, bottom: 16 }).show(ui, |ui| {
@@ -865,259 +870,282 @@ fn sources(ui: &mut Ui, st: &mut State) {
     let recording = st.recording.is_some() || st.finishing;
     let idle = !recording;
     let mut s = st.settings.clone();
+    let tab = st.sidebar_tab;
 
-    w::header(ui, Icon::Scene, "Scene");
-    w::card(ui, |ui| {
-        if super::scenes::gallery(ui, st, &mut s, idle) && idle {
-            // Vertical picks 9:16; the next scene goes back.
-            s.follow_scene_canvas();
-        }
-        if s.scene_id().1.is_none() && !st.studio {
-            w::hint(ui, s.scene.description());
-        }
-        w::divider(ui);
-        let composes = st.recording.as_ref().or(st.preview.as_ref()).is_some_and(|r| r.composed());
-
-        // The frame's shape, one click each (it decides the video's size).
-        ui.label(RichText::new("Frame shape").color(p.text)).on_hover_text("The shape of the video: the screen's own, or 16:9 (YouTube), 9:16 (Shorts, Reels), 1:1 or 4:5");
-        let shapes: Vec<(Canvas, &str, bool, &str)> =
-            Canvas::ALL.iter().map(|c| (*c, if *c == Canvas::Source { "Screen" } else { c.label() }, idle, "Stop recording to change the frame shape")).collect();
-        if w::segmented(ui, &mut s.canvas, &shapes) {
-            s.canvas_before = None;
-        }
-        if let Some(before) = s.canvas_before {
-            let name = |c: Canvas| if c == Canvas::Source { "the screen's shape".to_string() } else { c.label().to_string() };
-            w::hint(ui, &format!("{} is made for {}. Picking another scene goes back to {}.", s.scene.label(), name(s.canvas), name(before)));
-        }
-
-        // Screen and Screen + Camera: the screen edge to edge, or on the
-        // background. (The other templates place it themselves.)
-        let template = s.scene_id().1.is_none();
-        if template && matches!(s.scene, Scene::Screen | Scene::ScreenCam) {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Screen").color(p.text));
-            // From edge to edge to inset needs the compositor: not mid-recording
-            // on the plain screen.
-            let can = idle || composes;
-            let mut on_bg = s.background.inset > 0.0;
-            let opts = [(false, "Full frame", can, "Stop recording to change this"), (true, "On background", can, "Stop recording to change this")];
-            if w::segmented(ui, &mut on_bg, &opts) {
-                s.background.inset = if on_bg { Background::DEFAULT_INSET } else { 0.0 };
+    if tab == SidebarTab::Layout {
+        w::header(ui, Icon::Scene, "Scene");
+        w::card(ui, |ui| {
+            if super::scenes::gallery(ui, st, &mut s, idle) && idle {
+                // Vertical picks 9:16; the next scene goes back.
+                s.follow_scene_canvas();
             }
-            if on_bg {
-                w::field(ui, "Spacing", 72.0, |ui| {
-                    let mut pct = s.background.inset * 100.0;
-                    ui.spacing_mut().slider_width = (ui.available_width() - 48.0).max(40.0);
-                    if ui.add_enabled(can, egui::Slider::new(&mut pct, 2.0..=15.0).step_by(0.5).show_value(false)).changed() {
-                        s.background.inset = pct / 100.0;
+            if s.scene_id().1.is_none() && !st.studio {
+                w::hint(ui, s.scene.description());
+            }
+            w::divider(ui);
+            let composes = st.recording.as_ref().or(st.preview.as_ref()).is_some_and(|r| r.composed());
+
+            // The frame's shape, one click each (it decides the video's size).
+            ui.label(RichText::new("Frame shape").color(p.text)).on_hover_text("The shape of the video: the screen's own, or 16:9 (YouTube), 9:16 (Shorts, Reels), 1:1 or 4:5");
+            let shapes: Vec<(Canvas, &str, bool, &str)> =
+                Canvas::ALL.iter().map(|c| (*c, if *c == Canvas::Source { "Screen" } else { c.label() }, idle, "Stop recording to change the frame shape")).collect();
+            if w::segmented(ui, &mut s.canvas, &shapes) {
+                s.canvas_before = None;
+            }
+            if let Some(before) = s.canvas_before {
+                let name = |c: Canvas| if c == Canvas::Source { "the screen's shape".to_string() } else { c.label().to_string() };
+                w::hint(ui, &format!("{} is made for {}. Picking another scene goes back to {}.", s.scene.label(), name(s.canvas), name(before)));
+            }
+
+            // Screen and Screen + Camera: the screen edge to edge, or on the
+            // background. (The other templates place it themselves.)
+            let template = s.scene_id().1.is_none();
+            if template && matches!(s.scene, Scene::Screen | Scene::ScreenCam) {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Screen").color(p.text));
+                // From edge to edge to inset needs the compositor: not mid-recording
+                // on the plain screen.
+                let can = idle || composes;
+                let mut on_bg = s.background.inset > 0.0;
+                let opts = [(false, "Full frame", can, "Stop recording to change this"), (true, "On background", can, "Stop recording to change this")];
+                if w::segmented(ui, &mut on_bg, &opts) {
+                    s.background.inset = if on_bg { Background::DEFAULT_INSET } else { 0.0 };
+                }
+                if on_bg {
+                    w::field(ui, "Spacing", 72.0, |ui| {
+                        let mut pct = s.background.inset * 100.0;
+                        ui.spacing_mut().slider_width = (ui.available_width() - 48.0).max(40.0);
+                        if ui.add_enabled(can, egui::Slider::new(&mut pct, 2.0..=15.0).step_by(0.5).show_value(false)).changed() {
+                            s.background.inset = pct / 100.0;
+                        }
+                        w::slot(ui, 40.0, Align::Max, RichText::new(format!("{pct:.0}%")).size(SECONDARY + 1.0).color(p.secondary));
+                    });
+                }
+            }
+
+            // Live, also while recording (like the transition).
+            ui.add_space(4.0);
+            ui.label(RichText::new("Background").color(p.text)).on_hover_text("Fills what the scene doesn't cover");
+            let covered = template && s.canvas == Canvas::Source && (s.scene == Scene::Cam || (matches!(s.scene, Scene::Screen | Scene::ScreenCam) && s.background.inset == 0.0));
+            if covered {
+                w::hint(ui, if s.scene == Scene::Cam { "Hidden: the camera fills the frame." } else { "Hidden: the screen fills the frame. Choose On background to show it." });
+            }
+            background_picker(ui, &mut s.background, false);
+            w::divider(ui);
+
+            // Studio mode needs a session that composes (any scene but the
+            // plain screen, or a camera).
+            w::row(ui, "Studio mode", |ui| {
+                let mut on = st.studio;
+                if w::switch(ui, &mut on, composes || st.studio).on_hover_text("Set up the next scene in the preview, then switch to it with Transition").changed() {
+                    st.studio = on;
+                    st.staged = None;
+                }
+            });
+            if st.studio {
+                let staged = st.staged.unwrap_or(s.scene_id());
+                let differs = staged != s.scene_id();
+                ui.horizontal(|ui| {
+                    let b = egui::Button::new(RichText::new("Transition ▸").font(theme::semibold(BODY)).color(Color32::WHITE)).fill(if differs { theme::accent() } else { p.control }).corner_radius(7).min_size(vec2(0.0, 28.0));
+                    if ui.add_enabled(differs, b).on_hover_text("Make the staged scene the program, with the transition").clicked() {
+                        s.show(staged);
                     }
-                    w::slot(ui, 40.0, Align::Max, RichText::new(format!("{pct:.0}%")).size(SECONDARY + 1.0).color(p.secondary));
+                    ui.label(RichText::new("Click a scene to stage it; ● marks the program.").size(SECONDARY).color(p.secondary));
                 });
             }
-        }
-
-        // Live, also while recording (like the transition).
-        ui.add_space(4.0);
-        ui.label(RichText::new("Background").color(p.text)).on_hover_text("Fills what the scene doesn't cover");
-        let covered = template && s.canvas == Canvas::Source && (s.scene == Scene::Cam || (matches!(s.scene, Scene::Screen | Scene::ScreenCam) && s.background.inset == 0.0));
-        if covered {
-            w::hint(ui, if s.scene == Scene::Cam { "Hidden: the camera fills the frame." } else { "Hidden: the screen fills the frame. Choose On background to show it." });
-        }
-        background_picker(ui, &mut s.background, false);
-        w::divider(ui);
-
-        // Studio mode needs a session that composes (any scene but the
-        // plain screen, or a camera).
-        w::row(ui, "Studio mode", |ui| {
-            let mut on = st.studio;
-            if w::switch(ui, &mut on, composes || st.studio).on_hover_text("Set up the next scene in the preview, then switch to it with Transition").changed() {
-                st.studio = on;
-                st.staged = None;
-            }
         });
-        if st.studio {
-            let staged = st.staged.unwrap_or(s.scene_id());
-            let differs = staged != s.scene_id();
-            ui.horizontal(|ui| {
-                let b = egui::Button::new(RichText::new("Transition ▸").font(theme::semibold(BODY)).color(Color32::WHITE)).fill(if differs { theme::accent() } else { p.control }).corner_radius(7).min_size(vec2(0.0, 28.0));
-                if ui.add_enabled(differs, b).on_hover_text("Make the staged scene the program, with the transition").clicked() {
-                    s.show(staged);
-                }
-                ui.label(RichText::new("Click a scene to stage it; ● marks the program.").size(SECONDARY).color(p.secondary));
-            });
-        }
-    });
-
-    w::header(ui, Icon::Display, "Screen");
-    w::card(ui, |ui| {
-        let mut displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
-        if displays.is_empty() {
-            let why = if st.permissions_missing { "Screen Recording not allowed" } else { "No display found" };
-            displays.push((s.display, why.to_string()));
-        }
-        combo(ui, "display", &mut s.display, &displays, idle);
-        // What to record on the display: all of it, one app's windows, or
-        // one window.
-        #[derive(Clone, PartialEq)]
-        enum Pick {
-            Display,
-            App(String),
-            Window(u32),
-        }
-        let mut targets: Vec<(Pick, String)> = vec![(Pick::Display, "Entire display".into())];
-        targets.extend(st.apps.iter().map(|(id, name)| (Pick::App(id.clone()), format!("App: {name} (all windows)"))));
-        targets.extend(st.windows.iter().map(|(id, l)| (Pick::Window(*id), l.clone())));
-        if let Some(a) = &s.app
-            && !st.apps.iter().any(|(id, _)| id == a)
-        {
-            targets.push((Pick::App(a.clone()), format!("App: {a} (not running)")));
-        }
-        let mut pick = match (&s.window, &s.app) {
-            (Some(w), _) => Pick::Window(*w),
-            (None, Some(a)) => Pick::App(a.clone()),
-            _ => Pick::Display,
-        };
-        ui.horizontal(|ui| {
-            let bw = 26.0;
-            ui.allocate_ui(vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0), |ui| {
-                if combo(ui, "window", &mut pick, &targets, idle) {
-                    (s.window, s.app) = match &pick {
-                        Pick::Display => (None, None),
-                        Pick::App(a) => (None, Some(a.clone())),
-                        Pick::Window(w) => (Some(*w), None),
-                    };
-                }
-            });
-            // Tight padding so the button is exactly `bw` wide: a wider row
-            // would widen every card below it.
-            ui.spacing_mut().button_padding.x = 4.0;
-            if ui.add_enabled(idle, egui::Button::new("↻").min_size(vec2(bw, 24.0))).on_hover_text("Refresh windows and devices").clicked() {
-                st.refresh_devices = true;
-            }
-        });
-        if s.window.is_none() && s.app.is_none() {
-            w::row(ui, "Area", |ui| {
-                if st.region_select.is_some() {
-                    if ui.button("Cancel").clicked()
-                        && let Some(RegionSelect { before, .. }) = st.region_select.take()
-                    {
-                        s.region = before;
-                    }
-                    ui.label(RichText::new("Drag in the preview").size(SECONDARY).color(p.secondary));
-                } else {
-                    if s.region.is_some() && ui.add_enabled(idle, egui::Button::new("Whole")).on_hover_text("Record the entire display").clicked() {
-                        s.region = None;
-                    }
-                    if ui.add_enabled(idle, egui::Button::new(if s.region.is_some() { "Change…" } else { "Select…" })).on_hover_text("Record part of the display: drag over it in the preview").clicked() {
-                        st.region_select = Some(RegionSelect { before: s.region, ..Default::default() });
-                        s.region = None;
-                    }
-                    let text = match s.region {
-                        Some([_, _, w, h]) => format!("{w:.0} × {h:.0} pt"),
-                        None => "Entire display".into(),
-                    };
-                    ui.label(RichText::new(text).size(SECONDARY).color(p.secondary));
-                }
-            });
-        }
-    });
-
-    w::header(ui, Icon::Camera, "Camera");
-    w::card(ui, |ui| {
-        let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
-        cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
-        let uses_cam = s.scene_spec().uses_cam();
-        // A custom scene can add the camera as a layer: pick it first.
-        let custom = s.scene_id().1.is_some();
-        combo(ui, "camera", &mut s.camera, &cams, idle && (uses_cam || custom));
-        if uses_cam {
-            w::row(ui, "Resolution", |ui| {
-                let opts: Vec<(crate::camera::CamRes, String)> = crate::camera::CamRes::ALL.iter().map(|r| (*r, r.label().to_string())).collect();
-                ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, "cam-res", &mut s.camera_resolution, &opts, idle));
-            });
-            w::row(ui, "Save camera separately", |ui| w::switch(ui, &mut s.camera_file, idle))
-                .on_hover_text("Also write the webcam alone to …-camera.mov, on the recording's timeline");
-        }
-        if !uses_cam {
-            w::hint(ui, if custom { "Add a Camera layer below to use the webcam." } else { "Pick a camera scene to use the webcam." });
-        }
-    });
-    if s.scene_id().1.is_some() {
-        w::header(ui, Icon::Overlay, "Layers");
-        w::card(ui, |ui| super::scenes::layers_panel(ui, st, &mut s, idle));
-    } else if s.scene.has_pip() {
-        w::header(ui, Icon::Overlay, "Camera Overlay");
-        w::card(ui, |ui| overlay_controls(ui, &mut s));
     }
 
-    w::header(ui, Icon::Audio, "Audio");
-    w::card(ui, |ui| {
-        w::row(ui, "System audio", |ui| w::switch(ui, &mut s.system_audio, idle));
-        if s.system_audio {
-            app_audio(ui, st, &mut s.app_audio, idle);
-        }
-        w::divider(ui);
-        w::row(ui, "Microphone", |ui| w::switch(ui, &mut s.mic_enabled, idle));
-        let mics = mic_options(st, &s);
-        if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
-            s.mic_name = mic_label(&mics, &s.mic);
-        }
-        if s.mic_enabled && st.perms().mic != crate::tcc::Status::Granted {
-            let asked = st.perms().mic != crate::tcc::Status::NotDetermined;
-            w::hint(ui, "SimpleRecord isn't allowed to use the microphone, so it records without it.");
+    if tab == SidebarTab::Record {
+        w::header(ui, Icon::Display, "Screen");
+        w::card(ui, |ui| {
+            let mut displays: Vec<(usize, String)> = st.displays.iter().enumerate().map(|(i, d)| (i + 1, d.clone())).collect();
+            if displays.is_empty() {
+                let why = if st.permissions_missing { "Screen Recording not allowed" } else { "No display found" };
+                displays.push((s.display, why.to_string()));
+            }
+            combo(ui, "display", &mut s.display, &displays, idle);
+            // What to record on the display: all of it, one app's windows, or
+            // one window.
+            #[derive(Clone, PartialEq)]
+            enum Pick {
+                Display,
+                App(String),
+                Window(u32),
+            }
+            let mut targets: Vec<(Pick, String)> = vec![(Pick::Display, "Entire display".into())];
+            targets.extend(st.apps.iter().map(|(id, name)| (Pick::App(id.clone()), format!("App: {name} (all windows)"))));
+            targets.extend(st.windows.iter().map(|(id, l)| (Pick::Window(*id), l.clone())));
+            if let Some(a) = &s.app
+                && !st.apps.iter().any(|(id, _)| id == a)
+            {
+                targets.push((Pick::App(a.clone()), format!("App: {a} (not running)")));
+            }
+            let mut pick = match (&s.window, &s.app) {
+                (Some(w), _) => Pick::Window(*w),
+                (None, Some(a)) => Pick::App(a.clone()),
+                _ => Pick::Display,
+            };
             ui.horizontal(|ui| {
-                if !asked && ui.button("Allow…").clicked() {
-                    crate::tcc::request_all(false, true, false, std::time::Duration::ZERO);
-                }
-                if asked && ui.button("Open System Settings").clicked() {
-                    super::macos::open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+                let bw = 26.0;
+                ui.allocate_ui(vec2(ui.available_width() - bw - ui.spacing().item_spacing.x, 24.0), |ui| {
+                    if combo(ui, "window", &mut pick, &targets, idle) {
+                        (s.window, s.app) = match &pick {
+                            Pick::Display => (None, None),
+                            Pick::App(a) => (None, Some(a.clone())),
+                            Pick::Window(w) => (Some(*w), None),
+                        };
+                    }
+                });
+                // Tight padding so the button is exactly `bw` wide: a wider row
+                // would widen every card below it.
+                ui.spacing_mut().button_padding.x = 4.0;
+                if ui.add_enabled(idle, egui::Button::new("↻").min_size(vec2(bw, 24.0))).on_hover_text("Refresh windows and devices").clicked() {
+                    st.refresh_devices = true;
                 }
             });
-        }
-        if s.mic_enabled {
-            // Live, also while recording.
+            if s.window.is_none() && s.app.is_none() {
+                w::row(ui, "Area", |ui| {
+                    if st.region_select.is_some() {
+                        if ui.button("Cancel").clicked()
+                            && let Some(RegionSelect { before, .. }) = st.region_select.take()
+                        {
+                            s.region = before;
+                        }
+                        ui.label(RichText::new("Drag in the preview").size(SECONDARY).color(p.secondary));
+                    } else {
+                        if s.region.is_some() && ui.add_enabled(idle, egui::Button::new("Whole")).on_hover_text("Record the entire display").clicked() {
+                            s.region = None;
+                        }
+                        if ui.add_enabled(idle, egui::Button::new(if s.region.is_some() { "Change…" } else { "Select…" })).on_hover_text("Record part of the display: drag over it in the preview").clicked() {
+                            st.region_select = Some(RegionSelect { before: s.region, ..Default::default() });
+                            s.region = None;
+                        }
+                        let text = match s.region {
+                            Some([_, _, w, h]) => format!("{w:.0} × {h:.0} pt"),
+                            None => "Entire display".into(),
+                        };
+                        ui.label(RichText::new(text).size(SECONDARY).color(p.secondary));
+                    }
+                });
+            }
+        });
+
+        w::header(ui, Icon::Camera, "Camera");
+        w::card(ui, |ui| {
+            let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];
+            cams.extend(st.cameras.iter().map(|d| (Some(d.id.clone()), d.name.clone())));
+            let uses_cam = s.scene_spec().uses_cam();
+            // A custom scene can add the camera as a layer: pick it first.
+            let custom = s.scene_id().1.is_some();
+            combo(ui, "camera", &mut s.camera, &cams, idle && (uses_cam || custom));
+            if uses_cam {
+                w::row(ui, "Resolution", |ui| {
+                    let opts: Vec<(crate::camera::CamRes, String)> = crate::camera::CamRes::ALL.iter().map(|r| (*r, r.label().to_string())).collect();
+                    ui.allocate_ui(vec2(90.0, 24.0), |ui| combo(ui, "cam-res", &mut s.camera_resolution, &opts, idle));
+                });
+                w::row(ui, "Save camera separately", |ui| w::switch(ui, &mut s.camera_file, idle))
+                    .on_hover_text("Also write the webcam alone to …-camera.mov, on the recording's timeline");
+            }
+            if !uses_cam && custom {
+                w::hint(ui, "Add a Camera layer in Layout to use the webcam.");
+            } else if !uses_cam {
+                w::hint(ui, "The webcam isn't in this recording.");
+                // One click to the common case; other layouts are under Layout.
+                if ui.add_enabled(idle, egui::Button::new("Add Camera")).on_hover_text("Show the webcam in a corner of the screen. More layouts are in the Layout tab.").clicked() {
+                    s.show((Scene::ScreenCam, None));
+                    s.follow_scene_canvas();
+                }
+            }
+        });
+    }
+    if tab == SidebarTab::Layout {
+        if s.scene_id().1.is_some() {
+            w::header(ui, Icon::Overlay, "Layers");
+            w::card(ui, |ui| super::scenes::layers_panel(ui, st, &mut s, idle));
+        } else if s.scene.has_pip() {
+            w::header(ui, Icon::Overlay, "Camera Overlay");
+            w::card(ui, |ui| overlay_controls(ui, &mut s));
+    }
+    }
+
+    if tab == SidebarTab::Record {
+
+        w::header(ui, Icon::Audio, "Audio");
+        w::card(ui, |ui| {
+            w::row(ui, "System audio", |ui| w::switch(ui, &mut s.system_audio, idle));
+            if s.system_audio {
+                app_audio(ui, st, &mut s.app_audio, idle);
+            }
             w::divider(ui);
-            let f = &mut s.mic_filters;
-            w::row(ui, "Noise suppression", |ui| w::switch(ui, &mut f.denoise, true)).on_hover_text("Removes fans, hum and keyboard noise (RNNoise)");
-            w::row(ui, "Noise gate", |ui| w::switch(ui, &mut f.gate, true)).on_hover_text("Silences the mic between words");
-            w::row(ui, "Compressor", |ui| w::switch(ui, &mut f.compressor, true)).on_hover_text("Evens out loud and quiet speech");
-            w::row(ui, "Low cut (80 Hz)", |ui| w::switch(ui, &mut f.low_cut, true)).on_hover_text("Removes rumble and desk knocks");
-        }
-    });
-
-    w::header(ui, Icon::Output, "Output");
-    w::card(ui, |ui| {
-        let codec = s.codec.map_or("Auto".to_string(), |c| format!("{c:?}").replace("H264", "H.264").replace("Hevc", "HEVC").replace("Prores", "ProRes 422"));
-        // Each row opens Settings at the tab that changes it.
-        let mut open = None;
-        let mut link_row = |ui: &mut Ui, label: &str, text: String, tab: SettingsTab| {
-            let r = ui.scope(|ui| {
-                w::row(ui, label, |ui| {
-                    ui.label(RichText::new("›").size(BODY + 2.0).color(p.tertiary));
-                    ui.add(egui::Label::new(RichText::new(&text).color(p.secondary)).truncate());
-                })
-            });
-            let resp = ui.interact(r.response.rect, ui.id().with(("out-row", label)), Sense::click());
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            w::row(ui, "Microphone", |ui| w::switch(ui, &mut s.mic_enabled, idle));
+            let mics = mic_options(st, &s);
+            if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
+                s.mic_name = mic_label(&mics, &s.mic);
             }
-            if resp.on_hover_text(format!("{text}  (click to change in Settings)")).clicked() {
-                open = Some(tab);
+            if s.mic_enabled && st.perms().mic != crate::tcc::Status::Granted {
+                let asked = st.perms().mic != crate::tcc::Status::NotDetermined;
+                w::hint(ui, "SimpleRecord isn't allowed to use the microphone, so it records without it.");
+                ui.horizontal(|ui| {
+                    if !asked && ui.button("Allow…").clicked() {
+                        crate::tcc::request_all(false, true, false, std::time::Duration::ZERO);
+                    }
+                    if asked && ui.button("Open System Settings").clicked() {
+                        super::macos::open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+                    }
+                });
             }
-        };
-        let res = if s.resolution == "4k" { "4K".to_string() } else { s.resolution.clone() };
-        link_row(ui, "Format", format!("{res} · {} fps", s.fps), SettingsTab::Video);
-        w::divider(ui);
-        link_row(ui, "Codec", format!("{codec} · .{}", s.container), SettingsTab::Video);
-        w::divider(ui);
-        link_row(ui, "Folder", tilde(&s.output_dir), SettingsTab::General);
-        if let Some(tab) = open {
-            st.settings_tab = tab;
-            st.cmds.push(Cmd::ShowSettings);
-        }
-    });
+            if s.mic_enabled {
+                // Live, also while recording.
+                w::divider(ui);
+                let f = &mut s.mic_filters;
+                // Folded: most people set these once, if ever.
+                let on = [f.denoise, f.gate, f.compressor, f.low_cut].iter().filter(|b| **b).count();
+                egui::CollapsingHeader::new(RichText::new(format!("Voice filters · {on} on")).color(p.text)).id_salt("voice-filters").show(ui, |ui| {
+                    w::row(ui, "Noise suppression", |ui| w::switch(ui, &mut f.denoise, true)).on_hover_text("Removes fans, hum and keyboard noise (RNNoise)");
+                    w::row(ui, "Noise gate", |ui| w::switch(ui, &mut f.gate, true)).on_hover_text("Silences the mic between words");
+                    w::row(ui, "Compressor", |ui| w::switch(ui, &mut f.compressor, true)).on_hover_text("Evens out loud and quiet speech");
+                    w::row(ui, "Low cut (80 Hz)", |ui| w::switch(ui, &mut f.low_cut, true)).on_hover_text("Removes rumble and desk knocks");
+                });
+            }
+        });
 
-    live_controls(ui, st, &mut s);
+        w::header(ui, Icon::Output, "Output");
+        w::card(ui, |ui| {
+            let codec = s.codec.map_or("Auto".to_string(), |c| format!("{c:?}").replace("H264", "H.264").replace("Hevc", "HEVC").replace("Prores", "ProRes 422"));
+            // Each row opens Settings at the tab that changes it.
+            let mut open = None;
+            let mut link_row = |ui: &mut Ui, label: &str, text: String, tab: SettingsTab| {
+                let r = ui.scope(|ui| {
+                    w::row(ui, label, |ui| {
+                        ui.label(RichText::new("›").size(BODY + 2.0).color(p.tertiary));
+                        ui.add(egui::Label::new(RichText::new(&text).color(p.secondary)).truncate());
+                    })
+                });
+                let resp = ui.interact(r.response.rect, ui.id().with(("out-row", label)), Sense::click());
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if resp.on_hover_text(format!("{text}  (click to change in Settings)")).clicked() {
+                    open = Some(tab);
+                }
+            };
+            let res = if s.resolution == "4k" { "4K".to_string() } else { s.resolution.clone() };
+            link_row(ui, "Format", format!("{res} · {} fps", s.fps), SettingsTab::Video);
+            w::divider(ui);
+            link_row(ui, "Codec", format!("{codec} · .{}", s.container), SettingsTab::Video);
+            w::divider(ui);
+            link_row(ui, "Folder", tilde(&s.output_dir), SettingsTab::General);
+            if let Some(tab) = open {
+                st.settings_tab = tab;
+                st.cmds.push(Cmd::ShowSettings);
+            }
+        });
+    }
+
+    if tab == SidebarTab::Live {
+        live_controls(ui, st, &mut s);
+    }
 
     if s != st.settings {
         st.settings = s;
@@ -1301,6 +1329,22 @@ fn destination(ui: &mut Ui, st: &mut State, i: usize, dest: &mut String, custom_
             }
         });
     }
+}
+
+/// The main window sidebar's tabs: what to record, its layout, and
+/// going live. Most people only need the first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SidebarTab {
+    #[default]
+    Record,
+    Layout,
+    Live,
+}
+
+fn sidebar_tabs(ui: &mut Ui, st: &mut State) {
+    let live = if st.streaming() { "Live ●" } else { "Live" };
+    let tabs = [(SidebarTab::Record, "Record", true, ""), (SidebarTab::Layout, "Layout", true, ""), (SidebarTab::Live, live, true, "")];
+    w::segmented(ui, &mut st.sidebar_tab, &tabs);
 }
 
 /// The Settings window's tabs, in toolbar order.
