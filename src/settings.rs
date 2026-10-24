@@ -115,6 +115,8 @@ pub struct Settings {
     pub mirror: bool,
     pub cursor: bool,
     pub clicks: bool,
+    /// Leave SimpleRecord's own windows in display captures (for demos).
+    pub show_self: bool,
     /// Preview at half resolution and 15 fps.
     pub preview_low_power: bool,
     /// Show the floating recording controls while recording.
@@ -196,6 +198,7 @@ impl Default for Settings {
             mirror: true,
             cursor: true,
             clicks: false,
+            show_self: false,
             preview_low_power: false,
             recording_controls: true,
             replay_enabled: false,
@@ -599,6 +602,9 @@ impl Settings {
         }
         if !self.cursor {
             a.push("--no-cursor".into());
+        }
+        if self.show_self {
+            a.push("--show-self".into());
         }
         if self.clicks {
             a.push("--clicks".into());

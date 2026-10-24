@@ -274,6 +274,10 @@ pub struct RecordArgs {
     /// Highlight mouse clicks.
     #[arg(long)]
     clicks: bool,
+    /// Keep SimpleRecord's own windows in display captures (they are left
+    /// out by default), e.g. to demo the app itself.
+    #[arg(long)]
+    show_self: bool,
     /// Stop automatically after this many seconds.
     #[arg(short = 't', long)]
     duration: Option<f64>,
@@ -590,6 +594,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         },
         cursor: !a.no_cursor,
         clicks: a.clicks,
+        show_self: a.show_self,
         duration: a.duration,
         quiet: a.quiet,
         test_pattern: a.test_pattern.then_some(a.noise),

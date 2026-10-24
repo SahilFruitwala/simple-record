@@ -104,6 +104,8 @@ pub struct Options {
     pub pip: PipSpec,
     pub cursor: bool,
     pub clicks: bool,
+    /// Keep our own windows in display captures.
+    pub show_self: bool,
     pub duration: Option<f64>,
     pub quiet: bool,
     /// Replace the screen with a generated pattern (Some(noise)).
@@ -461,6 +463,7 @@ impl Session {
                     mic: sck_mic,
                     extra: None,
                     hdr: o.hdr,
+                    show_self: o.show_self,
                 };
                 self.screen = Some(ScreenCapture::start(&cfg, self.shared.clone())?);
             }
@@ -494,6 +497,7 @@ impl Session {
                         mic: None,
                         extra: Some(src.clone()),
                         hdr: false,
+                        show_self: o.show_self,
                     };
                     self.extra_screens.push(ScreenCapture::start(&cfg, self.shared.clone())?);
                 }
