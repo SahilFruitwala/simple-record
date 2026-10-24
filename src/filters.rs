@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 pub struct MicFilters {
     /// 80 Hz high-pass.
     pub low_cut: bool,
-    /// RNNoise noise suppression (48 kHz mics; others pass through).
+    /// RNNoise noise suppression (mics at 48 kHz or 16/24/12/8 kHz, as
+    /// Bluetooth headsets use; others pass through).
     pub denoise: bool,
     pub gate: bool,
     /// The gate opens above this level (dBFS) and closes 6 dB below it.
@@ -96,9 +97,60 @@ impl Biquad {
     }
 }
 
-/// RNNoise works on 480-sample frames of 48 kHz audio. Samples go in and
-/// come out one buffer at a time, `DELAY` samples late.
+/// Linear-phase low-pass FIR (Blackman-windowed sinc) for the resampling
+/// around RNNoise, per channel.
+struct Fir {
+    taps: Vec<f32>,
+    hist: Vec<[f32; 2]>,
+    pos: usize,
+}
+
+/// Odd, so the delay is a whole number of samples; `TAPS - 1` divides by
+/// every supported ratio (2, 3, 4, 6).
+const TAPS: usize = 97;
+
+impl Fir {
+    /// Cutoff as a fraction of the sample rate, `gain` at DC.
+    fn low_pass(cutoff: f32, gain: f32) -> Fir {
+        let m = (TAPS - 1) as f32;
+        let mut taps: Vec<f32> = (0..TAPS)
+            .map(|i| {
+                let x = i as f32 - m / 2.0;
+                let sinc = if x == 0.0 { 2.0 * cutoff } else { (2.0 * std::f32::consts::PI * cutoff * x).sin() / (std::f32::consts::PI * x) };
+                let t = 2.0 * std::f32::consts::PI * i as f32 / m;
+                sinc * (0.42 - 0.5 * t.cos() + 0.08 * (2.0 * t).cos())
+            })
+            .collect();
+        let sum: f32 = taps.iter().sum();
+        taps.iter_mut().for_each(|t| *t *= gain / sum);
+        Fir { taps, hist: vec![[0.0; 2]; TAPS], pos: 0 }
+    }
+
+    fn push(&mut self, x: [f32; 2]) {
+        self.pos = (self.pos + 1) % TAPS;
+        self.hist[self.pos] = x;
+    }
+
+    fn out(&self) -> [f32; 2] {
+        let mut y = [0.0f32; 2];
+        for (k, t) in self.taps.iter().enumerate() {
+            let h = self.hist[(self.pos + TAPS - k) % TAPS];
+            y[0] += t * h[0];
+            y[1] += t * h[1];
+        }
+        y
+    }
+}
+
+/// RNNoise works on 480-sample frames of 48 kHz audio. Mics at 48 kHz / L
+/// (Bluetooth headsets like AirPods run at 16 or 24 kHz) are upsampled by L
+/// for it and filtered back down. Samples go in and come out one buffer at
+/// a time, `delay()` samples late.
 struct Denoiser {
+    /// Upsampling ratio to 48 kHz (1 = native).
+    l: usize,
+    up: Fir,
+    down: Fir,
     states: [Box<nnnoiseless::DenoiseState<'static>>; 2],
     input: VecDeque<[f32; 2]>,
     output: VecDeque<[f32; 2]>,
@@ -109,29 +161,52 @@ struct Denoiser {
 const FRAME: usize = nnnoiseless::DenoiseState::FRAME_SIZE;
 
 impl Denoiser {
-    /// Total delay: the output queue is primed with one frame (so a buffer
-    /// of any length always has output ready), and RNNoise's overlap-add
-    /// adds another.
-    const DELAY: usize = 2 * FRAME;
+    /// The ratio for a mic rate, or None if RNNoise can't run on it.
+    fn ratio(rate: f64) -> Option<usize> {
+        [1, 2, 3, 4, 6].into_iter().find(|l| (rate * *l as f64 - 48000.0).abs() < 1.0)
+    }
 
-    fn new() -> Denoiser {
+    /// Total delay in mic samples: the output queue is primed with one
+    /// frame (so a buffer of any length always has output ready), RNNoise's
+    /// overlap-add adds another, and the two resampling filters theirs.
+    fn delay(l: usize) -> usize {
+        2 * FRAME / l + if l > 1 { (TAPS - 1) / l } else { 0 }
+    }
+
+    fn new(l: usize) -> Denoiser {
+        // Just under the mic's Nyquist frequency, at 48 kHz.
+        let cutoff = 0.45 / l as f32;
+        let n = FRAME / l;
         Denoiser {
+            l,
+            up: Fir::low_pass(cutoff, l as f32),
+            down: Fir::low_pass(cutoff, 1.0),
             states: [nnnoiseless::DenoiseState::new(), nnnoiseless::DenoiseState::new()],
-            input: VecDeque::with_capacity(4 * FRAME),
-            output: std::iter::repeat_n([0.0; 2], FRAME).collect(),
+            input: VecDeque::with_capacity(4 * n),
+            output: std::iter::repeat_n([0.0; 2], n).collect(),
             frame_in: [vec![0.0; FRAME], vec![0.0; FRAME]],
             frame_out: [vec![0.0; FRAME], vec![0.0; FRAME]],
         }
     }
 
     fn process(&mut self, frames: &mut [[f32; 2]]) {
+        let (l, n) = (self.l, FRAME / self.l);
         self.input.extend(frames.iter().copied());
-        while self.input.len() >= FRAME {
-            let mono = self.input.iter().take(FRAME).all(|f| f[0] == f[1]);
-            for (i, f) in self.input.drain(..FRAME).enumerate() {
-                // RNNoise expects 16-bit sample values.
-                self.frame_in[0][i] = f[0] * 32768.0;
-                self.frame_in[1][i] = f[1] * 32768.0;
+        while self.input.len() >= n {
+            let mono = self.input.iter().take(n).all(|f| f[0] == f[1]);
+            for (i, f) in self.input.drain(..n).enumerate() {
+                for j in 0..l {
+                    // Zero-stuffed and low-passed up to 48 kHz.
+                    let x = if l == 1 {
+                        f
+                    } else {
+                        self.up.push(if j == 0 { f } else { [0.0; 2] });
+                        self.up.out()
+                    };
+                    // RNNoise expects 16-bit sample values.
+                    self.frame_in[0][i * l + j] = x[0] * 32768.0;
+                    self.frame_in[1][i * l + j] = x[1] * 32768.0;
+                }
             }
             let chans = if mono { 1 } else { 2 };
             for c in 0..chans {
@@ -139,9 +214,17 @@ impl Denoiser {
                 self.states[c].process_frame(out, inp);
             }
             for i in 0..FRAME {
-                let l = self.frame_out[0][i] / 32768.0;
-                let r = if mono { l } else { self.frame_out[1][i] / 32768.0 };
-                self.output.push_back([l, r]);
+                let left = self.frame_out[0][i] / 32768.0;
+                let y = [left, if mono { left } else { self.frame_out[1][i] / 32768.0 }];
+                if l == 1 {
+                    self.output.push_back(y);
+                } else {
+                    // Low-passed and decimated back to the mic's rate.
+                    self.down.push(y);
+                    if i % l == l - 1 {
+                        self.output.push_back(self.down.out());
+                    }
+                }
             }
         }
         for f in frames.iter_mut() {
@@ -202,7 +285,7 @@ impl FilterChain {
 
     /// How late the output is, in seconds (noise suppression buffers).
     pub fn latency(&self) -> f64 {
-        if self.denoise.is_some() { Denoiser::DELAY as f64 / self.rate } else { 0.0 }
+        self.denoise.as_ref().map_or(0.0, |d| Denoiser::delay(d.l) as f64 / self.rate)
     }
 
     /// Filter `frames` (stereo, `rate` Hz) in place.
@@ -221,9 +304,10 @@ impl FilterChain {
                 f[1] = hp.run(1, f[1]);
             }
         }
-        // RNNoise is trained on 48 kHz; mics at other rates skip it.
-        if self.cfg.denoise && (rate - 48000.0).abs() < 1.0 {
-            self.denoise.get_or_insert_with(Denoiser::new).process(frames);
+        // RNNoise is trained on 48 kHz; mics at 48 kHz / L are resampled
+        // for it, others skip it.
+        if self.cfg.denoise && let Some(l) = Denoiser::ratio(rate) {
+            self.denoise.get_or_insert_with(|| Denoiser::new(l)).process(frames);
         }
         if self.cfg.gate {
             let g = &mut self.gate;
@@ -425,11 +509,11 @@ mod tests {
                 .0;
             // Within a quarter millisecond (RNNoise's pitch filter shifts
             // a tone's phase slightly).
-            assert!(best.abs_diff(Denoiser::DELAY) <= 12, "chunk {chunk}: lag {best}");
+            assert!(best.abs_diff(Denoiser::delay(1)) <= 12, "chunk {chunk}: lag {best}");
         }
         let mut c = FilterChain::new(cfg);
         c.process(48000.0, &mut [[0.0; 2]; 16]);
-        assert!((c.latency() - Denoiser::DELAY as f64 / 48000.0).abs() < 1e-12);
+        assert!((c.latency() - Denoiser::delay(1) as f64 / 48000.0).abs() < 1e-12);
     }
 
     #[test]
@@ -449,8 +533,60 @@ mod tests {
         assert!(ratio < 0.7, "noise reduced to {ratio}");
     }
 
+    /// Bluetooth headset rates (AirPods: 16 / 24 kHz) are denoised too,
+    /// with the reported delay, and a voice-band tone comes through.
     #[test]
-    fn non_48k_skips_denoise() {
+    fn bluetooth_rates_denoise() {
+        for rate in [16000.0f32, 24000.0] {
+            let cfg = MicFilters { denoise: true, ..Default::default() };
+            let mut seed = 7u32;
+            let noise: Vec<[f32; 2]> = (0..rate as usize * 2)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let v = ((seed >> 8) as f32 / (1 << 24) as f32 - 0.5) * 0.05;
+                    [v, v]
+                })
+                .collect();
+            let mut c = FilterChain::new(cfg);
+            let mut y = vec![];
+            for part in noise.chunks(333) {
+                let mut p = part.to_vec();
+                c.process(rate as f64, &mut p);
+                y.extend(p);
+            }
+            let half = noise.len() / 2;
+            let ratio = rms(&y[half..]) / rms(&noise[half..]);
+            assert!(ratio < 0.7, "{rate}: noise reduced to {ratio}");
+            let l = (48000.0 / rate) as usize;
+            assert!((c.latency() - Denoiser::delay(l) as f64 / rate as f64).abs() < 1e-12);
+
+            // Timing: a voice-like burst comes out `delay` samples late.
+            let n = rate as usize;
+            let mut x = vec![[0.0f32; 2]; n];
+            let (s0, len) = (n / 4, n / 5);
+            for (i, f) in x.iter_mut().enumerate().skip(s0).take(len) {
+                let t = i as f32 / rate;
+                let v = 0.3 * (2.0 * std::f32::consts::PI * 220.0 * t).sin() * (1.0 + 0.5 * (2.0 * std::f32::consts::PI * 3.0 * t).sin());
+                *f = [v, v];
+            }
+            let mut c = FilterChain::new(cfg);
+            let mut y = vec![];
+            for part in x.chunks(256) {
+                let mut p = part.to_vec();
+                c.process(rate as f64, &mut p);
+                y.extend(p);
+            }
+            let best = (0..1000)
+                .map(|lag| (lag, (s0..s0 + len).map(|i| x[i][0] * y.get(i + lag).map_or(0.0, |f| f[0])).sum::<f32>()))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap()
+                .0;
+            assert!(best.abs_diff(Denoiser::delay(l)) <= 4, "{rate}: lag {best} vs {}", Denoiser::delay(l));
+        }
+    }
+
+    #[test]
+    fn unsupported_rate_skips_denoise() {
         let mut c = FilterChain::new(MicFilters { denoise: true, ..Default::default() });
         let mut x = sine(300.0, 0.3, 1000, 44100.0);
         let before = x.clone();
