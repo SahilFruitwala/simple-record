@@ -161,6 +161,9 @@ pub struct RecordArgs {
     /// Video bitrate in Mb/s. Default scales with resolution and fps.
     #[arg(long)]
     bitrate: Option<f64>,
+    /// Quality of the automatic bitrate (ignored with --bitrate).
+    #[arg(long, value_enum, default_value_t = writer::Quality::High)]
+    quality: writer::Quality,
     /// Record HDR (experimental): 10-bit HEVC (or ProRes) tagged BT.2020
     /// PQ, from ScreenCaptureKit's HDR capture. Recording only: no replay
     /// buffer or streaming.
@@ -343,9 +346,20 @@ pub struct RecordArgs {
     /// System audio of every app but these (comma-separated bundle IDs).
     #[arg(long, value_name = "IDS")]
     audio_except: Option<String>,
-    /// Microphone: cut rumble below 80 Hz.
+    /// Microphone: cut rumble below 80 Hz (see --low-cut-hz).
     #[arg(long)]
     low_cut: bool,
+    /// Microphone: the low cut's frequency (40-300 Hz).
+    #[arg(long, value_name = "HZ", default_value_t = 80.0, requires = "low_cut")]
+    low_cut_hz: f32,
+    /// Microphone: voice EQ as LOW,PRESENCE,AIR in dB (-12 to 12): shelves
+    /// at 150 Hz and 10 kHz, a peak at 3.5 kHz (e.g. 2,3,1).
+    #[arg(long, value_name = "DB,DB,DB", allow_negative_numbers = true, value_delimiter = ',', num_args = 3)]
+    eq: Option<Vec<f32>>,
+    /// Microphone: de-esser, taming "s" sounds louder than this level
+    /// (dBFS, e.g. -30).
+    #[arg(long, value_name = "DB", allow_negative_numbers = true, num_args = 0..=1, default_missing_value = "-30")]
+    deess: Option<f32>,
     /// Microphone: noise suppression (RNNoise; 48 kHz mics).
     #[arg(long)]
     denoise: bool,
@@ -621,11 +635,18 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         app_audio: appaudio::AppAudio::from_args(a.audio_apps.as_deref(), a.audio_except.as_deref()),
         mic_filters: filters::MicFilters {
             low_cut: a.low_cut,
+            low_cut_hz: a.low_cut_hz.clamp(40.0, 300.0),
             denoise: a.denoise,
             gate: a.gate.is_some(),
             gate_db: a.gate.unwrap_or(-45.0).clamp(-80.0, 0.0),
             compressor: a.compressor.is_some(),
             comp_threshold_db: a.compressor.unwrap_or(-20.0).clamp(-60.0, 0.0),
+            eq: a.eq.is_some(),
+            eq_low_db: a.eq.as_ref().map_or(0.0, |e| e[0].clamp(-12.0, 12.0)),
+            eq_mid_db: a.eq.as_ref().map_or(0.0, |e| e[1].clamp(-12.0, 12.0)),
+            eq_high_db: a.eq.as_ref().map_or(0.0, |e| e[2].clamp(-12.0, 12.0)),
+            deess: a.deess.is_some(),
+            deess_db: a.deess.unwrap_or(-30.0).clamp(-60.0, 0.0),
             ..Default::default()
         },
         system_offset_ms: a.system_audio_offset_ms,
@@ -696,7 +717,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
     let bitrate = a
         .bitrate
         .map(|m| (m * 1e6) as u64)
-        .unwrap_or_else(|| ((w * h) as f64 * a.fps as f64 * bpp) as u64)
+        .unwrap_or_else(|| ((w * h) as f64 * a.fps as f64 * bpp * a.quality.factor()) as u64)
         .clamp(1_000_000, 400_000_000);
     if codec == Codec::Prores && opts.output.extension().is_some_and(|e| e == "mp4") {
         bail!("ProRes needs a .mov output");
@@ -999,6 +1020,13 @@ mod tests {
     }
 
     #[test]
+    fn quality_option() {
+        assert_eq!(parse_record_args(&[]).unwrap().quality, writer::Quality::High);
+        assert_eq!(parse_record_args(&["--quality", "max"]).unwrap().quality, writer::Quality::Max);
+        assert!(parse_record_args(&["--quality", "ultra"]).is_err());
+    }
+
+    #[test]
     fn hdr_option() {
         assert!(parse_record_args(&["--hdr", "--codec", "hevc"]).unwrap().hdr);
         assert!(!parse_record_args(&[]).unwrap().hdr);
@@ -1017,6 +1045,10 @@ mod tests {
         // A value-less filter flag doesn't swallow the next flag.
         let a = parse_record_args(&["--gate", "--low-cut", "--compressor"]).unwrap();
         assert_eq!((a.gate, a.compressor, a.low_cut), (Some(-45.0), Some(-20.0), true));
+        let a = parse_record_args(&["--low-cut", "--low-cut-hz", "120", "--eq", "2,-3,1.5", "--deess"]).unwrap();
+        assert_eq!((a.low_cut_hz, a.eq.as_deref(), a.deess), (120.0, Some(&[2.0, -3.0, 1.5][..]), Some(-30.0)));
+        assert!(parse_record_args(&["--eq", "2,3"]).is_err());
+        assert!(parse_record_args(&["--low-cut-hz", "120"]).is_err());
         assert_eq!(parse_record_args(&["--gate", "-50"]).unwrap().gate, Some(-50.0));
     }
 

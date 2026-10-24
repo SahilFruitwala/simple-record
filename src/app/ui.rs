@@ -1116,12 +1116,14 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 w::divider(ui);
                 let f = &mut s.mic_filters;
                 // Folded: most people set these once, if ever.
-                let on = [f.denoise, f.gate, f.compressor, f.low_cut].iter().filter(|b| **b).count();
+                let on = [f.denoise, f.gate, f.compressor, f.low_cut, f.eq, f.deess].iter().filter(|b| **b).count();
                 egui::CollapsingHeader::new(RichText::new(format!("Voice filters · {on} on")).color(p.text)).id_salt("voice-filters").show(ui, |ui| {
                     w::row(ui, "Noise suppression", |ui| w::switch(ui, &mut f.denoise, true)).on_hover_text("Removes fans, hum and keyboard noise (RNNoise)");
                     w::row(ui, "Noise gate", |ui| w::switch(ui, &mut f.gate, true)).on_hover_text("Silences the mic between words");
                     w::row(ui, "Compressor", |ui| w::switch(ui, &mut f.compressor, true)).on_hover_text("Evens out loud and quiet speech");
-                    w::row(ui, "Low cut (80 Hz)", |ui| w::switch(ui, &mut f.low_cut, true)).on_hover_text("Removes rumble and desk knocks");
+                    w::row(ui, "Low cut", |ui| w::switch(ui, &mut f.low_cut, true)).on_hover_text("Removes rumble and desk knocks");
+                    w::row(ui, "Voice EQ", |ui| w::switch(ui, &mut f.eq, true)).on_hover_text("Warmth, presence and air; set the bands in Settings › Audio");
+                    w::row(ui, "De-esser", |ui| w::switch(ui, &mut f.deess, true)).on_hover_text("Tames sharp \"s\" sounds");
                 });
             }
         });
@@ -1608,6 +1610,15 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                     }
                 });
                 ui.end_row();
+                if s.bitrate_mbps.is_none() && s.codec != Some(Codec::Prores) {
+                    ui.label("Quality").on_hover_text("How many bits the automatic bitrate spends: Max keeps fine text and fast motion sharpest, at about twice the file size of High");
+                    ui.horizontal(|ui| {
+                        for (q, label) in [(crate::writer::Quality::Standard, "Standard"), (crate::writer::Quality::High, "High"), (crate::writer::Quality::Max, "Max")] {
+                            ui.selectable_value(&mut s.quality, q, label);
+                        }
+                    });
+                    ui.end_row();
+                }
                 ui.label("Cursor");
                 ui.horizontal(|ui| {
                     ui.add(w::Check::new(&mut s.cursor, "Show"));
@@ -1661,8 +1672,11 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
             section(ui, "MIC FILTERS");
             let f = &mut s.mic_filters;
             grid(ui, "mic-filters", &mut |ui| {
-                ui.label("Low cut").on_hover_text("Removes rumble and desk knocks (below 80 Hz)");
+                ui.label("Low cut").on_hover_text("Removes rumble and desk knocks");
                 ui.add(w::Check::new(&mut f.low_cut, "On"));
+                ui.end_row();
+                ui.add_enabled_ui(f.low_cut, |ui| ui.label("    Below").on_hover_text("80 Hz suits most voices; up to 120 Hz for a deep voice close to the mic"));
+                ui.add_enabled(f.low_cut, egui::Slider::new(&mut f.low_cut_hz, 40.0..=300.0).suffix(" Hz").logarithmic(true).integer());
                 ui.end_row();
                 ui.label("Noise suppression").on_hover_text("Removes fans, hum and keyboard noise (RNNoise)");
                 ui.add(w::Check::new(&mut f.denoise, "On"));
@@ -1672,6 +1686,24 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 ui.end_row();
                 ui.add_enabled_ui(f.gate, |ui| ui.label("    Opens at").on_hover_text("The mic is muted while it is quieter than this"));
                 ui.add_enabled(f.gate, egui::Slider::new(&mut f.gate_db, -70.0..=-20.0).suffix(" dBFS").step_by(1.0).fixed_decimals(0));
+                ui.end_row();
+                ui.label("Voice EQ").on_hover_text("Shapes the tone of the voice");
+                ui.add(w::Check::new(&mut f.eq, "On"));
+                ui.end_row();
+                for (label, tip, db) in [
+                    ("    Warmth", "Low shelf at 150 Hz: body; turn down for a boomy mic", &mut f.eq_low_db),
+                    ("    Presence", "Peak at 3.5 kHz: clarity of speech; turn down if harsh", &mut f.eq_mid_db),
+                    ("    Air", "High shelf at 10 kHz: brightness", &mut f.eq_high_db),
+                ] {
+                    ui.add_enabled_ui(f.eq, |ui| ui.label(label).on_hover_text(tip));
+                    ui.add_enabled(f.eq, egui::Slider::new(db, -12.0..=12.0).suffix(" dB").step_by(0.5).fixed_decimals(1));
+                    ui.end_row();
+                }
+                ui.label("De-esser").on_hover_text("Turns down sharp \"s\" sounds without dulling the voice");
+                ui.add(w::Check::new(&mut f.deess, "On"));
+                ui.end_row();
+                ui.add_enabled_ui(f.deess, |ui| ui.label("    Threshold").on_hover_text("Sibilance louder than this is turned down; lower is stronger"));
+                ui.add_enabled(f.deess, egui::Slider::new(&mut f.deess_db, -50.0..=-10.0).suffix(" dBFS").step_by(1.0).fixed_decimals(0));
                 ui.end_row();
                 ui.label("Compressor").on_hover_text("Evens out loud and quiet speech");
                 ui.add(w::Check::new(&mut f.compressor, "On"));

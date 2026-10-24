@@ -40,6 +40,29 @@ pub enum Codec {
     Prores,
 }
 
+/// How many bits the automatic recording bitrate spends: more keeps fine
+/// text and fast motion sharper, at a bigger file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Quality {
+    /// Smaller files (0.6x the bits of High).
+    Standard,
+    #[default]
+    High,
+    /// Near-transparent, for heavy editing or re-encoding (2x High).
+    Max,
+}
+
+impl Quality {
+    pub fn factor(self) -> f64 {
+        match self {
+            Quality::Standard => 0.6,
+            Quality::High => 1.0,
+            Quality::Max => 2.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VideoSpec {
     pub width: usize,

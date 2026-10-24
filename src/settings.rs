@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::compose::{PipSpec, Place, Scene, Shape};
 use crate::hotkey::{Action, Combo};
 use crate::layout::{Background, Canvas, Layout, SceneSpec, Transition};
-use crate::writer::{AudioLayout, Codec};
+use crate::writer::{AudioLayout, Codec, Quality};
 
 pub const RESOLUTIONS: [(&str, &str); 5] =
     [("720p", "720p"), ("1080p", "1080p"), ("1440p", "1440p"), ("4K", "4k"), ("Native", "native")];
@@ -60,6 +60,8 @@ pub struct Settings {
     pub fps: u32,
     /// Mb/s; None = automatic.
     pub bitrate_mbps: Option<f64>,
+    /// Bits the automatic bitrate spends.
+    pub quality: Quality,
     /// HDR recording (10-bit HEVC/ProRes, BT.2020 PQ; experimental).
     pub hdr: bool,
     /// 1-based display number.
@@ -99,7 +101,7 @@ pub struct Settings {
     pub audio_tracks: AudioLayout,
     pub system_gain_db: f32,
     pub mic_gain_db: f32,
-    /// Noise suppression, gate, compressor, low-cut (applied live).
+    /// Low cut, noise suppression, gate, EQ, de-esser, compressor (applied live).
     pub mic_filters: crate::filters::MicFilters,
     /// Which apps' sound system audio records.
     pub app_audio: crate::appaudio::AppAudio,
@@ -163,6 +165,7 @@ impl Default for Settings {
             resolution: "1080p".into(),
             fps: 60,
             bitrate_mbps: None,
+            quality: Quality::High,
             hdr: false,
             display: 1,
             region: None,
@@ -522,6 +525,8 @@ impl Settings {
         }
         if let Some(b) = self.bitrate_mbps {
             a.extend(["--bitrate".into(), format!("{b}")]);
+        } else {
+            a.extend(["--quality".into(), value(self.quality)]);
         }
         if self.hdr_on() {
             a.push("--hdr".into());
@@ -573,7 +578,7 @@ impl Settings {
         a.extend(["--mic-gain".into(), format!("{}", self.mic_gain_db)]);
         let f = &self.mic_filters;
         if f.low_cut {
-            a.push("--low-cut".into());
+            a.extend(["--low-cut".into(), "--low-cut-hz".into(), format!("{}", f.low_cut_hz)]);
         }
         if f.denoise {
             a.push("--denoise".into());
@@ -583,6 +588,12 @@ impl Settings {
         }
         if f.compressor {
             a.extend(["--compressor".into(), format!("{}", f.comp_threshold_db)]);
+        }
+        if f.eq {
+            a.extend(["--eq".into(), format!("{},{},{}", f.eq_low_db, f.eq_mid_db, f.eq_high_db)]);
+        }
+        if f.deess {
+            a.extend(["--deess".into(), format!("{}", f.deess_db)]);
         }
         a.extend(["--pip-size".into(), format!("{}", self.pip_size)]);
         match self.pip_place {
