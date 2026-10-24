@@ -781,6 +781,18 @@ fn gif_button(ui: &mut Ui, st: &mut State) {
     });
 }
 
+/// A source's level in the mix, compact (the full controls are in
+/// Settings › Audio). Set before recording: the mix gains are fixed for one.
+fn level(ui: &mut Ui, db: &mut f32, range: std::ops::RangeInclusive<f32>, enabled: bool) {
+    w::field(ui, "Level", 44.0, |ui| {
+        ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);
+        let r = ui.add_enabled(enabled, egui::Slider::new(&mut *db, range).suffix(" dB").step_by(0.5).fixed_decimals(1));
+        if r.on_hover_text("Volume in the mix track. Double-click to reset to 0 dB.").double_clicked() {
+            *db = 0.0;
+        }
+    });
+}
+
 /// Horizontal peak meter, -60..0 dBFS, green/yellow/red with a peak tick.
 fn meter(ui: &mut Ui, label: &str, m: Meter, on: bool) {
     let p = theme::pal(ui);
@@ -1075,6 +1087,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
         w::card(ui, |ui| {
             w::row(ui, "System audio", |ui| w::switch(ui, &mut s.system_audio, idle));
             if s.system_audio {
+                level(ui, &mut s.system_gain_db, -24.0..=12.0, idle);
                 app_audio(ui, st, &mut s.app_audio, idle);
             }
             w::divider(ui);
@@ -1082,6 +1095,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
             let mics = mic_options(st, &s);
             if combo(ui, "mic", &mut s.mic, &mics, idle && s.mic_enabled) {
                 s.mic_name = mic_label(&mics, &s.mic);
+            }
+            if s.mic_enabled {
+                level(ui, &mut s.mic_gain_db, -24.0..=24.0, idle);
             }
             if s.mic_enabled && st.perms().mic != crate::tcc::Status::Granted {
                 let asked = st.perms().mic != crate::tcc::Status::NotDetermined;
