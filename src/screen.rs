@@ -203,6 +203,8 @@ pub struct ScreenConfig {
     pub extra: Option<crate::layout::Source>,
     /// Capture HDR (`hdr_format`); the pixel format is then the preset's.
     pub hdr: bool,
+    /// Keep rec's own windows in a display capture.
+    pub show_self: bool,
 }
 
 pub struct Ivars {
@@ -303,10 +305,12 @@ impl ScreenCapture {
                         conf.setSourceRect(*r);
                     }
                     // Exclude rec's own windows (the GUI preview), which
-                    // would otherwise be recorded as a hall of mirrors.
+                    // would otherwise be recorded as a hall of mirrors,
+                    // unless asked to show them (demoing the app itself).
                     let me = std::process::id() as i32;
-                    let own = shareable_content()
-                        .ok()
+                    let own = (!cfg.show_self)
+                        .then(shareable_content)
+                        .and_then(|c| c.ok())
                         .and_then(|c| c.applications().iter().find(|a| a.processID() == me));
                     if std::env::var_os("REC_DEBUG").is_some() {
                         eprintln!("rec: debug: excluding own app from capture: {}", own.is_some());

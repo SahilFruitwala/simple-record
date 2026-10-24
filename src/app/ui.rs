@@ -1598,6 +1598,10 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                     ui.add_enabled(s.cursor, w::Check::new(&mut s.clicks, "Highlight clicks"));
                 });
                 ui.end_row();
+                ui.label("SimpleRecord");
+                ui.add(w::Check::new(&mut s.show_self, "Show in recordings (for demos)"))
+                    .on_hover_text("Keep this app's windows in display recordings. Off by default: the preview would record itself as a hall of mirrors.");
+                ui.end_row();
                 ui.label("Preview");
                 ui.add(w::Check::new(&mut s.preview_low_power, "Low power (half resolution, 15 fps)"));
                 ui.end_row();
