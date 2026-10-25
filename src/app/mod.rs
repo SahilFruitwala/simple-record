@@ -267,6 +267,8 @@ pub struct State {
     gif_job: Option<std::thread::JoinHandle<Result<(PathBuf, crate::gif::GifStats)>>>,
     /// The smart zoom export's choices, and its progress in thousandths.
     pub zoom_opts: crate::zoom::ZoomOptions,
+    /// The recording the Smart Zoom popover shows, and what it logged.
+    pub zoom_source: Option<(PathBuf, Result<crate::zoom::Activity, String>)>,
     pub zoom_progress: Option<Arc<std::sync::atomic::AtomicU32>>,
     zoom_job: Option<std::thread::JoinHandle<Result<(PathBuf, crate::zoom::ZoomStats)>>>,
 }
@@ -329,6 +331,17 @@ impl State {
         let len = crate::gif::duration(&file).unwrap_or(0.0);
         self.gif_opts = crate::gif::GifOptions { start: 0.0, duration: Some(len.min(30.0)), ..self.gif_opts.clone() };
         self.gif_source = Some((file, len));
+    }
+
+    /// Read the last recording's clicks and typing for the Smart Zoom
+    /// popover, unless already read.
+    pub fn zoom_prepare(&mut self) {
+        let Some(file) = self.last_file.clone() else { return };
+        if self.zoom_source.as_ref().is_some_and(|(f, _)| *f == file) {
+            return;
+        }
+        let a = crate::zoom::activity(&file).map_err(|e| format!("{e:#}"));
+        self.zoom_source = Some((file, a));
     }
 
     pub fn is_paused(&self) -> bool {
@@ -572,6 +585,7 @@ impl App {
             gif_progress: None,
             gif_job: None,
             zoom_opts: crate::zoom::ZoomOptions::default(),
+            zoom_source: None,
             zoom_progress: None,
             zoom_job: None,
         };
@@ -1193,8 +1207,9 @@ impl App {
             return;
         }
         let out = crate::zoom::zoomed_path(&file);
-        let opts = self.st.zoom_opts;
-        self.st.zoom_opts.fresh = false;
+        // The app always finds the zooms at the level chosen (the CLI
+        // reuses an edited zoom.json).
+        let opts = crate::zoom::ZoomOptions { fresh: true, ..self.st.zoom_opts };
         let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
         self.st.zoom_progress = Some(progress.clone());
         self.st.zoom_job = Some(std::thread::spawn(move || {

@@ -424,6 +424,29 @@ pub struct ZoomStats {
     pub zooms: usize,
 }
 
+/// What a smart zoom recording logged, for showing the zooms before an
+/// export.
+#[derive(Clone, Debug, Default)]
+pub struct Activity {
+    pub clicks: Vec<(f64, f64, f64)>,
+    pub keys: Vec<f64>,
+    /// Seconds.
+    pub duration: f64,
+}
+
+impl Activity {
+    /// The zooms an export at `level` finds.
+    pub fn segments(&self, level: f64) -> Vec<Segment> {
+        segments(&self.clicks, &self.keys, level, self.duration)
+    }
+}
+
+pub fn activity(rec: &Path) -> Result<Activity> {
+    let ev = events_path(rec);
+    let log: EventLog = serde_json::from_str(&std::fs::read_to_string(&ev)?).with_context(|| format!("{} can't be read", ev.display()))?;
+    Ok(Activity { clicks: clicks(&log.frames, log.fps), keys: typing(&log.frames, log.fps), duration: log.frames.len() as f64 / log.fps as f64 })
+}
+
 /// Whether `rec` was recorded for smart zoom.
 pub fn available(rec: &Path) -> bool {
     events_path(rec).exists()

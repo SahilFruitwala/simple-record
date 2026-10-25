@@ -782,40 +782,93 @@ fn gif_button(ui: &mut Ui, st: &mut State) {
     });
 }
 
-/// "Smart Zoom…": the last recording zoomed in around its clicks, next to
-/// it as …-zoomed.mov (the recording stays as the unzoomed version). Only
-/// for recordings made with Record for smart zoom.
+/// "Smart Zoom…": the last recording zoomed in around clicks, next to it
+/// as …-zoomed.mov (the recording stays as the unzoomed version). Only for
+/// recordings made with Record for smart zoom. The popover shows where the
+/// zooms land before exporting.
 fn zoom_button(ui: &mut Ui, st: &mut State) {
     if let Some(p) = &st.zoom_progress {
         let done = p.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
-        ui.add(egui::ProgressBar::new(done).desired_width(120.0).text(format!("Zoom {:.0}%", done * 100.0)));
+        ui.add(egui::ProgressBar::new(done).desired_width(120.0).text(format!("Zooming {:.0}%", done * 100.0)));
         return;
     }
     let Some(file) = st.last_file.clone() else { return };
     if !crate::zoom::available(&file) {
         return;
     }
-    let resp = ui.button("Smart Zoom…").on_hover_text("Export a version of the last recording zoomed in around clicks");
+    let resp = ui.button("Smart Zoom…").on_hover_text("Export a copy of the last recording that zooms in where you click");
+    if resp.clicked() {
+        st.zoom_prepare();
+    }
     egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let p = theme::pal(ui);
-        ui.set_min_width(300.0);
-        ui.label(RichText::new(file.file_name().unwrap_or_default().to_string_lossy()).strong());
-        egui::Grid::new("zoom").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-            ui.label("Zoom");
-            ui.add(egui::Slider::new(&mut st.zoom_opts.level, crate::zoom::LEVELS).step_by(0.25).suffix("×"));
+        ui.set_width(340.0);
+        ui.label(RichText::new("Smart Zoom").font(theme::semibold(BODY + 1.0)));
+        ui.label(RichText::new("Makes a copy that zooms in where you click and stays in while you type. Your recording isn't changed.").size(SECONDARY).color(p.secondary));
+        ui.add_space(8.0);
+        let act = match st.zoom_source.as_ref() {
+            Some((f, Ok(a))) if *f == file => a.clone(),
+            Some((f, Err(e))) if *f == file => {
+                w::hint(ui, &format!("This recording's click log can't be read: {e}"));
+                return;
+            }
+            _ => return,
+        };
+        ui.label(RichText::new("Zoom").size(SECONDARY).color(p.secondary));
+        w::segmented(ui, &mut st.zoom_opts.level, &[(1.5, "Subtle 1.5×", true, ""), (2.0, "Medium 2×", true, ""), (2.5, "Close 2.5×", true, "")]);
+        ui.add_space(10.0);
+        let segs = act.segments(st.zoom_opts.level);
+        zoom_timeline(ui, &act, &segs);
+        let clicks = match act.clicks.len() {
+            1 => "1 click".to_string(),
+            n => format!("{n} clicks"),
+        };
+        let summary = match segs.len() {
+            0 => format!("No zooms: {clicks} on the recorded screen."),
+            1 => format!("1 zoom from {clicks}."),
+            n => format!("{n} zooms from {clicks}."),
+        };
+        ui.label(RichText::new(summary).size(SECONDARY).color(p.secondary));
+        ui.add_space(8.0);
+        let name = |f: &std::path::Path| f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        egui::Grid::new("zoom-files").num_columns(2).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
+            ui.label(RichText::new("Original").size(SECONDARY).color(p.secondary));
+            ui.label(RichText::new(name(&file)).size(SECONDARY));
+            ui.end_row();
+            ui.label(RichText::new("Zoomed").size(SECONDARY).color(p.secondary));
+            ui.label(RichText::new(name(&crate::zoom::zoomed_path(&file))).size(SECONDARY));
             ui.end_row();
         });
-        let edited = crate::zoom::segments_path(&file).exists();
-        if edited {
-            ui.add(w::Check::new(&mut st.zoom_opts.fresh, "Find the zooms again"))
-                .on_hover_text("Off: reuse the zooms in …zoom.json from the last export (edit it to adjust them)");
-        }
-        ui.label(RichText::new("Saved as …-zoomed.mov; the recording stays as it is.").size(SECONDARY).color(p.secondary));
-        ui.add_space(4.0);
-        if w::primary_button(ui, "Export").clicked() {
-            st.cmds.push(Cmd::ExportZoom);
-            egui::Popup::close_all(ui.ctx());
-        }
+        ui.add_space(8.0);
+        ui.add_enabled_ui(!segs.is_empty(), |ui| {
+            if w::primary_button(ui, "Export Zoomed Copy").clicked() {
+                st.cmds.push(Cmd::ExportZoom);
+                egui::Popup::close_all(ui.ctx());
+            }
+        });
+    });
+}
+
+/// The recording as a bar with its zooms marked, and a tick per click.
+fn zoom_timeline(ui: &mut Ui, act: &crate::zoom::Activity, segs: &[crate::zoom::Segment]) {
+    let p = theme::pal(ui);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), egui::Sense::hover());
+    let painter = ui.painter();
+    let track = egui::Rect::from_min_max(egui::pos2(r.left(), r.center().y - 5.0), egui::pos2(r.right(), r.center().y + 5.0));
+    painter.rect_filled(track, 4.0, p.field);
+    let x = |t: f64| track.left() + (t / act.duration.max(0.001)).clamp(0.0, 1.0) as f32 * track.width();
+    for s in segs {
+        let seg = egui::Rect::from_min_max(egui::pos2(x(s.start), track.top()), egui::pos2(x(s.end).max(x(s.start) + 2.0), track.bottom()));
+        painter.rect_filled(seg, 4.0, theme::accent());
+    }
+    for &(t, _, _) in &act.clicks {
+        painter.line_segment([egui::pos2(x(t), r.top()), egui::pos2(x(t), r.top() + 3.0)], egui::Stroke::new(1.5, p.text));
+    }
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("0:00").size(SECONDARY - 1.0).color(p.tertiary));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(RichText::new(crate::record::clock(act.duration)).size(SECONDARY - 1.0).color(p.tertiary));
+        });
     });
 }
 
