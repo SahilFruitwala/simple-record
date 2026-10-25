@@ -123,9 +123,13 @@ enum Cmd {
         /// Magnification while zoomed in (1.25-3).
         #[arg(short, long, default_value_t = 2.0)]
         level: f64,
-        /// Find the zooms from the clicks again, replacing <name>.zoom.json.
+        /// Find the zooms from the clicks again, replacing the saved ones.
         #[arg(long)]
         fresh: bool,
+        /// Move the smart zoom data (.<name>.smartzoom) to the Trash after
+        /// exporting.
+        #[arg(long)]
+        clean: bool,
     },
     /// Play a file in an AVPlayer window (reference player for sync tests).
     #[command(hide = true)]
@@ -241,6 +245,10 @@ pub struct RecordArgs {
     /// timeline (for editing the camera separately).
     #[arg(long)]
     camera_file: bool,
+    /// Also write the screen alone (before the camera and scene are added)
+    /// to <output>-screen.mov, on the same timeline.
+    #[arg(long)]
+    screen_file: bool,
     /// Record for smart zoom: log the cursor and clicks to
     /// <output>.events.json (and keep the screen and webcam apart when the
     /// frame is composed), for `rec zoom`.
@@ -592,6 +600,7 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         cam_res: a.camera_resolution,
         camera_file: a.camera_file,
         smart_zoom: a.smart_zoom,
+        screen_file: a.screen_file,
         pip: PipSpec {
             size: a.pip_size.clamp(0.05, 0.9),
             place: match &a.pip_pos {
@@ -847,10 +856,17 @@ fn record(a: RecordArgs) -> Result<()> {
         }
         println!("{}", c.display());
     }
-    if let Some(e) = &stats.events_file
-        && !quiet
+    // A screen file kept only for smart zoom stays in its hidden folder.
+    if let Some(s) = &stats.screen_file
+        && stats.zoom_data.as_ref().is_none_or(|d| !s.starts_with(d))
     {
-        eprintln!("rec: smart zoom log saved {} (`rec zoom {}` writes the zoomed version)", e.display(), out.display());
+        if !quiet {
+            eprintln!("rec: screen saved {}", s.display());
+        }
+        println!("{}", s.display());
+    }
+    if stats.zoom_data.is_some() && !quiet {
+        eprintln!("rec: recorded for smart zoom (`rec zoom {}` writes the zoomed version)", out.display());
     }
     println!("{}", out.display());
     Ok(())
@@ -939,12 +955,15 @@ fn main() {
                 println!("{} ({}x{}, {} frames, {:.1} MB)", out.display(), s.size.0, s.size.1, s.frames, s.bytes as f64 / 1e6);
             })
         }
-        Cmd::Zoom { file, output, level, fresh } => {
+        Cmd::Zoom { file, output, level, fresh, clean } => {
             let out = output.unwrap_or_else(|| zoom::zoomed_path(&file));
             let o = zoom::ZoomOptions { level, fresh };
             zoom::export(&file, &out, &o, &|p| eprint!("\rrec: zoom {:>3.0}%", p * 100.0)).map(|s| {
                 eprintln!();
                 println!("{} ({} frames, {} zooms)", out.display(), s.frames, s.zooms);
+                if clean && let Err(e) = app::macos::trash(&zoom::data_dir(&file)) {
+                    eprintln!("rec: warning: couldn't move the smart zoom data to the Trash: {e}");
+                }
             })
         }
         Cmd::Play { file, secs, size } => play::play(&file, secs, &size),

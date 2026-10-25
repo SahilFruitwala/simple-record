@@ -10,7 +10,7 @@
 
 mod controls;
 mod dock;
-mod macos;
+pub(crate) mod macos;
 mod menubar;
 mod onboarding;
 mod preview;
@@ -1210,6 +1210,7 @@ impl App {
         // The app always finds the zooms at the level chosen (the CLI
         // reuses an edited zoom.json).
         let opts = crate::zoom::ZoomOptions { fresh: true, ..self.st.zoom_opts };
+        let keep = self.st.settings.zoom_keep_data;
         let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
         self.st.zoom_progress = Some(progress.clone());
         self.st.zoom_job = Some(std::thread::spawn(move || {
@@ -1220,6 +1221,10 @@ impl App {
                 })
             });
             wake();
+            // Done with the data: to the Trash (not deleted, in case).
+            if r.is_ok() && !keep && let Err(e) = macos::trash(&crate::zoom::data_dir(&file)) {
+                eprintln!("rec: warning: couldn't move the smart zoom data to the Trash: {e}");
+            }
             r.map(|s| (out, s))
         }));
     }
@@ -1377,7 +1382,7 @@ impl App {
                 (r, Some(then)) => {
                     // Thrown away from the controls: to the Trash (not
                     // deleted, in case it was a slip), with its camera file.
-                    let sides: Vec<PathBuf> = r.ok().map(|s| [s.camera_file, s.screen_file, s.events_file].into_iter().flatten().collect()).unwrap_or_default();
+                    let sides: Vec<PathBuf> = r.ok().map(|s| [s.camera_file, s.screen_file, s.zoom_data].into_iter().flatten().collect()).unwrap_or_default();
                     let mut trashed = false;
                     for f in std::iter::once(&file).chain(&sides).filter(|f| f.exists()) {
                         match macos::trash(f) {

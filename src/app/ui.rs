@@ -731,7 +731,9 @@ fn gif_button(ui: &mut Ui, st: &mut State) {
     if resp.clicked() {
         st.gif_prepare();
     }
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    let frame = egui::Frame::menu(ui.style()).inner_margin(14.0).corner_radius(10.0);
+    egui::Popup::menu(&resp).frame(frame).gap(6.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
         let Some((file, len)) = st.gif_source.clone() else { return };
         let p = theme::pal(ui);
         ui.set_min_width(300.0);
@@ -774,10 +776,8 @@ fn gif_button(ui: &mut Ui, st: &mut State) {
         if secs > 30.0 {
             w::hint(ui, "Long GIFs get very large: a few seconds is usual.");
         }
-        ui.add_space(4.0);
-        if w::primary_button(ui, "Export GIF").clicked() {
+        if w::popover_actions(ui, "Export", true) {
             st.cmds.push(Cmd::ExportGif);
-            egui::Popup::close_all(ui.ctx());
         }
     });
 }
@@ -800,9 +800,11 @@ fn zoom_button(ui: &mut Ui, st: &mut State) {
     if resp.clicked() {
         st.zoom_prepare();
     }
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    let frame = egui::Frame::menu(ui.style()).inner_margin(14.0).corner_radius(10.0);
+    egui::Popup::menu(&resp).frame(frame).gap(6.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let p = theme::pal(ui);
         ui.set_width(340.0);
+        ui.spacing_mut().item_spacing.y = 6.0;
         ui.label(RichText::new("Smart Zoom").font(theme::semibold(BODY + 1.0)));
         ui.label(RichText::new("Makes a copy that zooms in where you click and stays in while you type. Your recording isn't changed.").size(SECONDARY).color(p.secondary));
         ui.add_space(8.0);
@@ -839,13 +841,9 @@ fn zoom_button(ui: &mut Ui, st: &mut State) {
             ui.label(RichText::new(name(&crate::zoom::zoomed_path(&file))).size(SECONDARY));
             ui.end_row();
         });
-        ui.add_space(8.0);
-        ui.add_enabled_ui(!segs.is_empty(), |ui| {
-            if w::primary_button(ui, "Export Zoomed Copy").clicked() {
-                st.cmds.push(Cmd::ExportZoom);
-                egui::Popup::close_all(ui.ctx());
-            }
-        });
+        if w::popover_actions(ui, "Export", !segs.is_empty()) {
+            st.cmds.push(Cmd::ExportZoom);
+        }
     });
 }
 
@@ -1706,8 +1704,20 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 });
                 ui.end_row();
                 ui.label("Smart zoom");
-                ui.add(w::Check::new(&mut s.smart_zoom, "Record for smart zoom"))
-                    .on_hover_text("Log the cursor and clicks (and keep the screen and camera apart) so Smart Zoom can export a version zoomed in around clicks. Uses more disk space while recording with a camera or scene.");
+                ui.vertical(|ui| {
+                    ui.add(w::Check::new(&mut s.smart_zoom, "Record for smart zoom"))
+                        .on_hover_text("Log the cursor, clicks and typing so Smart Zoom can export a copy zoomed in where you click. With a camera or scene, the screen and camera are also kept apart. This data is in a hidden folder next to the recording.");
+                    ui.add_enabled(s.smart_zoom, w::Check::new(&mut s.zoom_keep_data, "Keep its data after exporting"))
+                        .on_hover_text("On: export again later (another zoom level). Off: the hidden data folder goes to the Trash once a zoomed copy is saved.");
+                });
+                ui.end_row();
+                ui.label("Separate files");
+                ui.vertical(|ui| {
+                    ui.add(w::Check::new(&mut s.screen_file, "Save screen separately"))
+                        .on_hover_text("Also write the screen alone (without the camera or scene) to …-screen.mov, on the recording's timeline");
+                    ui.add(w::Check::new(&mut s.camera_file, "Save camera separately"))
+                        .on_hover_text("Also write the webcam alone to …-camera.mov, on the recording's timeline (when the camera is on)");
+                });
                 ui.end_row();
                 ui.label("SimpleRecord");
                 ui.add(w::Check::new(&mut s.show_self, "Show in recordings (for demos)"))

@@ -94,7 +94,8 @@ pub struct Stats {
     /// Smart zoom: the screen alone, and the cursor log.
     pub screen_file: Option<std::path::PathBuf>,
     pub screen_frames: u64,
-    pub events_file: Option<std::path::PathBuf>,
+    /// Smart zoom's hidden folder (cursor log, screen and camera kept apart).
+    pub zoom_data: Option<std::path::PathBuf>,
     /// Grid slots skipped while paused.
     pub paused_slots: u64,
     /// Arrival latency (host now - capture pts), max and sum, in seconds.
@@ -602,18 +603,23 @@ impl Sink {
         Ok(())
     }
 
-    /// Smart zoom: log the cursor and scene changes with `rec`, and when the
-    /// frame is composed, also write the screen alone to `screen` (`size`).
-    pub fn record_zoom(&mut self, rec: crate::zoom::Recorder, screen: Option<(&Path, (usize, usize), Codec, u32)>) -> Result<()> {
+    /// Also write the screen alone (before composing) to `path` (`size`).
+    pub fn write_screen_file(&mut self, path: &Path, size: (usize, usize), codec: Codec, fps: u32) -> Result<()> {
         if self.out.is_none() {
             return Ok(());
         }
-        if let Some((path, size, codec, fps)) = screen {
-            self.screen_out = Some(open_side(path, size, codec, fps, 0.15).context("screen file")?);
-            self.stats.screen_file = Some(path.to_path_buf());
-        }
-        self.zoom = Some(rec);
+        self.screen_out = Some(open_side(path, size, codec, fps, 0.15).context("screen file")?);
+        self.stats.screen_file = Some(path.to_path_buf());
         Ok(())
+    }
+
+    /// Smart zoom: log the cursor and scene changes with `rec`; its data is
+    /// in `dir`.
+    pub fn record_zoom(&mut self, rec: crate::zoom::Recorder, dir: std::path::PathBuf) {
+        if self.out.is_some() {
+            self.zoom = Some(rec);
+            self.stats.zoom_data = Some(dir);
+        }
     }
 
     /// Append the newest camera and screen frames to their own files at
@@ -1216,9 +1222,9 @@ impl Sink {
                 self.stats.screen_file = None;
             }
             if let Some(z) = self.zoom.take() {
-                match z.save(self.out_slot) {
-                    Ok(p) => self.stats.events_file = Some(p),
-                    Err(e) => eprintln!("rec: warning: smart zoom log: {e:#}"),
+                if let Err(e) = z.save(self.out_slot) {
+                    eprintln!("rec: warning: smart zoom log: {e:#}");
+                    self.stats.zoom_data = None;
                 }
             }
             if o.writer.status() != AVAssetWriterStatus::Completed {

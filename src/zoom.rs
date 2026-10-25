@@ -1,13 +1,14 @@
 //! Smart zoom: a recording made with `--smart-zoom` logs where the cursor
-//! is and when it clicks (`<name>.events.json`), and keeps the screen on its
-//! own (`<name>-screen.mov`) when the frame is composed. `export` then
-//! writes `<name>-zoomed.mov`: the screen zoomed in around clicks, with the
-//! rest of the scene (camera overlay, background) rebuilt as recorded and
-//! the sound copied. The recording itself is the unzoomed version.
+//! is, when it clicks and when keys are pressed, and keeps the screen and
+//! camera on their own when the frame is composed. That data goes in a
+//! hidden folder next to the recording (`.<name>.smartzoom/`), so only the
+//! files the user asked for show. `export` then writes `<name>-zoomed.mov`:
+//! the screen zoomed in around clicks, with the rest of the scene (camera
+//! overlay, background) rebuilt as recorded and the sound copied. The
+//! recording itself is the unzoomed version.
 //!
-//! Zooms are found from clicks (`segments`) and saved as
-//! `<name>.zoom.json`, which a later export reuses, so it can be edited by
-//! hand.
+//! Zooms are found from clicks (`segments`) and saved as `zoom.json` in the
+//! folder, which a later CLI export reuses, so it can be edited by hand.
 
 #![allow(deprecated)]
 
@@ -29,19 +30,39 @@ use crate::layout::{Background, SceneSpec, Transition};
 use crate::util::*;
 use crate::writer::{Codec, VideoSpec};
 
-/// `rec-….mov` -> `rec-….events.json`.
+/// `rec-….mov` -> `.rec-….smartzoom` (hidden): what smart zoom keeps.
+pub fn data_dir(rec: &Path) -> PathBuf {
+    let stem = rec.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    rec.with_file_name(format!(".{stem}.smartzoom"))
+}
+
+/// The cursor, click and key log.
 pub fn events_path(rec: &Path) -> PathBuf {
-    rec.with_extension("events.json")
+    data_dir(rec).join("events.json")
 }
 
-/// `rec-….mov` -> `rec-….zoom.json` (the zooms an export uses).
+/// The zooms an export uses.
 pub fn segments_path(rec: &Path) -> PathBuf {
-    rec.with_extension("zoom.json")
+    data_dir(rec).join("zoom.json")
 }
 
-/// `rec-….mov` -> `rec-…-screen.mov`.
-pub fn screen_file_path(rec: &Path) -> PathBuf {
-    sibling(rec, "screen")
+/// The screen alone, kept for smart zoom (when not saved separately).
+pub fn work_screen_path(rec: &Path) -> PathBuf {
+    data_dir(rec).join(format!("screen.{}", ext(rec)))
+}
+
+/// The camera alone, kept for smart zoom (when not saved separately).
+pub fn work_camera_path(rec: &Path) -> PathBuf {
+    data_dir(rec).join(format!("camera.{}", ext(rec)))
+}
+
+fn ext(rec: &Path) -> String {
+    rec.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "mov".into())
+}
+
+/// The first of `paths` that exists.
+fn first_existing(paths: [PathBuf; 2]) -> Option<PathBuf> {
+    paths.into_iter().find(|p| p.exists())
 }
 
 /// `rec-….mov` -> `rec-…-zoomed.mov`.
@@ -49,7 +70,7 @@ pub fn zoomed_path(rec: &Path) -> PathBuf {
     sibling(rec, "zoomed")
 }
 
-fn sibling(rec: &Path, suffix: &str) -> PathBuf {
+pub fn sibling(rec: &Path, suffix: &str) -> PathBuf {
     let stem = rec.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let ext = rec.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "mov".into());
     rec.with_file_name(format!("{stem}-{suffix}.{ext}"))
@@ -273,7 +294,7 @@ impl Default for ZoomOptions {
 pub const LEVELS: std::ops::RangeInclusive<f64> = 1.25..=3.0;
 
 /// Zoom in this long before a click.
-pub const LEAD_SECS: f64 = 0.3;
+pub const LEAD_SECS: f64 = 0.6;
 /// Stay in this long after the last click.
 pub const HOLD_SECS: f64 = 1.5;
 /// Clicks closer than this share a zoom.
@@ -281,8 +302,10 @@ pub const GAP_SECS: f64 = 3.0;
 /// A click this close to the edge of the zoomed view (a share of it) moves
 /// the view.
 const MARGIN: f64 = 0.1;
-/// Spring stiffness: settles in about 0.4 s.
-const OMEGA: f64 = 10.0;
+/// Spring stiffness for zooming (settles in about 0.7 s) and for panning
+/// (gentler, about 0.9 s): soft enough to feel smooth, not floaty.
+const OMEGA_ZOOM: f64 = 6.0;
+const OMEGA_PAN: f64 = 4.5;
 
 /// Where a zoom looks from `t` on (0-1 of the picture).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -390,7 +413,8 @@ pub fn camera_path(segs: &[Segment], frames: usize, fps: u32) -> Vec<(f64, f64, 
         let h = dt / steps as f64;
         for _ in 0..steps {
             for k in 0..3 {
-                let a = OMEGA * OMEGA * (target[k] - state[k]) - 2.0 * OMEGA * vel[k];
+                let w = if k == 0 { OMEGA_ZOOM } else { OMEGA_PAN };
+                let a = w * w * (target[k] - state[k]) - 2.0 * w * vel[k];
                 vel[k] += a * h;
                 state[k] += vel[k] * h;
             }
@@ -616,9 +640,17 @@ fn write(rec: &Path, output: &Path, log: &EventLog, segs: &[Segment], progress: 
         }
         writer.startSessionAtSourceTime(CMTime::new(0, log.fps as i32));
 
-        let mut screen = Frames::open(&if log.composed { screen_file_path(rec) } else { rec.to_path_buf() })?;
-        let cam_file = crate::record::camera_file_path(rec);
-        let mut cam = if log.composed && cam_file.exists() { Some(Frames::open(&cam_file)?) } else { None };
+        let screen_src = match log.composed {
+            true => first_existing([work_screen_path(rec), crate::record::screen_file_path(rec)])
+                .ok_or_else(|| anyhow!("the screen wasn't kept apart for {}", rec.display()))?,
+            false => rec.to_path_buf(),
+        };
+        let mut screen = Frames::open(&screen_src)?;
+        let cam_file = first_existing([work_camera_path(rec), crate::record::camera_file_path(rec)]);
+        let mut cam = match cam_file {
+            Some(f) if log.composed => Some(Frames::open(&f)?),
+            _ => None,
+        };
         let mut comp = log.composed.then(|| {
             let mut c = Compositor::new(w, h, log.pip.clone());
             c.set_background(log.background.clone());
@@ -738,7 +770,7 @@ mod tests {
     fn close_clicks_share_a_zoom() {
         let segs = segments(&[(1.0, 0.5, 0.5), (2.0, 0.55, 0.5), (4.5, 0.5, 0.5), (10.0, 0.1, 0.1)], &[], 2.0, 11.0);
         assert_eq!(segs.len(), 2);
-        assert!((segs[0].start - 0.7).abs() < 1e-9 && (segs[0].end - 6.0).abs() < 1e-9);
+        assert!((segs[0].start - 0.4).abs() < 1e-9 && (segs[0].end - 6.0).abs() < 1e-9);
         // Near clicks don't move the view.
         assert_eq!(segs[0].focus.len(), 1);
         assert!((segs[1].end - 11.0).abs() < 1e-9, "clamped to the end");
@@ -784,9 +816,9 @@ mod tests {
     #[test]
     fn names() {
         let r = Path::new("/m/rec-1.mov");
-        assert_eq!(events_path(r), Path::new("/m/rec-1.events.json"));
-        assert_eq!(segments_path(r), Path::new("/m/rec-1.zoom.json"));
-        assert_eq!(screen_file_path(r), Path::new("/m/rec-1-screen.mov"));
+        assert_eq!(events_path(r), Path::new("/m/.rec-1.smartzoom/events.json"));
+        assert_eq!(segments_path(r), Path::new("/m/.rec-1.smartzoom/zoom.json"));
+        assert_eq!(work_screen_path(r), Path::new("/m/.rec-1.smartzoom/screen.mov"));
         assert_eq!(zoomed_path(r), Path::new("/m/rec-1-zoomed.mov"));
     }
 
@@ -833,10 +865,12 @@ mod tests {
         for composed in [false, true] {
             let rec = dir.join(format!("rec-{composed}.mov"));
             ffmpeg(&src, &rec);
+            std::fs::create_dir_all(data_dir(&rec)).unwrap();
             if composed {
-                ffmpeg(&["-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30", "-t", "2", "-pix_fmt", "yuv420p"], &screen_file_path(&rec));
+                ffmpeg(&["-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30", "-t", "2", "-pix_fmt", "yuv420p"], &work_screen_path(&rec));
                 ffmpeg(&["-f", "lavfi", "-i", "smptebars=size=640x360:rate=30", "-t", "2", "-pix_fmt", "yuv420p"], &crate::record::camera_file_path(&rec));
             }
+            std::fs::create_dir_all(data_dir(&rec)).unwrap();
             std::fs::write(events_path(&rec), serde_json::to_string(&log_for(composed, 60)).unwrap()).unwrap();
             let out = zoomed_path(&rec);
             let stats = objc2::rc::autoreleasepool(|_| export(&rec, &out, &ZoomOptions::default(), &|p| assert!((0.0..=1.0).contains(&p)))).unwrap();

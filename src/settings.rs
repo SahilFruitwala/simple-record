@@ -90,8 +90,12 @@ pub struct Settings {
     pub camera_resolution: crate::camera::CamRes,
     /// Also save the webcam alone next to each recording.
     pub camera_file: bool,
+    /// Also save the screen alone next to each recording.
+    pub screen_file: bool,
     /// Record for smart zoom (cursor log, screen and camera kept apart).
     pub smart_zoom: bool,
+    /// Keep smart zoom's data after exporting a zoomed copy (to export again).
+    pub zoom_keep_data: bool,
     pub mic_enabled: bool,
     /// Microphone unique ID; None = system default.
     pub mic: Option<String>,
@@ -180,7 +184,9 @@ impl Default for Settings {
             camera: None,
             camera_resolution: Default::default(),
             camera_file: false,
+            screen_file: false,
             smart_zoom: false,
+            zoom_keep_data: true,
             mic_enabled: true,
             mic: None,
             mic_name: None,
@@ -556,6 +562,9 @@ impl Settings {
         }
         if self.smart_zoom {
             a.push("--smart-zoom".into());
+        }
+        if self.screen_file {
+            a.push("--screen-file".into());
         }
         if !self.mic_enabled {
             a.push("--no-mic".into());

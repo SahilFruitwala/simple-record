@@ -101,6 +101,8 @@ pub struct Options {
     pub cam_res: crate::camera::CamRes,
     /// Also write the webcam alone to `<output>-camera.mov`.
     pub camera_file: bool,
+    /// Also write the screen alone (before composing) to `<output>-screen.mov`.
+    pub screen_file: bool,
     /// Log the cursor (and keep the screen and camera apart when composed)
     /// for a smart zoom export (`zoom::export`).
     pub smart_zoom: bool,
@@ -226,6 +228,11 @@ pub fn camera_file_path(output: &std::path::Path) -> PathBuf {
     output.with_file_name(format!("{stem}-camera.{ext}"))
 }
 
+/// `rec-….mov` -> `rec-…-screen.mov` (the screen-only file).
+pub fn screen_file_path(output: &std::path::Path) -> PathBuf {
+    crate::zoom::sibling(output, "screen")
+}
+
 /// Whether frames go through the compositor: a webcam, a scene other than
 /// the plain screen, a canvas of another shape than the screen, or the
 /// screen inset on the background. The plain
@@ -314,11 +321,25 @@ impl Session {
             eprintln!("rec: warning: smart zoom isn't available for HDR recordings");
         }
         let smart_zoom = smart_zoom && !o.hdr;
-        if write && (o.camera_file || (smart_zoom && composed)) && o.webcam.is_some() {
+        // Composed frames are rebuilt from the screen and camera alone: kept
+        // in smart zoom's hidden folder unless saved separately anyway.
+        let zoom_sides = smart_zoom && composed;
+        if zoom_sides {
+            std::fs::create_dir_all(crate::zoom::data_dir(&o.output))?;
+        }
+        if write && (o.camera_file || zoom_sides) && o.webcam.is_some() {
             let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::H264 };
-            sink.write_camera_file(&camera_file_path(&o.output), o.cam_res.size(), codec, o.fps)?;
+            let path = if o.camera_file { camera_file_path(&o.output) } else { crate::zoom::work_camera_path(&o.output) };
+            sink.write_camera_file(&path, o.cam_res.size(), codec, o.fps)?;
+        }
+        if write && (o.screen_file || zoom_sides) && target.is_some() {
+            let path = if o.screen_file { screen_file_path(&o.output) } else { crate::zoom::work_screen_path(&o.output) };
+            let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::Hevc };
+            let (cw, ch) = capture_size(o);
+            sink.write_screen_file(&path, (cw & !1, ch & !1), codec, o.fps)?;
         }
         if smart_zoom && let Some(t) = &target {
+            std::fs::create_dir_all(crate::zoom::data_dir(&o.output))?;
             let rec = crate::zoom::Recorder::new(
                 crate::zoom::events_path(&o.output),
                 crate::zoom::Area::for_target(t),
@@ -330,10 +351,7 @@ impl Session {
                 o.transition_secs,
                 o.pip.clone(),
             );
-            let screen_path = crate::zoom::screen_file_path(&o.output);
-            let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::Hevc };
-            let (cw, ch) = capture_size(o);
-            sink.record_zoom(rec, composed.then_some((screen_path.as_path(), (cw & !1, ch & !1), codec, o.fps)))?;
+            sink.record_zoom(rec, crate::zoom::data_dir(&o.output));
         }
         if let Some(l) = o.live.as_ref().filter(|_| !o.hdr) {
             l.begin_session(o.system_audio, o.mic.is_some(), o.gains_db);
