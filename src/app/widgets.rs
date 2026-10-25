@@ -230,6 +230,33 @@ pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
     ui.add(b)
 }
 
+/// A popover's closing buttons, macOS style: compact, at the bottom right,
+/// Cancel then the default action. True when the action is clicked (both
+/// close the popover).
+pub fn popover_actions(ui: &mut Ui, action: &str, enabled: bool) -> bool {
+    let mut go = false;
+    ui.add_space(6.0);
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), 30.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let b = egui::Button::new(egui::RichText::new(action).font(theme::semibold(theme::BODY)).color(Color32::WHITE))
+            .fill(theme::accent())
+            .corner_radius(7)
+            .min_size(vec2(88.0, 28.0));
+        if ui.add_enabled(enabled, b).clicked() {
+            go = true;
+            egui::Popup::close_all(ui.ctx());
+        }
+        if ui.add(egui::Button::new(action_label("Cancel")).corner_radius(7).min_size(vec2(72.0, 28.0))).clicked() {
+            egui::Popup::close_all(ui.ctx());
+        }
+    });
+    go
+}
+
+fn action_label(s: &str) -> egui::RichText {
+    egui::RichText::new(s).font(egui::FontId::new(theme::BODY, egui::FontFamily::Name("medium".into())))
+}
+
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let [ar, ag, ab, aa] = a.to_srgba_unmultiplied();
     let [br, bg, bb, ba] = b.to_srgba_unmultiplied();

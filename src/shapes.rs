@@ -98,7 +98,7 @@ pub enum Place {
     At([f64; 2]),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PipSpec {
     /// Overlay width as a fraction of the output width.
     pub size: f64,

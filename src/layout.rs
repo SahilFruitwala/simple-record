@@ -470,7 +470,8 @@ impl Default for Layout {
 }
 
 /// A scene to show: a template or a custom layout.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SceneSpec {
     Template(Scene),
     Custom(Layout),
