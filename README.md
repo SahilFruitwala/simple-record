@@ -85,7 +85,9 @@ dist/simple-record --help          # dist/rec is a short alias
 app's version taken from `Cargo.toml`. Merging to `main` runs the Release workflow, which builds the
 DMG and publishes it as the GitHub release `v<version>` the first time that version lands; bump
 `version` in `Cargo.toml` to release again (pushing a tag such as `v0.2.0` also works). The app is
-ad-hoc signed there, so the first launch needs right-click, Open. `scripts/make-icons.sh`
+signed there with a self-signed certificate (so the first launch needs right-click, Open, and macOS
+privacy grants survive updates). Create it once with `scripts/make-signing-cert.sh` and add the three
+secrets it prints; without them the build falls back to ad-hoc signing, which resets the grants on every update. `scripts/make-icons.sh`
 regenerates the logo and icons from `assets/logo/make_logo.py`.
 
 Build output goes to `~/.cache/simple-record-target` (`CARGO_TARGET_DIR`), never into the repo,

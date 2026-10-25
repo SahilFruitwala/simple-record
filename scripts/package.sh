@@ -1,6 +1,7 @@
 #!/bin/sh
 # Build dist/SimpleRecord.app (scripts/build.sh) and wrap it in dist/SimpleRecord-<version>-macos-arm64.dmg.
-# In CI there is no signing identity, so the app is ad-hoc signed (users right-click > Open once).
+# In CI the app is signed with the self-signed cert from the SIGNING_* secrets (see
+# scripts/make-signing-cert.sh); without them it is ad-hoc signed and permissions reset per update.
 set -eu
 cd "$(dirname "$0")/.."
 ./scripts/build.sh

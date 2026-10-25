@@ -89,6 +89,28 @@ jobs:
               echo "publish=${{ steps.bump.outputs.bumped }}" >> "$GITHUB_OUTPUT" ;;
             *) echo "publish=false" >> "$GITHUB_OUTPUT" ;;
           esac
+      - name: Import signing certificate
+        # A self-signed cert (scripts/make-signing-cert.sh) reused for every release keeps
+        # macOS privacy grants across updates. Without the secrets the app is ad-hoc signed.
+        env:
+          CERT_P12: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$CERT_P12" ] || [ -z "$SIGNING_IDENTITY" ]; then
+            echo "No signing secrets; falling back to ad-hoc signing"; exit 0
+          fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kcpass=$(uuidgen)
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$kcpass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpass" "$kc"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$kc"
+          security list-keychains -d user -s "$kc" login.keychain-db
+          rm -f "$RUNNER_TEMP/signing.p12"
+          echo "REC_SIGN_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
       - name: Package
         run: scripts/package.sh
         env:
