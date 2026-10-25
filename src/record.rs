@@ -101,6 +101,9 @@ pub struct Options {
     pub cam_res: crate::camera::CamRes,
     /// Also write the webcam alone to `<output>-camera.mov`.
     pub camera_file: bool,
+    /// Log the cursor (and keep the screen and camera apart when composed)
+    /// for a smart zoom export (`zoom::export`).
+    pub smart_zoom: bool,
     pub pip: PipSpec,
     pub cursor: bool,
     pub clicks: bool,
@@ -304,9 +307,33 @@ impl Session {
         }
         sink.set_audio_offsets([sys_ms / 1000.0, o.mic_offset_ms / 1000.0]);
         sink.set_mic_filters(o.mic_filters);
-        if write && o.camera_file && o.webcam.is_some() {
+        // Smart zoom rebuilds composed frames from the screen and camera
+        // alone, so it needs the camera file too.
+        let smart_zoom = write && o.smart_zoom && o.test_pattern.is_none() && target.is_some();
+        if smart_zoom && o.hdr {
+            eprintln!("rec: warning: smart zoom isn't available for HDR recordings");
+        }
+        let smart_zoom = smart_zoom && !o.hdr;
+        if write && (o.camera_file || (smart_zoom && composed)) && o.webcam.is_some() {
             let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::H264 };
             sink.write_camera_file(&camera_file_path(&o.output), o.cam_res.size(), codec, o.fps)?;
+        }
+        if smart_zoom && let Some(t) = &target {
+            let rec = crate::zoom::Recorder::new(
+                crate::zoom::events_path(&o.output),
+                crate::zoom::Area::for_target(t),
+                &spec,
+                composed,
+                o.scene.clone(),
+                o.background.clone(),
+                o.transition,
+                o.transition_secs,
+                o.pip.clone(),
+            );
+            let screen_path = crate::zoom::screen_file_path(&o.output);
+            let codec = if o.codec == crate::writer::Codec::Prores { o.codec } else { crate::writer::Codec::Hevc };
+            let (cw, ch) = capture_size(o);
+            sink.record_zoom(rec, composed.then_some((screen_path.as_path(), (cw & !1, ch & !1), codec, o.fps)))?;
         }
         if let Some(l) = o.live.as_ref().filter(|_| !o.hdr) {
             l.begin_session(o.system_audio, o.mic.is_some(), o.gains_db);

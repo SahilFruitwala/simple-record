@@ -713,6 +713,7 @@ fn controls(ui: &mut Ui, st: &mut State) {
             }
             if st.last_file.is_some() && !recording {
                 gif_button(ui, st);
+                zoom_button(ui, st);
             }
         });
     });
@@ -776,6 +777,43 @@ fn gif_button(ui: &mut Ui, st: &mut State) {
         ui.add_space(4.0);
         if w::primary_button(ui, "Export GIF").clicked() {
             st.cmds.push(Cmd::ExportGif);
+            egui::Popup::close_all(ui.ctx());
+        }
+    });
+}
+
+/// "Smart Zoom…": the last recording zoomed in around its clicks, next to
+/// it as …-zoomed.mov (the recording stays as the unzoomed version). Only
+/// for recordings made with Record for smart zoom.
+fn zoom_button(ui: &mut Ui, st: &mut State) {
+    if let Some(p) = &st.zoom_progress {
+        let done = p.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
+        ui.add(egui::ProgressBar::new(done).desired_width(120.0).text(format!("Zoom {:.0}%", done * 100.0)));
+        return;
+    }
+    let Some(file) = st.last_file.clone() else { return };
+    if !crate::zoom::available(&file) {
+        return;
+    }
+    let resp = ui.button("Smart Zoom…").on_hover_text("Export a version of the last recording zoomed in around clicks");
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let p = theme::pal(ui);
+        ui.set_min_width(300.0);
+        ui.label(RichText::new(file.file_name().unwrap_or_default().to_string_lossy()).strong());
+        egui::Grid::new("zoom").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+            ui.label("Zoom");
+            ui.add(egui::Slider::new(&mut st.zoom_opts.level, crate::zoom::LEVELS).step_by(0.25).suffix("×"));
+            ui.end_row();
+        });
+        let edited = crate::zoom::segments_path(&file).exists();
+        if edited {
+            ui.add(w::Check::new(&mut st.zoom_opts.fresh, "Find the zooms again"))
+                .on_hover_text("Off: reuse the zooms in …zoom.json from the last export (edit it to adjust them)");
+        }
+        ui.label(RichText::new("Saved as …-zoomed.mov; the recording stays as it is.").size(SECONDARY).color(p.secondary));
+        ui.add_space(4.0);
+        if w::primary_button(ui, "Export").clicked() {
+            st.cmds.push(Cmd::ExportZoom);
             egui::Popup::close_all(ui.ctx());
         }
     });
@@ -1613,6 +1651,10 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                     ui.add(w::Check::new(&mut s.cursor, "Show"));
                     ui.add_enabled(s.cursor, w::Check::new(&mut s.clicks, "Highlight clicks"));
                 });
+                ui.end_row();
+                ui.label("Smart zoom");
+                ui.add(w::Check::new(&mut s.smart_zoom, "Record for smart zoom"))
+                    .on_hover_text("Log the cursor and clicks (and keep the screen and camera apart) so Smart Zoom can export a version zoomed in around clicks. Uses more disk space while recording with a camera or scene.");
                 ui.end_row();
                 ui.label("SimpleRecord");
                 ui.add(w::Check::new(&mut s.show_self, "Show in recordings (for demos)"))

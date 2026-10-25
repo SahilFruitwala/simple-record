@@ -91,6 +91,10 @@ pub struct Stats {
     /// The webcam-only file written next to the recording, and its frames.
     pub camera_file: Option<std::path::PathBuf>,
     pub camera_frames: u64,
+    /// Smart zoom: the screen alone, and the cursor log.
+    pub screen_file: Option<std::path::PathBuf>,
+    pub screen_frames: u64,
+    pub events_file: Option<std::path::PathBuf>,
     /// Grid slots skipped while paused.
     pub paused_slots: u64,
     /// Arrival latency (host now - capture pts), max and sum, in seconds.
@@ -209,8 +213,9 @@ struct CamGate {
 /// Start without the camera if it delivers nothing for this long.
 const CAMERA_TIMEOUT_SECS: f64 = 3.0;
 
-/// The webcam alone, in a file of its own on the recording's timeline (same
-/// start, same pauses), for editing it separately.
+/// The webcam (or, for smart zoom, the screen) alone, in a file of its own
+/// on the recording's timeline (same start, same pauses), for editing it
+/// separately.
 struct CamOut {
     writer: Retained<AVAssetWriter>,
     video: Retained<AVAssetWriterInput>,
@@ -260,6 +265,11 @@ pub struct Sink {
     /// Microphone filters (noise suppression, gate, compressor).
     mic_filters: crate::filters::FilterChain,
     cam_out: Option<CamOut>,
+    /// Smart zoom: the screen before composing, and the cursor log.
+    screen_out: Option<CamOut>,
+    zoom: Option<crate::zoom::Recorder>,
+    /// Host time of the last frame slot emitted (when scene changes apply).
+    last_t: f64,
     screen_q: VecDeque<(f64, Pb)>,
     screen_last: Option<Pb>,
     cam_q: VecDeque<(f64, Pb)>,
@@ -410,6 +420,9 @@ impl Sink {
             live: None,
             mic_filters: crate::filters::FilterChain::new(Default::default()),
             cam_out: None,
+            screen_out: None,
+            zoom: None,
+            last_t: 0.0,
             latency_peak: [0.0; 2],
             latency_at: [0.0; 2],
             audio_offset: [0.0; 2],
@@ -515,6 +528,9 @@ impl Sink {
     }
 
     pub fn set_scene(&mut self, scene: SceneSpec, animate: bool) -> bool {
+        if let Some(z) = &mut self.zoom {
+            z.op(self.last_t, crate::zoom::Op::Scene { scene: scene.clone(), animate });
+        }
         match self.compositor.as_mut() {
             Some(c) => {
                 c.set_scene(scene, animate);
@@ -581,61 +597,53 @@ impl Sink {
             Codec::H264 => 0.1,
             _ => 0.06,
         };
-        let v = VideoSpec {
-            width: size.0,
-            height: size.1,
-            fps,
-            codec,
-            bitrate: ((size.0 * size.1) as f64 * fps.min(60) as f64 * bpp) as u64,
-            pixel_format: PIX_BGRA,
-            hdr_pq: None,
-        };
-        let (writer, video, adaptor) = open_video(path, &v)?;
-        unsafe {
-            if !writer.startWriting() {
-                bail!("camera file: startWriting failed: {}", err_text(&writer));
-            }
-            let opts = dict(vec![(&*ns("kCIContextCacheIntermediates"), num_b(false))]);
-            let ctx = objc2_core_image::CIContext::contextWithOptions(Some(&opts));
-            self.cam_out = Some(CamOut { writer, video, adaptor, ctx, size, path: path.to_path_buf() });
-        }
+        self.cam_out = Some(open_side(path, size, codec, fps, bpp).context("camera file")?);
         self.stats.camera_file = Some(path.to_path_buf());
         Ok(())
     }
 
-    /// Append the newest camera frame to the camera file at `pts` (the
-    /// recording's frame time), fitted to its size.
-    fn write_camera(&mut self, pts: CMTime) {
-        let Some(c) = &self.cam_out else { return };
-        let Some(src) = self.cam_last.as_ref() else { return };
-        unsafe {
-            if !c.video.isReadyForMoreMediaData() {
-                return;
+    /// Smart zoom: log the cursor and scene changes with `rec`, and when the
+    /// frame is composed, also write the screen alone to `screen` (`size`).
+    pub fn record_zoom(&mut self, rec: crate::zoom::Recorder, screen: Option<(&Path, (usize, usize), Codec, u32)>) -> Result<()> {
+        if self.out.is_none() {
+            return Ok(());
+        }
+        if let Some((path, size, codec, fps)) = screen {
+            self.screen_out = Some(open_side(path, size, codec, fps, 0.15).context("screen file")?);
+            self.stats.screen_file = Some(path.to_path_buf());
+        }
+        self.zoom = Some(rec);
+        Ok(())
+    }
+
+    /// Append the newest camera and screen frames to their own files at
+    /// `pts` (the recording's frame time), fitted to their sizes.
+    fn write_sides(&mut self, pts: CMTime) {
+        if let (Some(c), Some(src)) = (&self.cam_out, self.cam_last.as_ref()) {
+            match write_side(c, &src.0, pts) {
+                Some(true) => self.stats.camera_frames += 1,
+                Some(false) => {}
+                None => {
+                    // The recording goes on without it.
+                    eprintln!("rec: warning: camera file failed: {}", err_text(&c.writer));
+                    unsafe { c.writer.cancelWriting() };
+                    let _ = std::fs::remove_file(&c.path);
+                    self.cam_out = None;
+                    self.stats.camera_file = None;
+                }
             }
-            let Some(pool) = c.adaptor.pixelBufferPool() else { return };
-            let mut buf = std::ptr::null_mut();
-            CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));
-            let Some(buf) = std::ptr::NonNull::new(buf) else { return };
-            let buf: CFRetained<CVPixelBuffer> = CFRetained::from_raw(buf);
-            let img = objc2_core_image::CIImage::imageWithCVPixelBuffer(&src.0);
-            let e = img.extent();
-            let (w, h) = (c.size.0 as f64, c.size.1 as f64);
-            let (sx, sy, tx, ty) = crate::compose::fill(e.size.width, e.size.height, w, h);
-            let t = objc2_core_foundation::CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx: tx - sx * e.origin.x, ty: ty - sy * e.origin.y };
-            let canvas = objc2_core_foundation::CGRect::new(objc2_core_foundation::CGPoint::new(0.0, 0.0), objc2_core_foundation::CGSize::new(w, h));
-            let black = objc2_core_image::CIImage::imageWithColor(&objc2_core_image::CIColor::colorWithRed_green_blue(0.0, 0.0, 0.0));
-            let out = img.imageByApplyingTransform(t).imageByCompositingOverImage(&black).imageByCroppingToRect(canvas);
-            let cs = objc2_core_graphics::CGColorSpace::with_name(Some(objc2_core_graphics::kCGColorSpaceSRGB));
-            c.ctx.render_toCVPixelBuffer_bounds_colorSpace(&out, &buf, canvas, cs.as_deref());
-            if c.adaptor.appendPixelBuffer_withPresentationTime(&buf, pts) {
-                self.stats.camera_frames += 1;
-            } else if c.writer.status() == AVAssetWriterStatus::Failed {
-                // The recording goes on without it.
-                eprintln!("rec: warning: camera file failed: {}", err_text(&c.writer));
-                c.writer.cancelWriting();
-                let _ = std::fs::remove_file(&c.path);
-                self.cam_out = None;
-                self.stats.camera_file = None;
+        }
+        if let (Some(c), Some(src)) = (&self.screen_out, self.screen_last.as_ref()) {
+            match write_side(c, &src.0, pts) {
+                Some(true) => self.stats.screen_frames += 1,
+                Some(false) => {}
+                None => {
+                    eprintln!("rec: warning: screen file failed: {}", err_text(&c.writer));
+                    unsafe { c.writer.cancelWriting() };
+                    let _ = std::fs::remove_file(&c.path);
+                    self.screen_out = None;
+                    self.stats.screen_file = None;
+                }
             }
         }
     }
@@ -652,6 +660,9 @@ impl Sink {
     /// Change the scene background and transition live (no-op when not
     /// composing).
     pub fn set_look(&mut self, background: crate::layout::Background, transition: crate::layout::Transition, secs: f64) {
+        if let Some(z) = &mut self.zoom {
+            z.op(self.last_t, crate::zoom::Op::Look { background: background.clone(), transition, secs });
+        }
         for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
             c.set_background(background.clone());
             c.set_transition(transition, secs);
@@ -661,6 +672,9 @@ impl Sink {
     /// The main camera's unique ID: a scene layer showing that camera by
     /// ID shows its frames.
     pub fn set_main_camera(&mut self, id: Option<String>) {
+        if let Some(z) = &mut self.zoom {
+            z.op(self.last_t, crate::zoom::Op::MainCamera(id.clone()));
+        }
         for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
             c.set_main_camera(id.clone());
         }
@@ -668,6 +682,9 @@ impl Sink {
 
     /// Change the camera overlay live (no-op without a webcam).
     pub fn set_pip(&mut self, pip: crate::compose::PipSpec) {
+        if let Some(z) = &mut self.zoom {
+            z.op(self.last_t, crate::zoom::Op::Pip(pip.clone()));
+        }
         for c in self.compositor.iter_mut().chain(self.studio.iter_mut().map(|s| &mut s.0)) {
             c.set_pip(pip.clone());
         }
@@ -729,7 +746,7 @@ impl Sink {
         if self.t0.is_none() {
             let t0 = (pts_s * TIMESCALE as f64).round() as i64;
             self.t0 = Some(t0);
-            if let Some(c) = &self.cam_out {
+            for c in self.cam_out.iter().chain(&self.screen_out) {
                 unsafe { c.writer.startSessionAtSourceTime(CMTime::new(t0, TIMESCALE)) };
             }
             if let Some(o) = &self.out {
@@ -777,6 +794,9 @@ impl Sink {
 
     /// A frame of another display or camera (an extra scene source).
     pub fn push_extra(&mut self, src: &crate::layout::Source, pts: CMTime, pb: CFRetained<CVPixelBuffer>) {
+        if let Some(z) = &mut self.zoom {
+            z.note_extras();
+        }
         let due = self.due_time();
         let i = match self.extra.iter().position(|e| e.0 == *src) {
             Some(i) => i,
@@ -1029,6 +1049,7 @@ impl Sink {
                 Self::pick(q, last, slot_t + half);
             }
             self.next_slot += 1;
+            self.last_t = slot_t;
             let write = self.pauses.offset_at(slot as f64).is_some() && self.limit.is_none_or(|l| self.out_slot < l);
             if !write {
                 self.stats.paused_slots += 1;
@@ -1107,6 +1128,9 @@ impl Sink {
             };
             if write {
                 let pts = unsafe { CMTime::new(self.slot_ticks(self.out_slot), TIMESCALE) };
+                if let Some(z) = &mut self.zoom {
+                    z.frame(self.out_slot, slot_t);
+                }
                 self.out_slot += 1;
                 if let Some(o) = &self.out {
                     if unsafe { o.adaptor.appendPixelBuffer_withPresentationTime(&frame, pts) } {
@@ -1118,7 +1142,7 @@ impl Sink {
                         self.stats.video_drops += 1;
                         self.check_writer();
                     }
-                    self.write_camera(pts);
+                    self.write_sides(pts);
                 } else {
                     self.stats.video_frames_out += 1;
                 }
@@ -1154,7 +1178,7 @@ impl Sink {
         }
         if self.t0.is_none() {
             unsafe { self.out.as_ref().unwrap().writer.cancelWriting() };
-            if let Some(c) = self.cam_out.take() {
+            for c in self.cam_out.take().into_iter().chain(self.screen_out.take()) {
                 unsafe { c.writer.cancelWriting() };
                 let _ = std::fs::remove_file(&c.path);
             }
@@ -1176,29 +1200,25 @@ impl Sink {
                 let _ = tx.send(());
             });
             o.writer.finishWritingWithCompletionHandler(&block);
-            // The camera file finalizes alongside.
-            let cam = self.cam_out.take().map(|c| {
-                c.writer.endSessionAtSourceTime(end_t);
-                c.video.markAsFinished();
-                let (tx, rx) = mpsc::channel();
-                let block = RcBlock::new(move || {
-                    let _ = tx.send(());
-                });
-                c.writer.finishWritingWithCompletionHandler(&block);
-                (c, rx)
-            });
+            // The camera and screen files finalize alongside.
+            let cam = self.cam_out.take().map(|c| finish_side(c, end_t));
+            let screen = self.screen_out.take().map(|c| finish_side(c, end_t));
             rx.recv_timeout(Duration::from_secs(60))
                 .context("timed out finalizing movie")?;
-            if let Some((c, rx)) = cam {
-                let ok = rx.recv_timeout(Duration::from_secs(60)).is_ok() && c.writer.status() == AVAssetWriterStatus::Completed;
-                // No camera frames (it never delivered) or a failure: no
-                // unplayable file is left behind.
-                if !ok || self.stats.camera_frames == 0 {
-                    if !ok {
-                        eprintln!("rec: warning: camera file {} failed: {}", c.path.display(), err_text(&c.writer));
-                    }
-                    let _ = std::fs::remove_file(&c.path);
-                    self.stats.camera_file = None;
+            if let Some((c, rx)) = cam
+                && !side_done(&c, rx, self.stats.camera_frames, "camera")
+            {
+                self.stats.camera_file = None;
+            }
+            if let Some((c, rx)) = screen
+                && !side_done(&c, rx, self.stats.screen_frames, "screen")
+            {
+                self.stats.screen_file = None;
+            }
+            if let Some(z) = self.zoom.take() {
+                match z.save(self.out_slot) {
+                    Ok(p) => self.stats.events_file = Some(p),
+                    Err(e) => eprintln!("rec: warning: smart zoom log: {e:#}"),
                 }
             }
             if o.writer.status() != AVAssetWriterStatus::Completed {
@@ -1209,9 +1229,91 @@ impl Sink {
     }
 }
 
+/// A started writer for a side file (the camera or the screen alone).
+fn open_side(path: &Path, size: (usize, usize), codec: Codec, fps: u32, bpp: f64) -> Result<CamOut> {
+    let v = VideoSpec {
+        width: size.0,
+        height: size.1,
+        fps,
+        codec,
+        bitrate: ((size.0 * size.1) as f64 * fps.min(60) as f64 * bpp) as u64,
+        pixel_format: PIX_BGRA,
+        hdr_pq: None,
+    };
+    let (writer, video, adaptor) = open_video(path, &v)?;
+    unsafe {
+        if !writer.startWriting() {
+            bail!("startWriting failed: {}", err_text(&writer));
+        }
+        let opts = dict(vec![(&*ns("kCIContextCacheIntermediates"), num_b(false))]);
+        let ctx = objc2_core_image::CIContext::contextWithOptions(Some(&opts));
+        Ok(CamOut { writer, video, adaptor, ctx, size, path: path.to_path_buf() })
+    }
+}
+
+/// Append `src` fitted to the side file's size at `pts`: Some(appended),
+/// or None when the file failed.
+fn write_side(c: &CamOut, src: &CVPixelBuffer, pts: CMTime) -> Option<bool> {
+    unsafe {
+        if !c.video.isReadyForMoreMediaData() {
+            return Some(false);
+        }
+        let Some(pool) = c.adaptor.pixelBufferPool() else { return Some(false) };
+        let mut buf = std::ptr::null_mut();
+        CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));
+        let Some(buf) = std::ptr::NonNull::new(buf) else { return Some(false) };
+        let buf: CFRetained<CVPixelBuffer> = CFRetained::from_raw(buf);
+        let img = objc2_core_image::CIImage::imageWithCVPixelBuffer(src);
+        let e = img.extent();
+        let (w, h) = (c.size.0 as f64, c.size.1 as f64);
+        let (sx, sy, tx, ty) = crate::compose::fill(e.size.width, e.size.height, w, h);
+        let t = objc2_core_foundation::CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx: tx - sx * e.origin.x, ty: ty - sy * e.origin.y };
+        let canvas = objc2_core_foundation::CGRect::new(objc2_core_foundation::CGPoint::new(0.0, 0.0), objc2_core_foundation::CGSize::new(w, h));
+        let black = objc2_core_image::CIImage::imageWithColor(&objc2_core_image::CIColor::colorWithRed_green_blue(0.0, 0.0, 0.0));
+        let out = img.imageByApplyingTransform(t).imageByCompositingOverImage(&black).imageByCroppingToRect(canvas);
+        let cs = objc2_core_graphics::CGColorSpace::with_name(Some(objc2_core_graphics::kCGColorSpaceSRGB));
+        c.ctx.render_toCVPixelBuffer_bounds_colorSpace(&out, &buf, canvas, cs.as_deref());
+        if c.adaptor.appendPixelBuffer_withPresentationTime(&buf, pts) {
+            Some(true)
+        } else if c.writer.status() == AVAssetWriterStatus::Failed {
+            None
+        } else {
+            Some(false)
+        }
+    }
+}
+
+/// End a side file at `end` and start finalizing it.
+fn finish_side(c: CamOut, end: CMTime) -> (CamOut, mpsc::Receiver<()>) {
+    unsafe {
+        c.writer.endSessionAtSourceTime(end);
+        c.video.markAsFinished();
+        let (tx, rx) = mpsc::channel();
+        let block = RcBlock::new(move || {
+            let _ = tx.send(());
+        });
+        c.writer.finishWritingWithCompletionHandler(&block);
+        (c, rx)
+    }
+}
+
+/// Wait for a side file to finalize. False (and the file removed) when it
+/// failed or got no frames, so no unplayable file is left behind.
+fn side_done(c: &CamOut, rx: mpsc::Receiver<()>, frames: u64, what: &str) -> bool {
+    let ok = rx.recv_timeout(Duration::from_secs(60)).is_ok() && unsafe { c.writer.status() } == AVAssetWriterStatus::Completed;
+    if !ok || frames == 0 {
+        if !ok {
+            eprintln!("rec: warning: {what} file {} failed: {}", c.path.display(), err_text(&c.writer));
+        }
+        let _ = std::fs::remove_file(&c.path);
+        return false;
+    }
+    true
+}
+
 /// A writer for `path` with one video input (constant frame rate, crash-
 /// safe fragments), not yet started.
-fn open_video(path: &Path, v: &VideoSpec) -> Result<(Retained<AVAssetWriter>, Retained<AVAssetWriterInput>, Retained<AVAssetWriterInputPixelBufferAdaptor>)> {
+pub(crate) fn open_video(path: &Path, v: &VideoSpec) -> Result<(Retained<AVAssetWriter>, Retained<AVAssetWriterInput>, Retained<AVAssetWriterInputPixelBufferAdaptor>)> {
     if path.exists() {
         bail!("{} already exists", path.display());
     }
@@ -1422,7 +1524,7 @@ fn retime(sb: &CMSampleBuffer, i0: usize, i1: usize, shift: i64) -> Option<CFRet
     }
 }
 
-fn err_text(w: &AVAssetWriter) -> String {
+pub(crate) fn err_text(w: &AVAssetWriter) -> String {
     unsafe {
         w.error()
             .map(|e| {

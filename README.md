@@ -211,6 +211,17 @@ The **main window** contains:
 - **Export GIF…**: the last recording, or part of it (From/To), as a looping GIF next to it,
   480, 720 or 1080 px wide at 10–25 fps. It runs in the background with a progress bar and
   shows the GIF in Finder when done. GIFs have no sound.
+- **Smart Zoom…** (for recordings made with Settings › Record for smart zoom): a version of
+  the last recording zoomed in around clicks, saved next to it as `…-zoomed.mov`; the
+  recording itself stays as the unzoomed version. Clicks less than 3 s apart share a zoom
+  (in 0.3 s before the first, out 1.5 s after the last), the view pans when a click lands
+  off it, and moves ease with a spring. Only the screen zooms: a camera overlay, background
+  and scene changes are rebuilt as recorded, from the screen and camera kept apart while
+  recording (`…-screen.mov`, `…-camera.mov`). Cursor and clicks are read without any extra
+  permission and logged to `….events.json`. The zooms are saved to `….zoom.json`, which
+  later exports reuse, so they can be adjusted by hand. Not available for HDR recordings,
+  or scenes showing other displays, cameras, videos or web pages. The cursor is the one
+  ScreenCaptureKit draws, so it is magnified with the screen.
 - **Recording controls**: while recording, a small floating bar shows the stop button and the
   recorded time, mic mute (with the mic's level), pause/resume, restart, delete and a button
   that opens the SimpleRecord window. Drag it by its grip (⋮); it stays where you leave it until SimpleRecord
@@ -359,6 +370,9 @@ Other commands:
 - `simple-record gif FILE [-o OUT] [--fps 15] [--width 720] [--start S] [-t SECS]` turns a recording
   (or part of it) into a looping GIF: AVAssetReader decodes it, CoreImage's Lanczos filter
   scales it, ImageIO writes it, with frame delays that keep the frame rate exact on average.
+- `simple-record zoom FILE [-o OUT] [--level 2] [--fresh]` writes the smart zoom version of a
+  recording made with `record --smart-zoom` (see Smart Zoom above). `--fresh` finds the zooms
+  from the clicks again instead of reusing `….zoom.json`.
 
 - `simple-record devices` lists displays, windows, cameras and mics.
 - `simple-record probe FILE` checks a file with AVFoundation, QuickTime's engine, and decodes every

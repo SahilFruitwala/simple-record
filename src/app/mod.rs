@@ -45,6 +45,8 @@ pub enum Cmd {
     RestartRecording,
     /// Export the last recording (as `State::gif_opts` says) to a GIF.
     ExportGif,
+    /// Export the last recording's smart zoom version.
+    ExportZoom,
     /// Stop the running recording and move its file to the Trash.
     DeleteRecording,
     ShowWindow,
@@ -263,6 +265,10 @@ pub struct State {
     /// The running GIF export's progress, in thousandths.
     pub gif_progress: Option<Arc<std::sync::atomic::AtomicU32>>,
     gif_job: Option<std::thread::JoinHandle<Result<(PathBuf, crate::gif::GifStats)>>>,
+    /// The smart zoom export's choices, and its progress in thousandths.
+    pub zoom_opts: crate::zoom::ZoomOptions,
+    pub zoom_progress: Option<Arc<std::sync::atomic::AtomicU32>>,
+    zoom_job: Option<std::thread::JoinHandle<Result<(PathBuf, crate::zoom::ZoomStats)>>>,
 }
 
 impl State {
@@ -565,6 +571,9 @@ impl App {
             gif_source: None,
             gif_progress: None,
             gif_job: None,
+            zoom_opts: crate::zoom::ZoomOptions::default(),
+            zoom_progress: None,
+            zoom_job: None,
         };
         st.live.set_config(st.settings.live_config());
         load_devices(&mut st);
@@ -1178,6 +1187,28 @@ impl App {
         }));
     }
 
+    fn export_zoom(&mut self) {
+        let Some(file) = self.st.last_file.clone() else { return };
+        if self.st.zoom_job.is_some() {
+            return;
+        }
+        let out = crate::zoom::zoomed_path(&file);
+        let opts = self.st.zoom_opts;
+        self.st.zoom_opts.fresh = false;
+        let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        self.st.zoom_progress = Some(progress.clone());
+        self.st.zoom_job = Some(std::thread::spawn(move || {
+            let r = objc2::rc::autoreleasepool(|_| {
+                crate::zoom::export(&file, &out, &opts, &|p| {
+                    progress.store((p * 1000.0) as u32, Ordering::Relaxed);
+                    wake();
+                })
+            });
+            wake();
+            r.map(|s| (out, s))
+        }));
+    }
+
     fn toggle_pause(&mut self) {
         if let Some(s) = &self.st.recording {
             if s.is_paused() {
@@ -1220,6 +1251,7 @@ impl App {
             }
             Cmd::RestartRecording | Cmd::DeleteRecording => {}
             Cmd::ExportGif => self.export_gif(),
+            Cmd::ExportZoom => self.export_zoom(),
             Cmd::TogglePause => self.toggle_pause(),
             Cmd::ShowWindow => self.show_main(el),
             Cmd::ShowSettings => self.show_settings(el),
@@ -1308,6 +1340,21 @@ impl App {
                 Err(_) => self.st.error = Some("GIF export: the exporter crashed".into()),
             }
         }
+        if self.st.zoom_job.as_ref().is_some_and(|h| h.is_finished()) {
+            let h = self.st.zoom_job.take().unwrap();
+            self.st.zoom_progress = None;
+            match h.join() {
+                Ok(Ok((out, s))) => {
+                    eprintln!("rec: smart zoom saved {} ({} frames, {} zooms)", out.display(), s.frames, s.zooms);
+                    let name = out.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    let zooms = if s.zooms == 1 { "1 zoom".to_string() } else { format!("{} zooms", s.zooms) };
+                    self.st.notice = Some((format!("Smart zoom saved: {name} ({zooms})"), Instant::now()));
+                    macos::reveal(&out);
+                }
+                Ok(Err(e)) => self.st.error = Some(format!("Smart zoom: {e:#}")),
+                Err(_) => self.st.error = Some("Smart zoom: the exporter crashed".into()),
+            }
+        }
         let done = self.finished.lock().unwrap().take();
         if let Some((file, r)) = done {
             self.st.finishing = false;
@@ -1315,9 +1362,9 @@ impl App {
                 (r, Some(then)) => {
                     // Thrown away from the controls: to the Trash (not
                     // deleted, in case it was a slip), with its camera file.
-                    let camera = r.ok().and_then(|s| s.camera_file);
+                    let sides: Vec<PathBuf> = r.ok().map(|s| [s.camera_file, s.screen_file, s.events_file].into_iter().flatten().collect()).unwrap_or_default();
                     let mut trashed = false;
-                    for f in std::iter::once(&file).chain(camera.as_ref()).filter(|f| f.exists()) {
+                    for f in std::iter::once(&file).chain(&sides).filter(|f| f.exists()) {
                         match macos::trash(f) {
                             Ok(()) => {
                                 eprintln!("rec: moved to the Trash {}", f.display());
