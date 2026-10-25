@@ -215,9 +215,10 @@ The **main window** contains:
   the last recording zoomed in around clicks, saved next to it as `…-zoomed.mov`; the
   recording itself stays as the unzoomed version. Clicks less than 3 s apart share a zoom
   (in 0.3 s before the first, out 1.5 s after the last), the view pans when a click lands
-  off it, and moves ease with a spring. Only the screen zooms: a camera overlay, background
+  off it, and moves ease with a spring. Typing keeps a zoom in (it doesn't start one); only
+  that a key was pressed is logged, never which, and no extra permission is needed. Only the screen zooms: a camera overlay, background
   and scene changes are rebuilt as recorded, from the screen and camera kept apart while
-  recording (`…-screen.mov`, `…-camera.mov`). Cursor and clicks are read without any extra
+  recording (`…-screen.mov`, `…-camera.mov`). Cursor, clicks and key presses are read without any extra
   permission and logged to `….events.json`. The zooms are saved to `….zoom.json`, which
   later exports reuse, so they can be adjusted by hand. Not available for HDR recordings,
   or scenes showing other displays, cameras, videos or web pages. The cursor is the one

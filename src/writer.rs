@@ -1258,6 +1258,18 @@ fn write_side(c: &CamOut, src: &CVPixelBuffer, pts: CMTime) -> Option<bool> {
         if !c.video.isReadyForMoreMediaData() {
             return Some(false);
         }
+        use objc2_core_video::{CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth};
+        // Already the file's size (the screen, usually): no copy, the
+        // encoder takes it as is.
+        if (CVPixelBufferGetWidth(src), CVPixelBufferGetHeight(src)) == c.size && CVPixelBufferGetPixelFormatType(src) == PIX_BGRA {
+            return if c.adaptor.appendPixelBuffer_withPresentationTime(src, pts) {
+                Some(true)
+            } else if c.writer.status() == AVAssetWriterStatus::Failed {
+                None
+            } else {
+                Some(false)
+            };
+        }
         let Some(pool) = c.adaptor.pixelBufferPool() else { return Some(false) };
         let mut buf = std::ptr::null_mut();
         CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));

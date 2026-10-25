@@ -67,6 +67,9 @@ pub struct Sample {
     pub y: f32,
     #[serde(rename = "d")]
     pub down: bool,
+    /// A key was pressed since the last frame (which one isn't kept).
+    #[serde(rename = "k", default)]
+    pub key: bool,
 }
 
 /// A change to the scene during the recording, applied at host time `t`.
@@ -167,10 +170,19 @@ fn window_bounds(id: u32) -> Option<CGRect> {
     }
 }
 
+/// Key presses since login, system-wide: only a count (no permission needed;
+/// which keys isn't known).
+fn key_count() -> u32 {
+    use objc2_core_graphics::*;
+    CGEventSource::counter_for_event_type(CGEventSourceStateID::CombinedSessionState, CGEventType::KeyDown)
+}
+
 /// Logs a recording's cursor and scene changes (owned by the writer's
 /// sink, which calls it for every output frame).
 pub struct Recorder {
     area: Area,
+    /// The system's key-down count at the last frame.
+    keys: u32,
     log: EventLog,
     path: PathBuf,
 }
@@ -194,7 +206,7 @@ impl Recorder {
             extras: false,
             frames: vec![],
         };
-        Recorder { area, log, path }
+        Recorder { area, keys: key_count(), log, path }
     }
 
     /// Output frame `index` shows host time `t`: note the cursor now.
@@ -206,11 +218,15 @@ impl Recorder {
             let p = CGEvent::location(e.as_deref());
             (p, CGEventSource::button_state(CGEventSourceStateID::CombinedSessionState, CGMouseButton::Left))
         };
+        let keys = key_count();
+        let key = keys != self.keys;
+        self.keys = keys;
         let s = Sample {
             t,
             x: ((p.x - r.origin.x) / r.size.width.max(1.0)) as f32,
             y: ((p.y - r.origin.y) / r.size.height.max(1.0)) as f32,
             down,
+            key,
         };
         // Frames the encoder dropped repeat the last sample.
         while (self.log.frames.len() as i64) < index {
@@ -300,17 +316,31 @@ pub fn clicks(frames: &[Sample], fps: u32) -> Vec<(f64, f64, f64)> {
     out
 }
 
+/// Seconds into the recording of frames where a key was pressed.
+pub fn typing(frames: &[Sample], fps: u32) -> Vec<f64> {
+    frames.iter().enumerate().filter(|(_, s)| s.key).map(|(i, _)| i as f64 / fps as f64).collect()
+}
+
 /// The center a `level`x view at (x, y) actually has: kept inside the picture.
 fn clamp_center(x: f64, y: f64, level: f64) -> (f64, f64) {
     let half = 0.5 / level.max(1.0);
     (x.clamp(half, 1.0 - half), y.clamp(half, 1.0 - half))
 }
 
-/// The zooms for `clicks` in a recording `duration` seconds long.
-pub fn segments(clicks: &[(f64, f64, f64)], level: f64, duration: f64) -> Vec<Segment> {
+/// The zooms for `clicks` in a recording `duration` seconds long. Typing
+/// (`keys`) keeps a zoom in, where it looks, but doesn't start one.
+pub fn segments(clicks: &[(f64, f64, f64)], keys: &[f64], level: f64, duration: f64) -> Vec<Segment> {
     let mut out: Vec<Segment> = vec![];
     let mut last_click = f64::NEG_INFINITY;
+    let mut keys = keys.iter().copied().peekable();
     for &(t, x, y) in clicks {
+        // Typing before this click stretches the zoom it follows.
+        while let Some(k) = keys.next_if(|&k| k < t) {
+            if k - last_click <= GAP_SECS && let Some(seg) = out.last_mut() {
+                last_click = k;
+                seg.end = (k + HOLD_SECS).min(duration);
+            }
+        }
         let joins = t - last_click <= GAP_SECS && !out.is_empty();
         last_click = t;
         if joins {
@@ -325,6 +355,12 @@ pub fn segments(clicks: &[(f64, f64, f64)], level: f64, duration: f64) -> Vec<Se
             }
         } else {
             out.push(Segment { start: (t - LEAD_SECS).max(0.0), end: (t + HOLD_SECS).min(duration), level, focus: vec![Focus { t: 0.0, x, y }] });
+        }
+    }
+    for k in keys {
+        if k - last_click <= GAP_SECS && let Some(seg) = out.last_mut() {
+            last_click = k;
+            seg.end = (k + HOLD_SECS).min(duration);
         }
     }
     out
@@ -377,7 +413,7 @@ pub fn load_segments(rec: &Path, log: &EventLog, o: &ZoomOptions) -> Result<Vec<
         return Ok(segs);
     }
     let duration = log.frames.len() as f64 / log.fps as f64;
-    let segs = segments(&clicks(&log.frames, log.fps), o.level.clamp(*LEVELS.start(), *LEVELS.end()), duration);
+    let segs = segments(&clicks(&log.frames, log.fps), &typing(&log.frames, log.fps), o.level.clamp(*LEVELS.start(), *LEVELS.end()), duration);
     std::fs::write(&path, serde_json::to_string_pretty(&segs)?)?;
     Ok(segs)
 }
@@ -663,7 +699,7 @@ mod tests {
     use super::*;
 
     fn s(x: f32, y: f32, down: bool) -> Sample {
-        Sample { t: 0.0, x, y, down }
+        Sample { t: 0.0, x, y, down, key: false }
     }
 
     #[test]
@@ -677,7 +713,7 @@ mod tests {
 
     #[test]
     fn close_clicks_share_a_zoom() {
-        let segs = segments(&[(1.0, 0.5, 0.5), (2.0, 0.55, 0.5), (4.5, 0.5, 0.5), (10.0, 0.1, 0.1)], 2.0, 11.0);
+        let segs = segments(&[(1.0, 0.5, 0.5), (2.0, 0.55, 0.5), (4.5, 0.5, 0.5), (10.0, 0.1, 0.1)], &[], 2.0, 11.0);
         assert_eq!(segs.len(), 2);
         assert!((segs[0].start - 0.7).abs() < 1e-9 && (segs[0].end - 6.0).abs() < 1e-9);
         // Near clicks don't move the view.
@@ -686,15 +722,30 @@ mod tests {
     }
 
     #[test]
+    fn typing_keeps_a_zoom_in() {
+        // Click at 1 s, then type every second from 2 s to 8 s.
+        let keys: Vec<f64> = (2..=8).map(|k| k as f64).collect();
+        let segs = segments(&[(1.0, 0.3, 0.3)], &keys, 2.0, 20.0);
+        assert_eq!(segs.len(), 1);
+        assert!((segs[0].end - 9.5).abs() < 1e-9, "{}", segs[0].end);
+        assert_eq!(segs[0].focus.len(), 1, "typing doesn't move the view");
+        // Typing alone, or long after, starts nothing.
+        assert!(segments(&[], &keys, 2.0, 20.0).is_empty());
+        assert!((segments(&[(1.0, 0.3, 0.3)], &[10.0], 2.0, 20.0)[0].end - 2.5).abs() < 1e-9);
+        // Typing then a click: one zoom.
+        assert_eq!(segments(&[(1.0, 0.3, 0.3), (7.0, 0.3, 0.3)], &[3.0, 5.0], 2.0, 20.0).len(), 1);
+    }
+
+    #[test]
     fn far_clicks_pan() {
-        let segs = segments(&[(1.0, 0.3, 0.3), (2.0, 0.9, 0.9)], 2.0, 10.0);
+        let segs = segments(&[(1.0, 0.3, 0.3), (2.0, 0.9, 0.9)], &[], 2.0, 10.0);
         assert_eq!(segs[0].focus.len(), 2);
         assert_eq!(segs[0].focus[1].t, 2.0);
     }
 
     #[test]
     fn camera_eases_in_and_out_inside_the_picture() {
-        let segs = segments(&[(1.0, 0.0, 0.0)], 2.0, 5.0);
+        let segs = segments(&[(1.0, 0.0, 0.0)], &[], 2.0, 5.0);
         let p = camera_path(&segs, 150, 30);
         assert_eq!(p[0], (1.0, 0.5, 0.5));
         // In by the click's hold, at the clamped corner.
@@ -723,7 +774,7 @@ mod tests {
 
     fn log_for(composed: bool, n: usize) -> EventLog {
         // A click at 0.5 s near the top left, held 0.2 s.
-        let frames = (0..n).map(|i| Sample { t: 100.0 + i as f64 / 30.0, x: 0.2, y: 0.2, down: (15..21).contains(&i) }).collect();
+        let frames = (0..n).map(|i| Sample { t: 100.0 + i as f64 / 30.0, x: 0.2, y: 0.2, down: (15..21).contains(&i), key: false }).collect();
         EventLog {
             version: 1,
             fps: 30,
