@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::compose::{PipSpec, Place, Scene, Shape};
 use crate::hotkey::{Action, Combo};
 use crate::layout::{Background, Canvas, Layout, SceneSpec, Transition};
-use crate::writer::{AudioLayout, Codec};
+use crate::writer::{AudioLayout, Codec, Quality};
 
 pub const RESOLUTIONS: [(&str, &str); 5] =
     [("720p", "720p"), ("1080p", "1080p"), ("1440p", "1440p"), ("4K", "4k"), ("Native", "native")];
@@ -60,6 +60,8 @@ pub struct Settings {
     pub fps: u32,
     /// Mb/s; None = automatic.
     pub bitrate_mbps: Option<f64>,
+    /// Bits the automatic bitrate spends.
+    pub quality: Quality,
     /// HDR recording (10-bit HEVC/ProRes, BT.2020 PQ; experimental).
     pub hdr: bool,
     /// 1-based display number.
@@ -105,7 +107,7 @@ pub struct Settings {
     pub audio_tracks: AudioLayout,
     pub system_gain_db: f32,
     pub mic_gain_db: f32,
-    /// Noise suppression, gate, compressor, low-cut (applied live).
+    /// Low cut, noise suppression, gate, EQ, de-esser, compressor (applied live).
     pub mic_filters: crate::filters::MicFilters,
     /// Which apps' sound system audio records.
     pub app_audio: crate::appaudio::AppAudio,
@@ -166,9 +168,12 @@ impl Default for Settings {
             output_dir: default_output_dir(),
             container: "mov".into(),
             codec: None,
-            resolution: "1080p".into(),
+            // The screen's own pixels: scaling down is by far what costs small
+            // text the most (see PERFORMANCE.md).
+            resolution: "native".into(),
             fps: 60,
             bitrate_mbps: None,
+            quality: Quality::High,
             hdr: false,
             display: 1,
             region: None,
@@ -194,7 +199,8 @@ impl Default for Settings {
             audio_tracks: AudioLayout::Both,
             system_gain_db: 0.0,
             mic_gain_db: 0.0,
-            mic_filters: Default::default(),
+            // New installs start with clean, even speech; a saved choice stays.
+            mic_filters: crate::filters::MicFilters { low_cut: true, denoise: true, level: true, ..Default::default() },
             app_audio: Default::default(),
             camera_effects: Default::default(),
             pip_size: PipSpec::default().size,
@@ -531,6 +537,8 @@ impl Settings {
         }
         if let Some(b) = self.bitrate_mbps {
             a.extend(["--bitrate".into(), format!("{b}")]);
+        } else {
+            a.extend(["--quality".into(), value(self.quality)]);
         }
         if self.hdr_on() {
             a.push("--hdr".into());
@@ -588,16 +596,25 @@ impl Settings {
         a.extend(["--mic-gain".into(), format!("{}", self.mic_gain_db)]);
         let f = &self.mic_filters;
         if f.low_cut {
-            a.push("--low-cut".into());
+            a.extend(["--low-cut".into(), "--low-cut-hz".into(), format!("{}", f.low_cut_hz)]);
         }
         if f.denoise {
             a.push("--denoise".into());
+        }
+        if f.level {
+            a.push("--level".into());
         }
         if f.gate {
             a.extend(["--gate".into(), format!("{}", f.gate_db)]);
         }
         if f.compressor {
             a.extend(["--compressor".into(), format!("{}", f.comp_threshold_db)]);
+        }
+        if f.eq {
+            a.extend(["--eq".into(), format!("{},{},{}", f.eq_low_db, f.eq_mid_db, f.eq_high_db)]);
+        }
+        if f.deess {
+            a.extend(["--deess".into(), format!("{}", f.deess_db)]);
         }
         a.extend(["--pip-size".into(), format!("{}", self.pip_size)]);
         match self.pip_place {
@@ -660,7 +677,7 @@ mod tests {
         assert_eq!(Settings { window: None, ..s }, back);
         let partial: Settings = serde_json::from_str(r#"{"fps": 30}"#).unwrap();
         assert_eq!(partial.fps, 30);
-        assert_eq!(partial.resolution, "1080p");
+        assert_eq!(partial.resolution, "native");
     }
 
     #[test]

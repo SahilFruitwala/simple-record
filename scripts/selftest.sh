@@ -24,7 +24,7 @@ check() {
     echo "FAIL  $name  (see $OUT/$name.log / .probe)"; fail=$((fail+1))
   fi
 }
-check pattern-1080-h264   --test-pattern -t 3 --no-mic
+check pattern-1080-h264   --test-pattern -r 1080p -t 3 --no-mic
 check pattern-4k-hevc     --test-pattern --noise -r 4k -t 3 --no-mic
 check pattern-prores      --test-pattern -t 2 --codec prores --no-mic
 if has camera && has microphone; then check pattern-webcam-mic --test-pattern --webcam -t 3; else skipped pattern-webcam-mic "camera/microphone"; fi
@@ -119,7 +119,7 @@ fi
 if [ "${1:-}" != "--no-screen" ] && ! { has camera && has microphone; }; then
   echo "SKIP  screen and app cases  (they record the mic and webcam; grant both first)"; skip=$((skip+1))
 elif [ "${1:-}" != "--no-screen" ]; then
-  check screen-1080-all   -t 3
+  check screen-1080-all   -r 1080p -t 3
   check screen-4k-webcam  -r 4k --webcam -t 3
   check screen-mix.mp4    -t 2 --audio-tracks mix
   # App: scripted preview -> record (the hotkey's command) -> pause/resume

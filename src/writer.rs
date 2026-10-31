@@ -40,6 +40,29 @@ pub enum Codec {
     Prores,
 }
 
+/// How many bits the automatic recording bitrate spends: more keeps fine
+/// text and fast motion sharper, at a bigger file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Quality {
+    /// Smaller files (0.6x the bits of High).
+    Standard,
+    #[default]
+    High,
+    /// Near-transparent, for heavy editing or re-encoding (2x High).
+    Max,
+}
+
+impl Quality {
+    pub fn factor(self) -> f64 {
+        match self {
+            Quality::Standard => 0.6,
+            Quality::High => 1.0,
+            Quality::Max => 2.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VideoSpec {
     pub width: usize,
@@ -314,8 +337,11 @@ const QUEUE_MAX: usize = 7;
 /// pass (with its own timestamp), so brief encoder stalls cost no frames.
 pub const MAX_BACKLOG_SECS: f64 = 0.5;
 
-/// Audio timestamp jitter tolerated before a stem is padded or trimmed.
-pub const SNAP_SECS: f64 = 0.0015;
+/// Audio timestamp jitter tolerated before a stem is corrected.
+pub const SNAP_SECS: f64 = 0.002;
+/// A stem this far off its capture time is padded or trimmed at once (a real
+/// gap); nearer, it is eased back (`mixer::drift_step`).
+pub const REALIGN_SECS: f64 = 0.010;
 
 fn video_settings(v: &VideoSpec) -> Retained<Dict> {
     unsafe {
@@ -894,8 +920,8 @@ impl Sink {
         }
         let shift = off * self.tps();
         let out_s = pts_s + i0 as f64 / rate - shift as f64 / TIMESCALE as f64;
-        if let (Some(m), Some((_, rate, frames))) = (self.mixer.as_mut(), decoded) {
-            m.push(kind, out_s, rate, frames[i0.min(frames.len())..i1.min(frames.len())].to_vec());
+        if let (Some(m), Some((_, rate, frames))) = (self.mixer.as_mut(), decoded.as_ref()) {
+            m.push(kind, out_s, *rate, frames[i0.min(frames.len())..i1.min(frames.len())].to_vec());
             self.drain_mix(false);
         }
         let Some(o) = &self.out else { return };
@@ -908,13 +934,23 @@ impl Sink {
         // AVAssetWriter lays audio buffers end to end whatever their
         // timestamps say, so keep the track on the capture clock here: fill
         // a gap (late start, dropped device buffer) with silence and trim
-        // an overlap, both sample-accurate. Error stays under SNAP_SECS.
+        // an overlap, both sample-accurate; ease out clock drift, which a
+        // jump would turn into a click. Error stays near SNAP_SECS.
         let start = self.audio_next[i].unwrap_or(t0 as f64 / TIMESCALE as f64);
         let gap = out_s - start;
         let (mut i0, mut pad) = (i0, 0usize);
-        if gap > SNAP_SECS {
+        let eased = match decoded.as_ref() {
+            Some((_, _, frames)) if gap.abs() < REALIGN_SECS && i1 <= frames.len() => {
+                let step = crate::mixer::drift_step(gap * rate, SNAP_SECS * rate, i1 - i0);
+                (step != 0).then(|| crate::mixer::stretch(&frames[i0..i1], ((i1 - i0) as i64 + step) as usize))
+            }
+            _ => None,
+        };
+        if eased.is_some() {
+            // Carried by the eased buffer below.
+        } else if gap >= REALIGN_SECS || (decoded.is_none() && gap > SNAP_SECS) {
             pad = (gap * rate).round() as usize;
-        } else if gap < -SNAP_SECS {
+        } else if gap <= -REALIGN_SECS || (decoded.is_none() && gap < -SNAP_SECS) {
             i0 += (-gap * rate).round() as usize;
             if i0 >= i1 {
                 return;
@@ -934,14 +970,19 @@ impl Sink {
         }
         // The writer packs this buffer at `start`, whatever its timestamp.
         let body_start = start + pad as f64 / rate;
-        match retime(sb, i0, i1, ((real_s + i0 as f64 / rate - body_start) * TIMESCALE as f64).round() as i64) {
+        let body = match &eased {
+            Some(frames) => pcm_like(sb, frames, at(body_start)),
+            None => None,
+        };
+        let written = body.as_ref().map_or(i1 - i0, |_| eased.as_ref().map_or(0, Vec::len));
+        match body.or_else(|| retime(sb, i0, i1, ((real_s + i0 as f64 / rate - body_start) * TIMESCALE as f64).round() as i64)) {
             Some(b) => bufs.push(b),
             None => {
                 self.stats.audio_drops += 1;
                 return;
             }
         }
-        self.audio_next[i] = Some(body_start + (i1 - i0) as f64 / rate);
+        self.audio_next[i] = Some(body_start + written as f64 / rate);
         for b in bufs {
             unsafe {
                 if input.isReadyForMoreMediaData() && input.appendSampleBuffer(&b) {
@@ -1559,6 +1600,117 @@ pub(crate) fn err_text(w: &AVAssetWriter) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Tones from two devices whose clocks drift from the host clock, through
+    /// the real sink; `REC_DRIFT_OUT` is the file (scripts/audioclicks.py
+    /// counts the clicks).
+    #[test]
+    #[ignore]
+    fn drift_file() {
+        use super::*;
+        let out = std::env::var("REC_DRIFT_OUT").unwrap();
+        let _ = std::fs::remove_file(&out);
+        let spec = VideoSpec { width: 320, height: 180, fps: 30, codec: Codec::H264, bitrate: 1_000_000, pixel_format: PIX_BGRA, hdr_pq: None };
+        let mut sink = Sink::new(Some(Path::new(&out)), &spec, true, true, AudioLayout::Both, [0.0; 2], None, None).unwrap();
+        let pool = make_pool(320, 180, PIX_BGRA);
+        let frame = || unsafe {
+            let mut buf = std::ptr::null_mut();
+            CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));
+            CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap())
+        };
+        let t0 = 1000.0;
+        sink.push_screen(unsafe { CMTime::new((t0 * TIMESCALE as f64) as i64, TIMESCALE) }, frame());
+        let fmt = crate::mixer::stereo_format();
+        const N: usize = 1024;
+        const SECS: usize = 120;
+        // Parts per million fast and slow, as real audio clocks are.
+        let ppm = [(AudioKind::System, 440.0f64, 60.0f64), (AudioKind::Mic, 660.0, -100.0)];
+        for b in 0..(SECS * 48000 / N) {
+            for (kind, hz, drift) in ppm {
+                let start = b * N;
+                let mut data = Vec::with_capacity(N * 2);
+                for i in start..start + N {
+                    let v = (2.0 * std::f64::consts::PI * hz * i as f64 / 48000.0).sin() as f32 * 0.25;
+                    data.extend([v, v]);
+                }
+                let pts = t0 + start as f64 / 48000.0 * (1.0 + drift * 1e-6);
+                let sb = crate::mixer::pcm_buffer(&fmt, data, unsafe { CMTime::new((pts * 48000.0).round() as i64, 48000) }).unwrap();
+                sink.push_audio(kind, &sb);
+            }
+            // Keep the encoders ready, as real time would.
+            std::thread::sleep(Duration::from_micros(800));
+            if b % 8 == 0 {
+                sink.emit_until(t0 + (b * N) as f64 / 48000.0);
+            }
+        }
+        let stats = sink.finish(t0 + SECS as f64).unwrap();
+        println!("gaps filled {}, audio drops {}", stats.audio_gaps_filled, stats.audio_drops);
+    }
+
+    /// Encode a lossless clip through the recording writer in real time
+    /// (scripts/recquality.sh scores the result).
+    #[test]
+    #[ignore]
+    fn encode_file() {
+        use super::*;
+        use std::io::Read;
+        let var = |k: &str| std::env::var(k).unwrap();
+        let (w, h, fps): (usize, usize, u32) = (var("REC_W_W").parse().unwrap(), var("REC_W_H").parse().unwrap(), var("REC_W_FPS").parse().unwrap());
+        let codec = if var("REC_W_CODEC") == "hevc" { Codec::Hevc } else { Codec::H264 };
+        let spec = VideoSpec { width: w, height: h, fps, codec, bitrate: var("REC_W_BITRATE").parse().unwrap(), pixel_format: PIX_BGRA, hdr_pq: None };
+        let mut ff = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i", &var("REC_W_SRC"), "-f", "rawvideo", "-pix_fmt", "bgra", "-"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut pipe = ff.stdout.take().unwrap();
+        let out = var("REC_W_OUT");
+        let _ = std::fs::remove_file(&out);
+        let (writer, video, adaptor) = open_video(Path::new(&out), &spec).unwrap();
+        let mut frame = vec![0u8; w * h * 4];
+        let start = std::time::Instant::now();
+        let tick = TIMESCALE as i64 / fps as i64;
+        let mut n = 0i64;
+        unsafe {
+            assert!(writer.startWriting());
+            writer.startSessionAtSourceTime(CMTime::new(0, TIMESCALE));
+            while pipe.read_exact(&mut frame).is_ok() {
+                objc2::rc::autoreleasepool(|_| {
+                    use objc2_core_video::*;
+                    let pool = adaptor.pixelBufferPool().unwrap();
+                    let mut buf = std::ptr::null_mut();
+                    CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));
+                    let pb: CFRetained<CVPixelBuffer> = CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap());
+                    CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags(0));
+                    let base = CVPixelBufferGetBaseAddress(&pb) as *mut u8;
+                    let stride = CVPixelBufferGetBytesPerRow(&pb);
+                    for y in 0..h {
+                        std::ptr::copy_nonoverlapping(frame.as_ptr().add(y * w * 4), base.add(y * stride), w * 4);
+                    }
+                    CVPixelBufferUnlockBaseAddress(&pb, CVPixelBufferLockFlags(0));
+                    while !video.isReadyForMoreMediaData() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    assert!(adaptor.appendPixelBuffer_withPresentationTime(&pb, CMTime::new(n * tick, TIMESCALE)));
+                });
+                n += 1;
+                // Real time: the encoder sees frames at the recording's pace.
+                if let Some(d) = Duration::from_secs_f64(n as f64 / fps as f64).checked_sub(start.elapsed()) {
+                    std::thread::sleep(d);
+                }
+            }
+            writer.endSessionAtSourceTime(CMTime::new(n * tick, TIMESCALE));
+            video.markAsFinished();
+            let (tx, rx) = mpsc::channel();
+            let block = RcBlock::new(move || {
+                let _ = tx.send(());
+            });
+            writer.finishWritingWithCompletionHandler(&block);
+            rx.recv_timeout(Duration::from_secs(60)).unwrap();
+            assert_eq!(writer.status(), AVAssetWriterStatus::Completed, "{}", err_text(&writer));
+        }
+        let _ = ff.wait();
+    }
+
     /// HDR end to end through the real pieces: ScreenCaptureKit's HDR
     /// format, the compositor rendering in its color space, and the writer:
     /// the file must be HEVC Main 10 tagged BT.2020 with PQ (or HLG).
