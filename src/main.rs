@@ -581,6 +581,16 @@ fn default_output() -> PathBuf {
 /// Turn record arguments into session options and a capture target
 /// (shared by the CLI and the GUI).
 pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>)> {
+    prepare_with(a, false)
+}
+
+/// `prepare` for the app, which records without a mic or camera it isn't
+/// allowed to use.
+pub fn prepare_lenient(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>)> {
+    prepare_with(a, true)
+}
+
+fn prepare_with(a: RecordArgs, lenient: bool) -> Result<(record::Options, Option<screen::Target>)> {
     // A missing mic falls back to the default; audio never blocks a session.
     let mut mic_warning = None;
     let mic = if a.no_mic {
@@ -695,6 +705,9 @@ pub fn prepare(a: RecordArgs) -> Result<(record::Options, Option<screen::Target>
         live: None,
         streams: vec![],
     };
+    if lenient {
+        record::drop_unallowed(&mut opts);
+    }
     record::check_permissions(&opts)?;
     if !(1..=240).contains(&a.fps) || 60000 % a.fps != 0 {
         bail!("--fps must divide 60000 (e.g. 24, 25, 30, 50, 60, 120)");
@@ -1007,6 +1020,24 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the app runs when the camera isn't allowed: the scene shows the
+    /// camera, which isn't there. The layer stays empty; the rest records.
+    #[test]
+    fn camera_scene_records_without_the_camera() {
+        let dir = std::env::temp_dir().join(format!("rec-nocam-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("nocam.mov");
+        let a = parse_record_args(&["--test-pattern", "--no-mic", "--no-system-audio", "-o", file.to_str().unwrap()]).unwrap();
+        let (mut o, t) = prepare(a).unwrap();
+        o.scene = layout::SceneSpec::Template(compose::Scene::ScreenCam);
+        assert!(o.webcam.is_none());
+        let s = record::Session::start_with_camera(&o, t, true, None, None).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        s.finish().unwrap();
+        assert!(std::fs::metadata(&file).unwrap().len() > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn goal_command_line_parses() {

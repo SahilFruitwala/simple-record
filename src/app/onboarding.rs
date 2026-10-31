@@ -13,9 +13,9 @@ use super::{Cmd, State};
 use crate::tcc::Status;
 
 /// System Settings panes (Privacy & Security).
-const SCREEN_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-const MIC_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
-const CAMERA_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
+pub(super) const SCREEN_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+pub(super) const MIC_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+pub(super) const CAMERA_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
 
 /// The three permissions, read at most once a second.
 #[derive(Clone, Copy, Debug, PartialEq)]
