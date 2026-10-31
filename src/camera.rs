@@ -83,6 +83,15 @@ pub fn pick_mic(sel: &str, name: Option<&str>) -> MicPick {
     }
 }
 
+/// Whether a mic's unique ID is a Bluetooth headset's (CoreAudio names them
+/// by address: `40-B3-FA-33-A3-E8:input`). These run at 16-24 kHz, like a
+/// phone call, and take the headphones' output down to call quality with them.
+pub fn is_bluetooth_mic(id: &str) -> bool {
+    let addr = id.strip_suffix(":input").unwrap_or(id);
+    let parts: Vec<&str> = addr.split('-').collect();
+    parts.len() == 6 && parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 fn match_mic(mics: &[Device], sel: &str, name: Option<&str>) -> Option<String> {
     // Exact unique ID.
     if let Some(m) = mics.iter().find(|m| m.id == sel) {
@@ -390,6 +399,13 @@ mod tests {
 
     fn dev(id: &str, name: &str) -> Device {
         Device { id: id.into(), name: name.into() }
+    }
+
+    #[test]
+    fn bluetooth_mics() {
+        assert!(is_bluetooth_mic("40-B3-FA-33-A3-E8:input"));
+        assert!(!is_bluetooth_mic("BuiltInMicrophoneDevice"));
+        assert!(!is_bluetooth_mic("AppleUSBAudioEngine:DJI:DJIPocket3:123456789ABCDEF:2"));
     }
 
     #[test]

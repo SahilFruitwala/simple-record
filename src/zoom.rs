@@ -591,9 +591,20 @@ fn zoom_into(ctx: &CIContext, src: &CVPixelBuffer, dst: &CVPixelBuffer, (z, x, y
         let x0 = x * sw - vw / 2.0;
         let y0 = sh - (y * sh + vh / 2.0);
         let (kx, ky) = (dw / vw, dh / vh);
-        let t = CGAffineTransform { a: kx, b: 0.0, c: 0.0, d: ky, tx: -x0 * kx, ty: -y0 * ky };
         let canvas = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(dw, dh));
-        let out = img.imageByApplyingTransform(t).imageByCroppingToRect(canvas);
+        // Zoomed in, Lanczos keeps text sharper than CoreImage's bilinear
+        // (1.3 dB closer to ideal). Scaling down, bilinear measured better.
+        let scaled = if ky <= 1.0 + 1e-6 {
+            None
+        } else {
+            let params = dict(vec![(&*ns("inputImage"), obj(&*img)), (&*ns("inputScale"), num_f(ky)), (&*ns("inputAspectRatio"), num_f(kx / ky))]);
+            objc2_core_image::CIFilter::filterWithName_withInputParameters(&ns("CILanczosScaleTransform"), Some(&params)).and_then(|f| f.outputImage())
+        };
+        let t = match &scaled {
+            Some(_) => CGAffineTransform { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: -x0 * kx, ty: -y0 * ky },
+            None => CGAffineTransform { a: kx, b: 0.0, c: 0.0, d: ky, tx: -x0 * kx, ty: -y0 * ky },
+        };
+        let out = scaled.as_deref().unwrap_or(&img).imageByApplyingTransform(t).imageByCroppingToRect(canvas);
         let cs = objc2_core_graphics::CGColorSpace::with_name(Some(objc2_core_graphics::kCGColorSpaceSRGB));
         ctx.render_toCVPixelBuffer_bounds_colorSpace(&out, dst, canvas, cs.as_deref());
     }
@@ -751,6 +762,45 @@ fn write(rec: &Path, output: &Path, log: &EventLog, segs: &[Segment], progress: 
 
 #[cfg(test)]
 mod tests {
+    /// Scale a raw BGRA frame as the export does (see PERFORMANCE.md).
+    #[test]
+    #[ignore]
+    fn zoom_raw() {
+        use crate::util::{PIX_BGRA, make_pool};
+        use objc2_core_video::*;
+        let var = |k: &str| std::env::var(k).unwrap();
+        let n = |k: &str| var(k).parse::<usize>().unwrap();
+        let (sw, sh, dw, dh) = (n("REC_Z_SW"), n("REC_Z_SH"), n("REC_Z_DW"), n("REC_Z_DH"));
+        let z: f64 = var("REC_Z").parse().unwrap();
+        let raw = std::fs::read(var("REC_Z_IN")).unwrap();
+        let buffer = |w, h| unsafe {
+            let pool = make_pool(w, h, PIX_BGRA);
+            let mut b = std::ptr::null_mut();
+            CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut b));
+            objc2_core_foundation::CFRetained::from_raw(std::ptr::NonNull::new(b).unwrap())
+        };
+        let (src, dst) = (buffer(sw, sh), buffer(dw, dh));
+        unsafe {
+            CVPixelBufferLockBaseAddress(&src, CVPixelBufferLockFlags(0));
+            let (base, stride) = (CVPixelBufferGetBaseAddress(&src) as *mut u8, CVPixelBufferGetBytesPerRow(&src));
+            for y in 0..sh {
+                std::ptr::copy_nonoverlapping(raw.as_ptr().add(y * sw * 4), base.add(y * stride), sw * 4);
+            }
+            CVPixelBufferUnlockBaseAddress(&src, CVPixelBufferLockFlags(0));
+            let opts = crate::util::dict(vec![(&*crate::util::ns("kCIContextCacheIntermediates"), crate::util::num_b(false))]);
+            let ctx = CIContext::contextWithOptions(Some(&opts));
+            super::zoom_into(&ctx, &src, &dst, (z, 0.5, 0.5));
+            CVPixelBufferLockBaseAddress(&dst, CVPixelBufferLockFlags(1));
+            let (base, stride) = (CVPixelBufferGetBaseAddress(&dst) as *const u8, CVPixelBufferGetBytesPerRow(&dst));
+            let mut out = Vec::with_capacity(dw * dh * 4);
+            for y in 0..dh {
+                out.extend_from_slice(std::slice::from_raw_parts(base.add(y * stride), dw * 4));
+            }
+            CVPixelBufferUnlockBaseAddress(&dst, CVPixelBufferLockFlags(1));
+            std::fs::write(var("REC_Z_OUT"), out).unwrap();
+        }
+    }
+
     use super::*;
 
     fn s(x: f32, y: f32, down: bool) -> Sample {

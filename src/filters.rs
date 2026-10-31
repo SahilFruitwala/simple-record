@@ -1,6 +1,6 @@
 //! Microphone filters, in the order they run: a low-cut (rumble, desk
 //! knocks), noise suppression (RNNoise, via the pure-Rust nnnoiseless), a
-//! noise gate and a compressor. They process the decoded mic audio before
+//! noise gate, a three-band voice EQ, a de-esser and a compressor. They process the decoded mic audio before
 //! it reaches the file, the mix, the meters and the live encode, so every
 //! output hears the same voice. Plain Rust on f32 samples; no allocation
 //! per buffer once running.
@@ -13,20 +13,34 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MicFilters {
-    /// 80 Hz high-pass.
+    /// High-pass at `low_cut_hz`.
     pub low_cut: bool,
+    pub low_cut_hz: f32,
     /// RNNoise noise suppression (mics at 48 kHz or 16/24/12/8 kHz, as
     /// Bluetooth headsets use; others pass through).
     pub denoise: bool,
     pub gate: bool,
     /// The gate opens above this level (dBFS) and closes 6 dB below it.
     pub gate_db: f32,
+    /// Voice EQ: low shelf at 150 Hz (warmth), peak at 3.5 kHz (presence)
+    /// and high shelf at 10 kHz (air), each in dB.
+    pub eq: bool,
+    pub eq_low_db: f32,
+    pub eq_mid_db: f32,
+    pub eq_high_db: f32,
+    /// De-esser: turns the 4-10 kHz band down when it is louder than
+    /// `deess_db` (dBFS).
+    pub deess: bool,
+    pub deess_db: f32,
     pub compressor: bool,
     /// Compression starts here (dBFS).
     pub comp_threshold_db: f32,
     pub comp_ratio: f32,
     /// Gain after compression (dB).
     pub comp_makeup_db: f32,
+    /// Hold the voice at a steady loudness whatever the mic's level, with a
+    /// limiter so it never clips.
+    pub level: bool,
     /// Silence the mic (the recording controls' mute); never saved.
     #[serde(skip)]
     pub mute: bool,
@@ -36,13 +50,21 @@ impl Default for MicFilters {
     fn default() -> Self {
         MicFilters {
             low_cut: false,
+            low_cut_hz: 80.0,
             denoise: false,
             gate: false,
             gate_db: -45.0,
+            eq: false,
+            eq_low_db: 0.0,
+            eq_mid_db: 0.0,
+            eq_high_db: 0.0,
+            deess: false,
+            deess_db: -30.0,
             compressor: false,
             comp_threshold_db: -20.0,
             comp_ratio: 3.0,
             comp_makeup_db: 6.0,
+            level: false,
             mute: false,
         }
     }
@@ -50,7 +72,7 @@ impl Default for MicFilters {
 
 impl MicFilters {
     pub fn any(&self) -> bool {
-        self.low_cut || self.denoise || self.gate || self.compressor || self.mute
+        self.low_cut || self.denoise || self.gate || self.eq || self.deess || self.compressor || self.level || self.mute
     }
 }
 
@@ -86,6 +108,54 @@ impl Biquad {
             a: [-2.0 * cos / a0, (1.0 - alpha) / a0],
             z: [[0.0; 2]; 2],
         }
+    }
+
+    /// From normalized coefficients `b0 b1 b2 a0 a1 a2`.
+    fn from(c: [f32; 6]) -> Biquad {
+        let a0 = c[3];
+        Biquad { b: [c[0] / a0, c[1] / a0, c[2] / a0], a: [c[4] / a0, c[5] / a0], z: [[0.0; 2]; 2] }
+    }
+
+    /// RBJ shelf (`high` or low) with slope 1.
+    fn shelf(high: bool, freq: f32, db: f32, rate: f32) -> Biquad {
+        let a = 10f32.powf(db / 40.0);
+        let w = 2.0 * std::f32::consts::PI * freq / rate;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / 2.0 * std::f32::consts::SQRT_2;
+        let k = 2.0 * a.sqrt() * alpha;
+        let s = if high { 1.0 } else { -1.0 };
+        Biquad::from([
+            a * ((a + 1.0) + s * (a - 1.0) * cos + k),
+            -s * 2.0 * a * ((a - 1.0) + s * (a + 1.0) * cos),
+            a * ((a + 1.0) + s * (a - 1.0) * cos - k),
+            (a + 1.0) - s * (a - 1.0) * cos + k,
+            s * 2.0 * ((a - 1.0) - s * (a + 1.0) * cos),
+            (a + 1.0) - s * (a - 1.0) * cos - k,
+        ])
+    }
+
+    /// RBJ peaking EQ.
+    fn peak(freq: f32, q: f32, db: f32, rate: f32) -> Biquad {
+        let a = 10f32.powf(db / 40.0);
+        let w = 2.0 * std::f32::consts::PI * freq / rate;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / (2.0 * q);
+        Biquad::from([1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a])
+    }
+
+    /// RBJ band-pass, 0 dB at the center.
+    fn band_pass(freq: f32, q: f32, rate: f32) -> Biquad {
+        let w = 2.0 * std::f32::consts::PI * freq / rate;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / (2.0 * q);
+        Biquad::from([alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha])
+    }
+
+    /// Same filter with new coefficients, keeping its state (no click
+    /// when a slider moves).
+    fn retune(&mut self, to: Biquad) {
+        self.b = to.b;
+        self.a = to.a;
     }
 
     fn run(&mut self, ch: usize, x: f32) -> f32 {
@@ -156,7 +226,14 @@ struct Denoiser {
     output: VecDeque<[f32; 2]>,
     frame_in: [Vec<f32>; 2],
     frame_out: [Vec<f32>; 2],
+    /// The mic as captured, `delay` late, blended back in (see `WET`).
+    dry: VecDeque<[f32; 2]>,
 }
+
+/// How much of the output is RNNoise's. A little of the original keeps the
+/// voice natural and hides its artifacts on quiet consonants; the noise left
+/// is 20 dB down at most.
+const WET: f32 = 0.9;
 
 const FRAME: usize = nnnoiseless::DenoiseState::FRAME_SIZE;
 
@@ -186,6 +263,7 @@ impl Denoiser {
             output: std::iter::repeat_n([0.0; 2], n).collect(),
             frame_in: [vec![0.0; FRAME], vec![0.0; FRAME]],
             frame_out: [vec![0.0; FRAME], vec![0.0; FRAME]],
+            dry: std::iter::repeat_n([0.0; 2], Self::delay(l)).collect(),
         }
     }
 
@@ -228,7 +306,10 @@ impl Denoiser {
             }
         }
         for f in frames.iter_mut() {
-            *f = self.output.pop_front().unwrap_or([0.0; 2]);
+            self.dry.push_back(*f);
+            let dry = self.dry.pop_front().unwrap_or([0.0; 2]);
+            let wet = self.output.pop_front().unwrap_or([0.0; 2]);
+            *f = [WET * wet[0] + (1.0 - WET) * dry[0], WET * wet[1] + (1.0 - WET) * dry[1]];
         }
     }
 }
@@ -242,18 +323,113 @@ struct Gate {
     held: usize,
 }
 
+/// Voice EQ bands and the settings they were built for.
+struct Eq {
+    bands: [Biquad; 3],
+    built: [f32; 3],
+}
+
+/// Split-band de-esser: the sibilance band is measured and only that band
+/// is turned down, so the rest of the voice keeps its level.
+struct DeEsser {
+    band: Biquad,
+    env: f32,
+    gain: f32,
+}
+
 /// Compressor: peak detector in dB with attack and release, soft knee.
 struct Compressor {
     env_db: f32,
 }
 
+/// Loudness the leveler holds speech at, as a short-term RMS. About -16 LUFS,
+/// the level Cap's voice processing and most platforms aim for.
+const LEVEL_TARGET_DB: f32 = -15.5;
+/// Below this it is not speech: the gain holds, so room noise is not raised.
+const LEVEL_SPEECH_DB: f32 = -50.0;
+const LEVEL_RANGE_DB: (f32, f32) = (-12.0, 24.0);
+const LEVEL_RISE_DB_PER_SEC: f32 = 4.0;
+const LEVEL_FALL_DB_PER_SEC: f32 = 12.0;
+const LIMIT_CEILING: f32 = 0.841; // -1.5 dBFS, headroom for the AAC encoder
+const LIMIT_LOOKAHEAD_SECS: f64 = 0.005;
+
+/// Slow automatic gain on speech, then a look-ahead limiter: its gain is the
+/// sliding minimum of what each sample in the delay line allows, smoothed by a
+/// moving average over the same span, so it has arrived by the time a peak
+/// leaves the delay line. Nothing is clipped or distorted.
+struct Leveler {
+    power: f32,
+    gain_db: f32,
+    delay: VecDeque<[f32; 2]>,
+    /// Increasing candidates for the sliding minimum: (sample index, gain).
+    wants: VecDeque<(u64, f32)>,
+    at: u64,
+    release: f32,
+    avg: VecDeque<f32>,
+    avg_sum: f64,
+}
+
+impl Leveler {
+    fn new() -> Leveler {
+        Leveler { power: 0.0, gain_db: 0.0, delay: VecDeque::new(), wants: VecDeque::new(), at: 0, release: 1.0, avg: VecDeque::new(), avg_sum: 0.0 }
+    }
+
+    fn delay_samples(rate: f64) -> usize {
+        (LIMIT_LOOKAHEAD_SECS * rate).round() as usize
+    }
+
+    fn process(&mut self, rate: f32, frames: &mut [[f32; 2]]) {
+        let n = Self::delay_samples(rate as f64).max(1);
+        if self.delay.len() != n {
+            self.delay = std::iter::repeat_n([0.0; 2], n).collect();
+            self.avg = std::iter::repeat_n(1.0, n).collect();
+            self.avg_sum = n as f64;
+        }
+        let k = coef(0.4, rate);
+        let (rise, fall) = (LEVEL_RISE_DB_PER_SEC / rate, LEVEL_FALL_DB_PER_SEC / rate);
+        let rel = 1.0 - coef(0.08, rate);
+        for f in frames.iter_mut() {
+            let mono = (f[0] + f[1]) * 0.5;
+            self.power = mono * mono + k * (self.power - mono * mono);
+            let level = 10.0 * self.power.max(1e-12).log10();
+            if level > LEVEL_SPEECH_DB {
+                let want = (LEVEL_TARGET_DB - level).clamp(LEVEL_RANGE_DB.0, LEVEL_RANGE_DB.1);
+                self.gain_db += (want - self.gain_db).clamp(-fall, rise);
+            }
+            let g = db_to_lin(self.gain_db);
+            let x = [f[0] * g, f[1] * g];
+            let peak = x[0].abs().max(x[1].abs());
+            let want = if peak > LIMIT_CEILING { LIMIT_CEILING / peak } else { 1.0 };
+            while self.wants.back().is_some_and(|w| w.1 >= want) {
+                self.wants.pop_back();
+            }
+            self.wants.push_back((self.at, want));
+            while self.wants.front().is_some_and(|w| w.0 + (n as u64) < self.at) {
+                self.wants.pop_front();
+            }
+            self.at += 1;
+            let lowest = self.wants.front().map_or(1.0, |w| w.1);
+            self.release = (self.release + (1.0 - self.release) * rel).min(lowest);
+            self.avg.push_back(self.release);
+            self.avg_sum += self.release as f64 - self.avg.pop_front().unwrap_or(1.0) as f64;
+            let limit = (self.avg_sum / n as f64) as f32;
+            self.delay.push_back(x);
+            let y = self.delay.pop_front().unwrap_or(x);
+            *f = [y[0] * limit, y[1] * limit];
+        }
+    }
+}
+
 pub struct FilterChain {
     cfg: MicFilters,
     rate: f64,
-    hp: Option<Biquad>,
+    hp: Option<(Biquad, f32)>,
     denoise: Option<Denoiser>,
     gate: Gate,
+    eq: Option<Eq>,
+    deess: Option<DeEsser>,
     comp: Compressor,
+    leveler: Leveler,
 }
 
 impl FilterChain {
@@ -264,7 +440,10 @@ impl FilterChain {
             hp: None,
             denoise: None,
             gate: Gate { env: 0.0, gain: 0.0, open: false, held: 0 },
+            eq: None,
+            deess: None,
             comp: Compressor { env_db: -120.0 },
+            leveler: Leveler::new(),
         }
     }
 
@@ -276,6 +455,12 @@ impl FilterChain {
         if !cfg.low_cut {
             self.hp = None;
         }
+        if !cfg.eq {
+            self.eq = None;
+        }
+        if !cfg.deess {
+            self.deess = None;
+        }
         self.cfg = cfg;
     }
 
@@ -285,7 +470,9 @@ impl FilterChain {
 
     /// How late the output is, in seconds (noise suppression buffers).
     pub fn latency(&self) -> f64 {
-        self.denoise.as_ref().map_or(0.0, |d| Denoiser::delay(d.l) as f64 / self.rate)
+        let denoise = self.denoise.as_ref().map_or(0.0, |d| Denoiser::delay(d.l) as f64 / self.rate);
+        let level = if self.cfg.level && self.rate > 0.0 { Leveler::delay_samples(self.rate) as f64 / self.rate } else { 0.0 };
+        denoise + level
     }
 
     /// Filter `frames` (stereo, `rate` Hz) in place.
@@ -295,10 +482,17 @@ impl FilterChain {
             self.rate = rate;
             self.hp = None;
             self.denoise = None;
+            self.eq = None;
+            self.deess = None;
         }
         let r = rate as f32;
         if self.cfg.low_cut {
-            let hp = self.hp.get_or_insert_with(|| Biquad::high_pass(80.0, r));
+            let hz = self.cfg.low_cut_hz.clamp(40.0, 300.0);
+            let (hp, built) = self.hp.get_or_insert_with(|| (Biquad::high_pass(hz, r), hz));
+            if *built != hz {
+                hp.retune(Biquad::high_pass(hz, r));
+                *built = hz;
+            }
             for f in frames.iter_mut() {
                 f[0] = hp.run(0, f[0]);
                 f[1] = hp.run(1, f[1]);
@@ -336,6 +530,42 @@ impl FilterChain {
                 f[1] *= g.gain;
             }
         }
+        if self.cfg.eq {
+            let want = [self.cfg.eq_low_db, self.cfg.eq_mid_db, self.cfg.eq_high_db].map(|d| d.clamp(-12.0, 12.0));
+            let make = |d: [f32; 3]| [Biquad::shelf(false, 150.0, d[0], r), Biquad::peak(3500.0, 0.9, d[1], r), Biquad::shelf(true, 10_000f32.min(0.4 * r), d[2], r)];
+            let eq = self.eq.get_or_insert_with(|| Eq { bands: make(want), built: want });
+            if eq.built != want {
+                for (b, to) in eq.bands.iter_mut().zip(make(want)) {
+                    b.retune(to);
+                }
+                eq.built = want;
+            }
+            for f in frames.iter_mut() {
+                for b in eq.bands.iter_mut() {
+                    f[0] = b.run(0, f[0]);
+                    f[1] = b.run(1, f[1]);
+                }
+            }
+        }
+        if self.cfg.deess {
+            let d = self.deess.get_or_insert_with(|| DeEsser { band: Biquad::band_pass(6500f32.min(0.4 * r), 0.8, r), env: 0.0, gain: 1.0 });
+            let threshold = db_to_lin(self.cfg.deess_db);
+            let (env_a, env_r) = (coef(0.0005, r), coef(0.04, r));
+            let (gain_a, gain_r) = (coef(0.001, r), coef(0.06, r));
+            for f in frames.iter_mut() {
+                let s = [d.band.run(0, f[0]), d.band.run(1, f[1])];
+                let x = s[0].abs().max(s[1].abs());
+                let k = if x > d.env { env_a } else { env_r };
+                d.env = x + k * (d.env - x);
+                // Down to the threshold, at most 12 dB.
+                let target = if d.env > threshold { (threshold / d.env).max(0.25) } else { 1.0 };
+                let k = if target < d.gain { gain_a } else { gain_r };
+                d.gain = target + k * (d.gain - target);
+                let cut = 1.0 - d.gain;
+                f[0] -= s[0] * cut;
+                f[1] -= s[1] * cut;
+            }
+        }
         if self.cfg.compressor {
             let c = &mut self.comp;
             let (t, ratio, knee) = (self.cfg.comp_threshold_db, self.cfg.comp_ratio.max(1.0), 6.0f32);
@@ -358,6 +588,9 @@ impl FilterChain {
                 f[0] *= g;
                 f[1] *= g;
             }
+        }
+        if self.cfg.level {
+            self.leveler.process(r, frames);
         }
         // Muted after the filters, so they stay settled for unmuting.
         if self.cfg.mute {
@@ -431,6 +664,53 @@ mod tests {
             out.extend(p);
         }
         out
+    }
+
+    #[test]
+    fn eq_bands_boost_and_cut() {
+        let (n, rate) = (24000, 48000.0);
+        let tail = |v: &[[f32; 2]]| rms(&v[n / 2..]);
+        let cfg = MicFilters { eq: true, eq_low_db: 6.0, eq_mid_db: -6.0, eq_high_db: 0.0, ..Default::default() };
+        // A shelf reaches its gain well below its corner; the peak at its center.
+        let low = sine(50.0, 0.1, n, rate);
+        let db = 20.0 * (tail(&run(cfg, &low, 512)) / tail(&low)).log10();
+        assert!((db - 6.0).abs() < 0.5, "low shelf {db}");
+        let mid = sine(3500.0, 0.1, n, rate);
+        let db = 20.0 * (tail(&run(cfg, &mid, 512)) / tail(&mid)).log10();
+        assert!((db + 6.0).abs() < 0.3, "presence {db}");
+        // Flat EQ is transparent.
+        let flat = MicFilters { eq: true, ..Default::default() };
+        let x = sine(1000.0, 0.3, n, rate);
+        assert!((tail(&run(flat, &x, 512)) / tail(&x) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn deesser_cuts_sibilance_only() {
+        let (n, rate) = (24000, 48000.0);
+        let cfg = MicFilters { deess: true, deess_db: -30.0, ..Default::default() };
+        let tail = |v: &[[f32; 2]]| rms(&v[n / 2..]);
+        let ess = sine(6500.0, 0.3, n, rate);
+        assert!(tail(&run(cfg, &ess, 512)) < 0.5 * tail(&ess));
+        let voice = sine(300.0, 0.3, n, rate);
+        assert!((tail(&run(cfg, &voice, 512)) / tail(&voice) - 1.0).abs() < 0.02);
+        // Quiet sibilance stays.
+        let soft = sine(6500.0, 0.01, n, rate);
+        assert!((tail(&run(cfg, &soft, 512)) / tail(&soft) - 1.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn low_cut_frequency_moves() {
+        let x = sine(120.0, 0.3, 24000, 48000.0);
+        let at = |hz| rms(&run(MicFilters { low_cut: true, low_cut_hz: hz, ..Default::default() }, &x, 512)[12000..]);
+        assert!(at(60.0) > 0.18);
+        assert!(at(200.0) < 0.12);
+    }
+
+    #[test]
+    fn old_settings_load() {
+        let f: MicFilters = serde_json::from_str(r#"{"low_cut":true,"compressor":true}"#).unwrap();
+        assert!(f.low_cut && f.compressor && !f.eq && !f.deess);
+        assert_eq!(f.low_cut_hz, 80.0);
     }
 
     #[test]
@@ -583,6 +863,50 @@ mod tests {
                 .0;
             assert!(best.abs_diff(Denoiser::delay(l)) <= 4, "{rate}: lag {best} vs {}", Denoiser::delay(l));
         }
+    }
+
+    /// A voice-like tone at any mic level comes out at the same loudness.
+    #[test]
+    fn leveler_evens_out_mic_levels() {
+        let cfg = MicFilters { level: true, ..Default::default() };
+        let mut out = vec![];
+        for amp in [0.02f32, 0.1, 0.5] {
+            let y = run(cfg, &sine(300.0, amp, 48000 * 12, 48000.0), 512);
+            out.push(20.0 * rms(&y[48000 * 10..]).log10());
+        }
+        for db in &out {
+            assert!((db - LEVEL_TARGET_DB).abs() < 1.5, "{out:?}");
+        }
+        // Room noise is not raised to speech level.
+        let y = run(cfg, &sine(300.0, 0.001, 48000 * 6, 48000.0), 512);
+        assert!(rms(&y[48000 * 5..]) < 0.002);
+    }
+
+    #[test]
+    fn limiter_never_clips_and_reports_its_delay() {
+        let cfg = MicFilters { level: true, ..Default::default() };
+        // Quiet speech raises the gain, then a shout arrives.
+        let mut x = sine(300.0, 0.02, 48000 * 8, 48000.0);
+        x.extend(sine(300.0, 1.0, 48000, 48000.0));
+        let y = run(cfg, &x, 480);
+        let peak = y.iter().fold(0f32, |m, f| m.max(f[0].abs()));
+        assert!(peak <= LIMIT_CEILING + 0.001, "peak {peak}");
+        let mut c = FilterChain::new(cfg);
+        c.process(48000.0, &mut [[0.0; 2]; 16]);
+        assert!((c.latency() - 0.005).abs() < 1e-9);
+    }
+
+    /// Run raw mono f32 48 kHz audio through the filters named in `REC_F`.
+    #[test]
+    #[ignore]
+    fn filter_file() {
+        let var = |k: &str| std::env::var(k).unwrap();
+        let which = var("REC_F");
+        let cfg = MicFilters { denoise: which.contains("denoise"), level: which.contains("level"), low_cut: which.contains("cut"), ..Default::default() };
+        let raw = std::fs::read(var("REC_F_IN")).unwrap();
+        let x: Vec<[f32; 2]> = raw.chunks_exact(4).map(|b| { let v = f32::from_le_bytes([b[0], b[1], b[2], b[3]]); [v, v] }).collect();
+        let y = run(cfg, &x, 1024);
+        std::fs::write(var("REC_F_OUT"), y.iter().flat_map(|f| f[0].to_le_bytes()).collect::<Vec<u8>>()).unwrap();
     }
 
     #[test]

@@ -254,6 +254,58 @@ ideally to the preview's size:
   displays were disconnected. The numbers above are the texture's pixels,
   which the UI draws 1:1.
 
+## Compared with Cap (2026-10-31)
+
+Cap's and rec-rs's capture and encode code were read side by side, and each
+suspected gap was measured before it was changed. On an M2 MacBook Air, screen
+2560x1664, 30 fps. The tests use lossless clips and synthetic audio, not live
+screen or mic capture (`scripts/recquality.sh`, `scripts/audioclicks.py`, and the
+ignored `drift_file`, `filter_file` and `zoom_raw` tests).
+
+**Video: scaling costs far more than encoding.** The "1080p" setting on this
+screen is 1660x1080. Scaled down and back up, the text card scores 29.6 dB PSNR-Y;
+encoded at native size it scores 54-56 dB. So the default is now native, as in Cap.
+
+| Encode at native size | Text, PSNR-Y / VMAF | Motion, PSNR-Y / VMAF |
+|---|---|---|
+| H.264, 0.16 bpp (current) | 56.1 / 99.96 | 46.9 / 96.7 |
+| H.264 with B-frames (Cap's Ultra) | 54.5 / 99.96 | 45.3 / 96.1 |
+| HEVC, 0.10 bpp (current) | 54.6 / 99.96 | 43.8 / 95.2 |
+| HEVC with B-frames | 54.2 / 99.96 | 44.1 / 95.3 |
+| HEVC Main10 | 48.5 / 99.96 | 44.1 / 96.2 |
+| HEVC, 0.16 bpp | 56.8 / 99.96 | 52.2 / 98.3 |
+
+B-frames and Main10 were not adopted: no clear gain. More bits help on motion,
+which the Max quality preset gives.
+
+**Audio: clock drift made clicks.** Tones at +60 and -100 ppm for 120 s through
+the real sink. Writer and mixer corrected drift past 1.5-2 ms with a jump. They now
+ease it out by at most 0.4%, as Cap does; real gaps of 10 ms or more still jump.
+
+| | Mix clicks / peak above 6 kHz | System | Mic |
+|---|---|---|---|
+| Before | 8 / 0.1745 | 4 / 0.1011 | 7 / 0.0066 |
+| After | 0 / 0.0002 | 0 / 0.0001 | 0 / 0.0001 |
+
+**Auto level.** Synthesized speech with pink noise, low cut + noise suppression +
+Auto level, integrated loudness after the first 12 s:
+
+| Mic level in | Out |
+|---|---|
+| -46.9 LUFS | -23.1 LUFS, peak -8.2 dBFS (held at the 24 dB gain limit) |
+| -28.5 LUFS | -16.3 LUFS, peak -1.5 dBFS |
+| -16.4 LUFS | -16.2 LUFS, peak -1.5 dBFS |
+
+**Smart zoom.** Against an ideal Lanczos 2x crop, Lanczos scores 39.1 dB and
+CoreImage's bilinear 37.8 dB. Scaling down, bilinear scored higher (37.9 vs
+36.7 dB), so Lanczos is used only when zooming in.
+
+**Not adopted or still open.** Cap's newer RNNoise model (nnnoiseless uses the
+older one; moving means vendoring C and its weights). Mono downmix of multichannel
+mics, which matters for an interface with a mic on one input. Picking a camera
+format by frame rate (a session preset may stay at 30 fps). None of this has
+been checked on live capture yet.
+
 ## Reproduce
 
 Quality: `scripts/quality.sh` (needs a 5K 2x display and `mediamtx` for

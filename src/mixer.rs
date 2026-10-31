@@ -20,6 +20,9 @@ pub const RATE: f64 = 48000.0;
 const MAX_WAIT: i64 = 24000; // 0.5 s
 /// Treat timestamp jumps up to this many samples as continuous.
 const SNAP: i64 = 96; // 2 ms
+/// A source this far from where its samples have reached moves there at
+/// once (a real gap); nearer, it is eased there (see `drift_step`).
+const REALIGN: i64 = 480; // 10 ms
 
 pub struct Mixer {
     t0: i64, // session start in samples on the host clock
@@ -114,6 +117,33 @@ pub fn decode(sb: &CMSampleBuffer) -> Option<(f64, f64, Vec<[f32; 2]>)> {
     }
 }
 
+/// Samples to add (positive) or drop (negative) from a buffer of `n` samples
+/// that starts `gap` samples after where its source has reached, when `gap`
+/// is past `tolerance`: at most one per 256 (a 0.4% rate change), which is
+/// inaudible. Audio clocks drift from the host clock by parts per million,
+/// so a jump to catch up would be a click every minute or so.
+pub fn drift_step(gap: f64, tolerance: f64, n: usize) -> i64 {
+    let over = gap.abs() - tolerance;
+    if over <= 0.0 {
+        return 0;
+    }
+    (over.ceil() as i64).min((n as i64 / 256).max(1)) * gap.signum() as i64
+}
+
+/// `frames` linearly interpolated to `n` frames (a tiny rate change).
+pub fn stretch(frames: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
+    let k = frames.len() as f64 / n.max(1) as f64;
+    (0..n)
+        .map(|i| {
+            let p = i as f64 * k;
+            let j = (p as usize).min(frames.len() - 1);
+            let (a, b) = (frames[j], frames[(j + 1).min(frames.len() - 1)]);
+            let t = (p - j as f64) as f32;
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        })
+        .collect()
+}
+
 /// Taps on each side of a resampled output sample.
 const HALF_TAPS: usize = 24;
 
@@ -154,8 +184,13 @@ impl Resampler {
     /// continue the stream (gap, overlap, rate change) restarts it.
     fn push(&mut self, pts: f64, rate: f64, src: Vec<[f32; 2]>) -> (f64, Vec<[f32; 2]>) {
         let expected = self.t0 + self.next_in as f64 / self.from;
-        if rate != self.from || (pts - expected).abs() > SNAP as f64 / RATE {
+        // The stream stays contiguous through clock drift (restarting would
+        // drop the filter's history, a click); the time it returns carries
+        // the drift for the mixer to ease out.
+        let mut drift = pts - expected;
+        if rate != self.from || drift.abs() >= REALIGN as f64 / RATE {
             *self = Resampler::new(rate, pts);
+            drift = 0.0;
         }
         self.next_in += src.len() as i64;
         self.hist.extend(src);
@@ -197,7 +232,7 @@ impl Resampler {
         let drop = (keep_from - self.first) as usize;
         self.hist.drain(..drop.min(self.hist.len()));
         self.first += drop as i64;
-        (t_out, out)
+        (t_out + drift, out)
     }
 }
 
@@ -261,11 +296,26 @@ impl Mixer {
         if frames.is_empty() {
             return;
         }
+        let mut frames = frames;
         let mut start = (pts * RATE).round() as i64 - self.t0;
-        if let Some(h) = self.horizon[i]
-            && (start - h).abs() <= SNAP {
+        if let Some(h) = self.horizon[i] {
+            let gap = start - h;
+            if gap.abs() < REALIGN {
+                let step = drift_step(gap as f64, SNAP as f64, frames.len());
+                if step != 0 {
+                    frames = stretch(&frames, (frames.len() as i64 + step) as usize);
+                }
+                start = h;
+            } else if gap < 0 {
+                // Arrived after its place was filled: never summed with itself.
+                let late = (-gap) as usize;
+                if late >= frames.len() {
+                    return;
+                }
+                frames.drain(..late);
                 start = h;
             }
+        }
         let end = start + frames.len() as i64;
         self.horizon[i] = Some(self.horizon[i].map_or(end, |h| h.max(end)));
         let need = (end - self.base).max(0) as usize;
@@ -487,6 +537,30 @@ mod tests {
         let (_, out) = pull_all(&mut m, true);
         let peak = out[2400..out.len() - 2400].iter().fold(0f32, |a, f| a.max(f[0].abs()));
         assert!(peak < 0.005, "aliased residue {peak}");
+    }
+
+    #[test]
+    fn drift_is_eased_without_clicks() {
+        // A device 300 ppm fast for a minute: 18 ms of drift. The output stays
+        // a clean tone, with no sample further from the last than a tone's
+        // slope allows, and ends on the host clock.
+        let hz = 440.0;
+        let slope = (2.0 * std::f64::consts::PI * hz / RATE) as f32 * 0.5;
+        let mut m = Mixer::new(0.0, false, true, [0.0, 0.0]);
+        let n = 1024;
+        let (mut out, mut i) = (vec![], 0usize);
+        while i < 60 * 48000 {
+            let frames: Vec<[f32; 2]> = (i..i + n).map(|k| { let v = (2.0 * std::f64::consts::PI * hz * k as f64 / RATE).sin() as f32 * 0.5; [v, v] }).collect();
+            m.push(AudioKind::Mic, i as f64 / RATE * (1.0 + 300e-6), RATE, frames);
+            while let Some((_, f)) = m.pull_frames(false) {
+                out.extend(f);
+            }
+            i += n;
+        }
+        let worst = out.windows(2).map(|w| (w[1][0] - w[0][0]).abs()).fold(0f32, f32::max);
+        assert!(worst < slope * 1.1, "jump of {worst}, slope {slope}");
+        let behind = (i as f64 * (1.0 + 300e-6) - out.len() as f64).abs();
+        assert!(behind < SNAP as f64 + n as f64 / 256.0 + 1.0, "{behind} samples off the host clock");
     }
 
     #[test]
