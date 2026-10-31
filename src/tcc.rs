@@ -1,6 +1,7 @@
 //! Privacy (TCC) handling: responsibility disclaim, permission status, requests.
 
 use std::ffi::{CString, c_char, c_int, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -194,6 +195,18 @@ pub fn request_all(screen: bool, mic: bool, camera: bool, wait: Duration) {
             Ok(g) => eprintln!("{name}: {}", if g { "granted" } else { "denied" }),
             Err(_) => eprintln!("{name}: prompt still pending (answer it on screen)"),
         }
+    }
+}
+
+/// Show the system prompt for what's about to be used and was never asked,
+/// at most once per kind while the app runs.
+pub fn ask_once(mic: bool, camera: bool) {
+    static MIC: AtomicBool = AtomicBool::new(false);
+    static CAMERA: AtomicBool = AtomicBool::new(false);
+    let mic = mic && mic_status() == Status::NotDetermined && !MIC.swap(true, Ordering::SeqCst);
+    let camera = camera && camera_status() == Status::NotDetermined && !CAMERA.swap(true, Ordering::SeqCst);
+    if mic || camera {
+        request_all(false, mic, camera, Duration::ZERO);
     }
 }
 

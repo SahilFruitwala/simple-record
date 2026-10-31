@@ -169,6 +169,28 @@ pub fn check_permissions(o: &Options) -> Result<()> {
     Ok(())
 }
 
+/// The app's take on the same check: the mic and camera are optional, so ask
+/// for them when they're first needed and go on without them until allowed.
+/// Screen Recording still has to pass `check_permissions`.
+pub fn drop_unallowed(o: &mut Options) {
+    let camera = o.webcam.is_some() || o.scene.sources().iter().any(|s| matches!(s, Source::Camera(_)));
+    tcc::ask_once(o.mic.is_some(), camera);
+    let mut warnings: Vec<String> = o.mic_warning.take().into_iter().collect();
+    if o.mic.is_some() && tcc::mic_status() != Status::Granted {
+        o.mic = None;
+        if tcc::mic_status() != Status::NotDetermined {
+            warnings.push("Microphone not allowed: recording without it".into());
+        }
+    }
+    if tcc::camera_status() != Status::Granted {
+        o.webcam = None;
+        if camera && tcc::camera_status() != Status::NotDetermined {
+            warnings.push("Camera not allowed: recording without it".into());
+        }
+    }
+    o.mic_warning = Some(warnings.join(" · ")).filter(|w| !w.is_empty());
+}
+
 /// A running capture session: recording to a file, or preview-only.
 pub struct Session {
     shared: Arc<Shared>,

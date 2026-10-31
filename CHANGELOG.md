@@ -6,6 +6,10 @@ First release: screen, system audio, microphone and webcam recording to `.mov`/`
 with live transitions; replay buffer; RTMP, SRT and WHIP streaming; new logo; macOS DMG
 packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
 
+- Permissions: a camera or microphone that isn't allowed no longer stops the preview or a
+  recording. SimpleRecord asks the first time it needs one, and otherwise records without it
+  and links to that permission's page in System Settings from its card. A dismissed Screen
+  Recording error stays dismissed, and the banner has a Restart button.
 - Recording quality, after comparing with Cap: recordings default to the screen's native
   size (new installs); audio clock drift is eased out instead of jumped over, which removes
   periodic clicks; new Auto level filter (`--level`) holds speech near -16 LUFS with a

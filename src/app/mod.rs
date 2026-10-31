@@ -831,19 +831,13 @@ impl App {
         }
         let args = settings.record_args(output);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (mut o, t) = crate::prepare(crate::parse_record_args(&refs)?)?;
+        let (mut o, t) = crate::prepare_lenient(crate::parse_record_args(&refs)?)?;
         o.live = Some(self.st.live.clone());
         o.scene = self.st.settings.scene_spec();
         o.mic_filters = self.st.settings.mic_filters;
         o.pip.effects = self.st.settings.camera_effects;
         // The command line has the colours only; the screen's inset too.
         o.background = self.st.settings.background.clone();
-        // The mic is optional: without permission, record without it (the
-        // Audio card says so) rather than refuse to start.
-        if o.mic.is_some() && crate::tcc::mic_status() != crate::tcc::Status::Granted {
-            o.mic = None;
-            o.mic_warning = Some("Microphone not allowed: recording without it".into());
-        }
         // Fallbacks never block: say so once.
         let warning = [warning, o.mic_warning.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let warning = Some(warning).filter(|w| !w.is_empty());
@@ -1084,7 +1078,9 @@ impl App {
             self.st.preview_settings = None;
         }
         // Not under the welcome screen: without permission it can only fail.
-        if want && self.st.preview.is_none() && self.st.error.is_none() && !self.st.onboarding {
+        // Nor after a refusal: it would fail the same way until a permission
+        // changes (`permissions_changed`), and bring a dismissed error back.
+        if want && self.st.preview.is_none() && self.st.error.is_none() && !self.st.permissions_missing && !self.st.onboarding {
             let cb = preview::callback(Arc::new(wake));
             let cam = self.st.spare_cam.take();
             match self.options(None).and_then(|(o, t)| Session::start_with_camera(&o, t, false, Some(cb), cam)) {
@@ -1898,5 +1894,5 @@ pub fn run(start_recording: bool, settings: bool, window: Option<u32>) -> Result
 /// layer, whose own text names a command-line tool.
 fn permission_hint(msg: &str) -> Option<String> {
     let list = msg.split("missing permission(s): ").nth(1)?.lines().next()?.trim();
-    Some(format!("SimpleRecord needs your permission for: {list}. Click Request Permissions, then turn SimpleRecord on in System Settings > Privacy & Security."))
+    Some(format!("SimpleRecord needs your permission for: {list}. Turn SimpleRecord on in System Settings > Privacy & Security, then restart it."))
 }

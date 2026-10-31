@@ -295,11 +295,16 @@ fn preview(ui: &mut Ui, st: &mut State) {
                 ui.add(egui::Label::new(RichText::new(err).color(p.text)).wrap());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if st.permissions_missing && ui.button("Request Permissions").clicked() {
-                        crate::tcc::request_all(true, true, true, std::time::Duration::from_secs(0));
-                    }
-                    if st.permissions_missing && ui.button("Open System Settings").on_hover_text("Privacy & Security, Screen & System Audio Recording").clicked() {
-                        super::macos::open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+                    // Only Screen Recording stops a session; it applies after a restart.
+                    if st.permissions_missing {
+                        if ui.button("Open System Settings").on_hover_text("Privacy & Security, Screen & System Audio Recording").clicked() {
+                            crate::tcc::request_all(true, false, false, std::time::Duration::ZERO);
+                            super::macos::open_url(super::onboarding::SCREEN_PANE);
+                        }
+                        if ui.button("Restart SimpleRecord").on_hover_text("Use this once SimpleRecord is on in System Settings").clicked() {
+                            super::macos::relaunch();
+                            st.cmds.push(Cmd::Quit);
+                        }
                     }
                     if ui.button("Dismiss").clicked() {
                         st.error = None;
@@ -660,6 +665,27 @@ fn app_audio(ui: &mut Ui, st: &State, sel: &mut AppAudio, idle: bool) {
         w::hint(ui, "Pick the apps to hear; with none, system audio is silent.");
     } else {
         w::hint(ui, "Apps started after recording begins aren't picked up until it restarts.");
+    }
+}
+
+/// Under a source the app can't use: why, and the one thing that fixes it (the
+/// prompt, or once it was answered, that permission's System Settings pane).
+fn not_allowed(ui: &mut Ui, status: crate::tcc::Status, why: &str, pane: &str, ask: impl FnOnce()) {
+    use super::onboarding::{Offer, offer};
+    match offer(status) {
+        Offer::Done => {}
+        Offer::Ask => {
+            w::hint(ui, why);
+            if ui.button("Allow…").clicked() {
+                ask();
+            }
+        }
+        Offer::OpenSettings => {
+            w::hint(ui, why);
+            if ui.button("Open System Settings").on_hover_text("Turn SimpleRecord on in this list").clicked() {
+                super::macos::open_url(pane);
+            }
+        }
     }
 }
 
@@ -1158,6 +1184,10 @@ fn sources(ui: &mut Ui, st: &mut State) {
                     s.follow_scene_canvas();
                 }
             }
+            if uses_cam || s.scene_spec().sources().iter().any(|l| matches!(l, crate::layout::Source::Camera(_))) {
+                let status = st.perms().camera;
+                not_allowed(ui, status, "SimpleRecord isn't allowed to use the camera, so it records without it.", super::onboarding::CAMERA_PANE, || crate::tcc::request_all(false, false, true, std::time::Duration::ZERO));
+            }
         });
     }
     if tab == SidebarTab::Layout {
@@ -1191,17 +1221,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
                     w::hint(ui, "Bluetooth mics record at phone-call quality, and lower your headphones' sound while in use. The built-in mic sounds better.");
                 }
             }
-            if s.mic_enabled && st.perms().mic != crate::tcc::Status::Granted {
-                let asked = st.perms().mic != crate::tcc::Status::NotDetermined;
-                w::hint(ui, "SimpleRecord isn't allowed to use the microphone, so it records without it.");
-                ui.horizontal(|ui| {
-                    if !asked && ui.button("Allow…").clicked() {
-                        crate::tcc::request_all(false, true, false, std::time::Duration::ZERO);
-                    }
-                    if asked && ui.button("Open System Settings").clicked() {
-                        super::macos::open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
-                    }
-                });
+            if s.mic_enabled {
+                let status = st.perms().mic;
+                not_allowed(ui, status, "SimpleRecord isn't allowed to use the microphone, so it records without it.", super::onboarding::MIC_PANE, || crate::tcc::request_all(false, true, false, std::time::Duration::ZERO));
             }
             if s.mic_enabled {
                 // Live, also while recording.
