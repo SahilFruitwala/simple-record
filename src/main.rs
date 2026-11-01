@@ -91,6 +91,9 @@ enum Cmd {
         #[arg(long, default_value_t = 60)]
         wait: u64,
     },
+    /// Ask macOS for Screen Recording from this process (used by `permissions --request`).
+    #[command(hide = true)]
+    RequestScreen,
     /// Check a recording with AVFoundation (the engine QuickTime uses).
     Probe { file: PathBuf },
     /// Turn a recording (or part of it) into a looping GIF.
@@ -987,6 +990,10 @@ fn main() {
             println!("screen recording : {s}");
             println!("microphone       : {m}");
             println!("camera           : {c}");
+            Ok(())
+        }
+        Cmd::RequestScreen => {
+            tcc::request_screen_here();
             Ok(())
         }
         Cmd::Probe { file } => probe::probe(&file),

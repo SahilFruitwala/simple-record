@@ -121,19 +121,26 @@ scripts/srt-e2e.sh               # needs ffmpeg with SRT (ffmpeg -protocols | gr
 
 The app's first run shows a welcome screen with each permission's state, an **Allow…**
 button for the system prompt, **Open System Settings** for a permission that was turned down,
-and **Restart SimpleRecord** (macOS applies Screen Recording only after a restart). Only Screen
-Recording is required, and its button is the prominent one. **Continue without Screen
-Recording** skips the welcome screen. Until Screen Recording is allowed, the record button is
-dimmed and a banner says what is missing, with **Request Permissions** and **Open System
-Settings**. Without the microphone, SimpleRecord records without it, and the Audio card says so. From
+**Ask Again** to forget an earlier answer and show the prompt again, and **Restart SimpleRecord**
+(macOS applies Screen Recording only after a restart). Only Screen Recording is required, and its
+button is the prominent one. The welcome screen comes back at launch while Screen Recording is
+missing; **Continue without Screen Recording** skips it until the next launch. Until Screen
+Recording is allowed, the record button is dimmed and a banner says what is missing, with **Open
+System Settings**, **Ask Again** and **Restart SimpleRecord**. Without the microphone, SimpleRecord records without it, and the Audio card says so. From
 the command line:
 
 ```sh
 dist/simple-record permissions --request
 ```
 
-Then enable **SimpleRecord** under **System Settings → Privacy & Security → Screen & System Audio
-Recording**. Microphone and camera are approved from the system prompts.
+Then enable **SimpleRecord** (**SimpleRecord Dev** for a build from `scripts/build.sh`) under
+**System Settings → Privacy & Security → Screen & System Audio Recording**. Microphone and camera
+are approved from the system prompts. Requesting again first clears any earlier Screen Recording
+decision so that macOS asks again.
+
+- Local builds have their own bundle ID, `com.heyfabrika.rec.dev`, and keep their grants apart from
+  the installed app. macOS ties a grant to the signing certificate, so a grant from a copy signed
+  differently can look on in System Settings and never apply. **Ask Again** clears one.
 
 - `simple-record` re-launches itself with responsibility disclaimed. macOS therefore asks about and
   remembers the signed **SimpleRecord** app rather than your terminal.
