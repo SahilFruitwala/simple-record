@@ -234,6 +234,8 @@ pub struct State {
     /// Camera aspect ratio from the running session (for drag hit-testing).
     pub cam_aspect: f64,
     pub permissions_missing: bool,
+    /// The welcome screen was left for this launch.
+    pub welcome_dismissed: bool,
     /// The shared live encode (replay buffer, streams).
     pub live: Arc<crate::live::Live>,
     /// Replay buffer (seconds held, bytes) when on.
@@ -549,6 +551,7 @@ impl App {
             cmds: vec![],
             refresh_devices: false,
             permissions_missing: false,
+            welcome_dismissed: false,
             pip_applied: None,
             scene_applied: None,
             look_applied: None,

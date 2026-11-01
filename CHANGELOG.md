@@ -10,6 +10,10 @@ packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
   recording. SimpleRecord asks the first time it needs one, and otherwise records without it
   and links to that permission's page in System Settings from its card. A dismissed Screen
   Recording error stays dismissed, and the banner has a Restart button.
+- Permissions left over from another build no longer get stuck: **Ask Again** forgets the earlier
+  decision and shows the macOS prompt, the welcome screen returns at launch while Screen Recording
+  is missing, a refusal from ScreenCaptureKit shows the permission banner, and local builds are
+  **SimpleRecord Dev** (`com.heyfabrika.rec.dev`) so they stop colliding with the installed app.
 - Recording quality, after comparing with Cap: recordings default to the screen's native
   size (new installs); audio clock drift is eased out instead of jumped over, which removes
   periodic clicks; new Auto level filter (`--level`) holds speech near -16 LUFS with a
