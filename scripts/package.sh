@@ -4,7 +4,7 @@
 # scripts/make-signing-cert.sh); without them it is ad-hoc signed and permissions reset per update.
 set -eu
 cd "$(dirname "$0")/.."
-./scripts/build.sh
+REC_RELEASE=1 ./scripts/build.sh
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DMG="dist/SimpleRecord-$VERSION-macos-arm64.dmg"
 STAGE=$(mktemp -d)

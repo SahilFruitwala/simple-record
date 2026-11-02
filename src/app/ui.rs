@@ -298,8 +298,11 @@ fn preview(ui: &mut Ui, st: &mut State) {
                     // Only Screen Recording stops a session; it applies after a restart.
                     if st.permissions_missing {
                         if ui.button("Open System Settings").on_hover_text("Privacy & Security, Screen & System Audio Recording").clicked() {
-                            crate::tcc::request_all(true, false, false, std::time::Duration::ZERO);
+                            crate::tcc::request_screen_here();
                             super::macos::open_url(super::onboarding::SCREEN_PANE);
+                        }
+                        if ui.button("Ask Again").on_hover_text("Forget the earlier answer and show the macOS prompt. Use this if SimpleRecord is missing from the list, or is on but still not allowed").clicked() {
+                            crate::tcc::request_screen();
                         }
                         if ui.button("Restart SimpleRecord").on_hover_text("Use this once SimpleRecord is on in System Settings").clicked() {
                             super::macos::relaunch();
@@ -670,7 +673,7 @@ fn app_audio(ui: &mut Ui, st: &State, sel: &mut AppAudio, idle: bool) {
 
 /// Under a source the app can't use: why, and the one thing that fixes it (the
 /// prompt, or once it was answered, that permission's System Settings pane).
-fn not_allowed(ui: &mut Ui, status: crate::tcc::Status, why: &str, pane: &str, ask: impl FnOnce()) {
+fn not_allowed(ui: &mut Ui, status: crate::tcc::Status, why: &str, pane: &str, video: bool, ask: impl FnOnce()) {
     use super::onboarding::{Offer, offer};
     match offer(status) {
         Offer::Done => {}
@@ -684,6 +687,9 @@ fn not_allowed(ui: &mut Ui, status: crate::tcc::Status, why: &str, pane: &str, a
             w::hint(ui, why);
             if ui.button("Open System Settings").on_hover_text("Turn SimpleRecord on in this list").clicked() {
                 super::macos::open_url(pane);
+            }
+            if status == crate::tcc::Status::Denied && ui.button("Ask Again").on_hover_text("Forget the earlier answer and show the macOS prompt. Use this if SimpleRecord is on in the list but still not allowed").clicked() {
+                crate::tcc::ask_again(video);
             }
         }
     }
@@ -1186,7 +1192,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
             }
             if uses_cam || s.scene_spec().sources().iter().any(|l| matches!(l, crate::layout::Source::Camera(_))) {
                 let status = st.perms().camera;
-                not_allowed(ui, status, "SimpleRecord isn't allowed to use the camera, so it records without it.", super::onboarding::CAMERA_PANE, || crate::tcc::request_all(false, false, true, std::time::Duration::ZERO));
+                not_allowed(ui, status, "SimpleRecord isn't allowed to use the camera, so it records without it.", super::onboarding::CAMERA_PANE, true, || crate::tcc::request_all(false, false, true, std::time::Duration::ZERO));
             }
         });
     }
@@ -1223,7 +1229,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
             }
             if s.mic_enabled {
                 let status = st.perms().mic;
-                not_allowed(ui, status, "SimpleRecord isn't allowed to use the microphone, so it records without it.", super::onboarding::MIC_PANE, || crate::tcc::request_all(false, true, false, std::time::Duration::ZERO));
+                not_allowed(ui, status, "SimpleRecord isn't allowed to use the microphone, so it records without it.", super::onboarding::MIC_PANE, false, || crate::tcc::request_all(false, true, false, std::time::Duration::ZERO));
             }
             if s.mic_enabled {
                 // Live, also while recording.

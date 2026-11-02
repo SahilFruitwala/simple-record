@@ -55,20 +55,25 @@ pub fn offer(s: Status) -> Offer {
     }
 }
 
-/// Whether to show the welcome screen: until it's been through once, unless
-/// everything is already granted (then it's skipped for good).
+/// Whether to show the welcome screen: until it's been through once, and at
+/// launch whenever Screen Recording is missing. Settings outlive the app, so
+/// `onboarded` can be left over from a build whose grants don't apply to this one.
 pub fn wanted(st: &mut State) -> bool {
     // Scripted runs (the GUI self-test) drive the app without it.
-    if st.settings.onboarded || std::env::var_os("REC_GUI_SELFTEST").is_some() {
+    if st.welcome_dismissed || st.recording.is_some() || std::env::var_os("REC_GUI_SELFTEST").is_some() {
         return false;
     }
     let p = refresh(st);
-    if p.all_granted() {
+    if !st.settings.onboarded && p.all_granted() {
         st.settings.onboarded = true;
         let _ = st.settings.save();
         return false;
     }
-    true
+    needs_welcome(st.settings.onboarded, p.screen)
+}
+
+fn needs_welcome(onboarded: bool, screen: Status) -> bool {
+    !onboarded || screen != Status::Granted
 }
 
 pub(super) fn refresh(st: &mut State) -> Perms {
@@ -96,11 +101,11 @@ fn status_pill(ui: &mut Ui, s: Status) {
 }
 
 /// One permission: what it's for, its state, and how to grant it.
-/// `always_ask`: offer the prompt even when not granted (macOS reports
-/// Screen Recording only as granted or not, never as not asked yet).
+/// `ask_again`: forgets an earlier decision and asks from scratch, for one that
+/// System Settings can't change (it came from another build of the app).
 /// A required permission that is missing gets the window's primary button.
 #[allow(clippy::too_many_arguments)]
-fn row(ui: &mut Ui, title: &str, why: &str, s: Status, required: bool, always_ask: bool, ask: &mut dyn FnMut(), pane: &str) {
+fn row(ui: &mut Ui, title: &str, why: &str, s: Status, required: bool, ask: &mut dyn FnMut(), ask_again: &mut dyn FnMut(), pane: &str) {
     let p = theme::pal(ui);
     egui::Frame::NONE.fill(p.sidebar).corner_radius(CornerRadius::same(10)).inner_margin(Margin::same(14)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -124,10 +129,14 @@ fn row(ui: &mut Ui, title: &str, why: &str, s: Status, required: bool, always_as
                     }
                     Offer::OpenSettings => {
                         if button(ui, "Open System Settings").on_hover_text("Turn SimpleRecord on in this list").clicked() {
+                            // Screen Recording's list fills in by requesting.
+                            if required {
+                                crate::tcc::request_screen_here();
+                            }
                             super::macos::open_url(pane);
                         }
-                        if always_ask && ui.button("Ask Again").on_hover_text("Show the macOS prompt").clicked() {
-                            ask();
+                        if s == Status::Denied && ui.button("Ask Again").on_hover_text("Forget the earlier answer and show the macOS prompt. Use this if SimpleRecord is missing from the list, or is on but still not allowed").clicked() {
+                            ask_again();
                         }
                     }
                 });
@@ -165,12 +174,12 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 "To record your screen, windows and the sound your Mac plays. After you turn SimpleRecord on in System Settings, SimpleRecord needs to restart.",
                 perms.screen,
                 true,
-                true,
-                &mut || crate::tcc::request_all(true, false, false, Duration::ZERO),
+                &mut crate::tcc::request_screen,
+                &mut crate::tcc::request_screen,
                 SCREEN_PANE,
             );
-            row(ui, "Microphone", "To record your voice.", perms.mic, false, false, &mut || crate::tcc::request_all(false, true, false, Duration::ZERO), MIC_PANE);
-            row(ui, "Camera", "To show your webcam in scenes.", perms.camera, false, false, &mut || crate::tcc::request_all(false, false, true, Duration::ZERO), CAMERA_PANE);
+            row(ui, "Microphone", "To record your voice.", perms.mic, false, &mut || crate::tcc::request_all(false, true, false, Duration::ZERO), &mut || crate::tcc::ask_again(false), MIC_PANE);
+            row(ui, "Camera", "To show your webcam in scenes.", perms.camera, false, &mut || crate::tcc::request_all(false, false, true, Duration::ZERO), &mut || crate::tcc::ask_again(true), CAMERA_PANE);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 // The primary action is granting Screen Recording (above);
@@ -178,6 +187,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 let granted = perms.screen == Status::Granted;
                 let resp = if granted { w::primary_button(ui, "Continue") } else { ui.add(egui::Button::new("Continue without Screen Recording").min_size(vec2(0.0, 30.0))) };
                 if resp.clicked() {
+                    st.welcome_dismissed = true;
                     st.settings.onboarded = true;
                     let _ = st.settings.save();
                     // Errors from before (no permission) are stale now.
@@ -202,6 +212,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn welcome_returns_when_screen_recording_is_missing() {
+        assert!(needs_welcome(false, Status::Granted));
+        assert!(needs_welcome(true, Status::Denied));
+        assert!(!needs_welcome(true, Status::Granted));
+    }
 
     #[test]
     fn offers() {

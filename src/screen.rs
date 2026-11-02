@@ -28,23 +28,27 @@ pub struct DisplayInfo {
     pub display: Retained<SCDisplay>,
 }
 
+/// `SCStreamErrorUserDeclined`: macOS doesn't allow this app to capture.
+const USER_DECLINED: isize = -3801;
+
 fn shareable_content() -> Result<Retained<SCShareableContent>> {
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move |content: *mut SCShareableContent, err: *mut NSError| {
         let r = if let Some(c) = unsafe { Retained::retain(content) } {
             Ok(SendBox(c))
         } else {
-            let msg = unsafe { err.as_ref() }
-                .map(|e| e.localizedDescription().to_string())
-                .unwrap_or_else(|| "unknown error".into());
-            Err(msg)
+            let e = unsafe { err.as_ref() };
+            let msg = e.map(|e| e.localizedDescription().to_string()).unwrap_or_else(|| "unknown error".into());
+            Err((msg, e.is_some_and(|e| e.code() == USER_DECLINED)))
         };
         let _ = tx.send(r);
     });
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
     match rx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(c)) => Ok(c.0),
-        Ok(Err(e)) => bail!(
+        // The preflight passes on a stale decision while capture is refused.
+        Ok(Err((e, true))) => bail!("missing permission(s): Screen & System Audio Recording\n  ScreenCaptureKit refused: {e}"),
+        Ok(Err((e, false))) => bail!(
             "ScreenCaptureKit refused: {e}\n  -> grant Screen & System Audio Recording to SimpleRecord (see `rec permissions`)"
         ),
         Err(_) => bail!("timed out waiting for ScreenCaptureKit shareable content"),

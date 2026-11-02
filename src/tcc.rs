@@ -1,6 +1,8 @@
 //! Privacy (TCC) handling: responsibility disclaim, permission status, requests.
 
 use std::ffi::{CString, c_char, c_int, c_void};
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -11,6 +13,9 @@ use objc2_av_foundation::{
     AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio, AVMediaTypeVideo,
 };
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+use objc2_foundation::NSBundle;
+
+use crate::util::ns;
 
 const DISCLAIM_ENV: &str = "REC_DISCLAIMED";
 
@@ -176,6 +181,60 @@ fn av_request_async(video: bool) -> mpsc::Receiver<bool> {
     rx
 }
 
+/// Forget this app's earlier decision for a privacy service. macOS prompts only
+/// when there is no decision. A decision recorded for another signature of the
+/// same bundle ID, such as a local build used before installing a release, can
+/// show as on in System Settings but never applies to this one, and toggling it
+/// doesn't replace it.
+fn forget_decision(service: &str) {
+    let Some(id) = app_bundle_id() else { return };
+    let r = Command::new("/usr/bin/tccutil").args(["reset", service, &id]).stdout(Stdio::null()).status();
+    if !r.as_ref().is_ok_and(|s| s.success()) {
+        eprintln!("rec: warning: could not reset the {service} decision: {r:?}");
+    }
+}
+
+/// Ask for Screen & System Audio Recording from scratch.
+///
+/// A new process asks, attributed to this one: once a process has been told
+/// "denied", macOS answers its later requests from that without asking again.
+pub fn request_screen() {
+    forget_decision("ScreenCapture");
+    let r = std::env::current_exe().and_then(|exe| Command::new(exe).arg("request-screen").env("REC_NO_DISCLAIM", "1").status());
+    if !r.as_ref().is_ok_and(|s| s.success()) {
+        eprintln!("rec: warning: could not request screen recording: {r:?}");
+    }
+}
+
+/// The `request-screen` command, and the non-destructive way to get listed: it
+/// adds SimpleRecord to the Screen & System Audio Recording list in System
+/// Settings, keeping any decision, and shows the system's prompt if none exists.
+pub fn request_screen_here() {
+    let ok = CGRequestScreenCaptureAccess();
+    eprintln!("screen recording: request issued (granted now: {ok})");
+}
+
+/// Ask for the camera or microphone from scratch, for an answer that System
+/// Settings can't change (see `forget_decision`).
+pub fn ask_again(video: bool) {
+    forget_decision(if video { "Camera" } else { "Microphone" });
+    request_all(false, !video, video, Duration::ZERO);
+}
+
+/// The bundle ID of the .app this binary is in. Run through a symlink such as
+/// `dist/simple-record`, `NSBundle::mainBundle` finds no bundle and reads the
+/// Info.plist embedded in the binary, which names the release.
+fn app_bundle_id() -> Option<String> {
+    bundle_id_of(&std::env::current_exe().ok()?)
+}
+
+fn bundle_id_of(exe: &Path) -> Option<String> {
+    let exe = exe.canonicalize().ok()?;
+    let app = exe.ancestors().nth(3).filter(|p| p.extension().is_some_and(|e| e == "app"))?;
+    let id = NSBundle::bundleWithPath(&ns(app.to_str()?))?.bundleIdentifier()?;
+    Some(id.to_string())
+}
+
 /// Request every permission not yet granted, all at once so the user sees every
 /// prompt in one go. Screen recording cannot be granted inline: the request
 /// registers `rec` in System Settings > Privacy & Security > Screen & System
@@ -184,8 +243,7 @@ pub fn request_all(screen: bool, mic: bool, camera: bool, wait: Duration) {
     let mic_rx = (mic && mic_status() == Status::NotDetermined).then(|| av_request_async(false));
     let cam_rx = (camera && camera_status() == Status::NotDetermined).then(|| av_request_async(true));
     if screen && screen_status() != Status::Granted {
-        let ok = CGRequestScreenCaptureAccess();
-        eprintln!("screen recording: request issued (granted now: {ok})");
+        request_screen();
     }
     let deadline = std::time::Instant::now() + wait;
     for (name, rx) in [("microphone", mic_rx), ("camera", cam_rx)] {
@@ -212,4 +270,28 @@ pub fn ask_once(mic: bool, camera: bool) {
 
 pub fn report() -> (Status, Status, Status) {
     (screen_status(), mic_status(), camera_status())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundle_id_comes_from_the_app_behind_a_symlink() {
+        let dir = std::env::temp_dir().join(format!("rec-tcc-test-{}", std::process::id()));
+        let macos = dir.join("Rec.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        std::fs::write(
+            dir.join("Rec.app/Contents/Info.plist"),
+            r#"<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.rec.test</string></dict></plist>"#,
+        )
+        .unwrap();
+        std::fs::write(macos.join("simple-record"), "").unwrap();
+        std::fs::write(dir.join("loose"), "").unwrap();
+        std::os::unix::fs::symlink("Rec.app/Contents/MacOS/simple-record", dir.join("simple-record")).unwrap();
+        assert_eq!(bundle_id_of(&dir.join("simple-record")).as_deref(), Some("com.example.rec.test"));
+        assert_eq!(bundle_id_of(&macos.join("simple-record")).as_deref(), Some("com.example.rec.test"));
+        assert_eq!(bundle_id_of(&dir.join("loose")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
