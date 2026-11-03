@@ -423,6 +423,7 @@ impl Session {
         // changes how late system audio is heard) unless the offset is set.
         let follow_latency = o.system_audio && o.system_offset_ms.is_none() && o.test_pattern.is_none();
         sess.pacer = Some(std::thread::spawn(move || {
+            interactive_qos();
             let period = Duration::from_secs_f64(1.0 / fps as f64 / 2.0);
             let mut latency_checked = Instant::now();
             while !pacer_stop.load(Ordering::SeqCst) {
@@ -442,17 +443,24 @@ impl Session {
                 let now = secs(host_now());
                 // Plain threads have no autorelease pool; without one every
                 // autoreleased CoreImage/AVFoundation object would leak.
+                let mut due = None;
                 objc2::rc::autoreleasepool(|_| {
                     let mut failure = None;
                     pacer_shared.with(|s| {
                         s.emit_until(now - s.lag());
                         failure = s.failure().map(str::to_string);
+                        due = s.next_due();
                     });
                     if let Some(f) = failure {
                         pacer_shared.fail(format!("writer failed: {f}"));
                     }
                 });
-                std::thread::sleep(period);
+                // Wake when the next slot is due rather than on a fixed
+                // half-period, which emitted each frame 0-8 ms late at random
+                // and made the preview judder against the display. A slot
+                // already due (encoder busy) is retried a half-period later.
+                let wait = due.map_or(0.0, |d| d - secs(host_now()));
+                std::thread::sleep(if wait > 0.0 { Duration::from_secs_f64(wait).min(period) } else { period });
             }
         }));
         use objc2_foundation::{NSActivityOptions, NSProcessInfo};

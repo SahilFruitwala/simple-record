@@ -14,7 +14,8 @@
 //!    them to linear on sampling and darken the preview (mid-gray 128 -> 48).
 //!
 //! Steps 1 and 2 run on a worker thread (they wait for the GPU); the UI
-//! thread only wraps the result. Low power: half the resolution at 15 fps.
+//! thread only wraps the result. Frames come at the capture rate (at most
+//! 60 fps); low power: half the resolution at 15 fps.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -39,7 +40,6 @@ static READY: Mutex<Option<SendBox<CFRetained<CVPixelBuffer>>>> = Mutex::new(Non
 static WORKER: OnceLock<()> = OnceLock::new();
 static WANTED: AtomicBool = AtomicBool::new(false);
 static LOW_POWER: AtomicBool = AtomicBool::new(false);
-static SKIP: AtomicBool = AtomicBool::new(false);
 /// Preview area in pixels (width << 32 | height); 0 = unknown.
 static TARGET: AtomicU64 = AtomicU64::new(0);
 
@@ -54,6 +54,7 @@ pub fn set_wanted(on: bool) {
 
 pub fn set_low_power(on: bool) {
     LOW_POWER.store(on, Ordering::Relaxed);
+    crate::writer::PREVIEW_FPS.store(if on { 15 } else { 60 }, Ordering::Relaxed);
 }
 
 /// The preview area's size in pixels (set by the UI each frame).
@@ -69,6 +70,7 @@ pub fn callback(wake: Arc<dyn Fn() + Send + Sync>) -> PreviewFn {
         std::thread::Builder::new()
             .name("preview".into())
             .spawn(move || {
+                interactive_qos();
                 let mut w = Worker::new();
                 loop {
                     let frame = {
@@ -94,10 +96,6 @@ pub fn callback(wake: Arc<dyn Fn() + Send + Sync>) -> PreviewFn {
     });
     Arc::new(move |frame| {
         if !WANTED.load(Ordering::Relaxed) {
-            return;
-        }
-        // Frames come at 30 fps; low power keeps every other one.
-        if LOW_POWER.load(Ordering::Relaxed) && SKIP.fetch_xor(true, Ordering::Relaxed) {
             return;
         }
         FRAME.lock().unwrap().replace(SendBox(frame));

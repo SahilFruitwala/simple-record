@@ -36,6 +36,20 @@ pub fn dict(pairs: Vec<(&NSString, Retained<AnyObject>)>) -> Retained<Dict> {
     NSDictionary::from_retained_objects(&keys, &vals)
 }
 
+/// Run the calling thread at user-interactive QoS, so frame timing holds
+/// when the machine is busy (default-QoS threads get preempted).
+pub fn interactive_qos() {
+    unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0) };
+}
+
+/// A serial dispatch queue whose blocks run at user-interactive QoS.
+pub fn interactive_queue(label: &str) -> dispatch2::DispatchRetained<dispatch2::DispatchQueue> {
+    // Set through the attribute: libdispatch aborts when a queue's QoS
+    // floor is set after it was created (it is already active).
+    let attr = dispatch2::DispatchQueueAttr::with_qos_class(dispatch2::DispatchQueueAttr::SERIAL, dispatch2::DispatchQoS::UserInteractive, 0);
+    dispatch2::DispatchQueue::new(label, Some(&attr))
+}
+
 pub fn host_now() -> CMTime {
     unsafe { CMClock::host_time_clock().time() }
 }

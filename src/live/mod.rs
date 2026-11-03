@@ -18,7 +18,7 @@ pub mod whip;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Result;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetHeight, CVPixelBufferGetWidth};
@@ -194,7 +194,20 @@ pub struct Live {
     /// codec): each a pipeline like this one with that one output, fed the
     /// same frames and audio. By output ID.
     children: Mutex<Vec<(u64, Arc<Live>)>>,
+    /// Frames for the encode thread (see `video`).
+    frames: OnceLock<std::sync::mpsc::SyncSender<LiveFrame>>,
 }
+
+/// One output frame on its way to the encode thread.
+struct LiveFrame {
+    frame: crate::util::SendBox<objc2_core_foundation::CFRetained<CVPixelBuffer>>,
+    t: f64,
+    fps: u32,
+}
+
+/// Frames queued for the encode thread before `video` waits: absorbs a slow
+/// GPU scale (up to a frame period) without holding more capture surfaces.
+const FRAME_QUEUE: usize = 2;
 
 impl Default for Live {
     fn default() -> Self {
@@ -218,6 +231,7 @@ impl Default for Live {
             active: AtomicBool::new(false),
             next_id: Mutex::new(1),
             children: Mutex::new(vec![]),
+            frames: OnceLock::new(),
         }
     }
 }
@@ -294,10 +308,38 @@ impl Live {
     }
 
     /// One composited output frame at host time `t` (seconds).
-    pub fn video(&self, frame: &CVPixelBuffer, t: f64, fps: u32) {
+    ///
+    /// Called on the capture pacer, which also writes the recording: the
+    /// scale and encode run on this encode's own thread, since scaling
+    /// waits for the GPU (2 ms typically, a whole frame period at worst).
+    pub fn video(self: &Arc<Self>, frame: &CVPixelBuffer, t: f64, fps: u32) {
         for c in self.children() {
             c.video(frame, t, fps);
         }
+        if !self.active.load(Ordering::Relaxed) {
+            return;
+        }
+        let tx = self.frames.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<LiveFrame>(FRAME_QUEUE);
+            // Weak: the thread ends with this encode (its sender is dropped).
+            let me = Arc::downgrade(self);
+            std::thread::Builder::new()
+                .name("live-video".into())
+                .spawn(move || {
+                    crate::util::interactive_qos();
+                    while let Ok(f) = rx.recv() {
+                        let Some(live) = me.upgrade() else { break };
+                        objc2::rc::autoreleasepool(|_| live.encode_video(&f.frame.0, f.t, f.fps));
+                    }
+                })
+                .expect("live video thread");
+            tx
+        });
+        let _ = tx.send(LiveFrame { frame: crate::util::SendBox(objc2_core_foundation::Type::retain(frame)), t, fps });
+    }
+
+    /// The encode thread's side of `video`.
+    fn encode_video(&self, frame: &CVPixelBuffer, t: f64, fps: u32) {
         if !self.active.load(Ordering::Relaxed) {
             return;
         }
@@ -698,13 +740,13 @@ mod tests {
 
     /// Feed `secs` of 30 fps frames and audio through the hub. Every whole
     /// second the frame is white and the audio beeps, like the test pattern.
-    fn feed(live: &Live, secs: f64, t0: f64) {
+    fn feed(live: &Arc<Live>, secs: f64, t0: f64) {
         feed_with(live, secs, t0, 30, 1600);
     }
 
     /// `chunk`: audio frames per call (audio arrives in pieces unrelated to
     /// video frames).
-    fn feed_with(live: &Live, secs: f64, t0: f64, fps: usize, chunk: usize) {
+    fn feed_with(live: &Arc<Live>, secs: f64, t0: f64, fps: usize, chunk: usize) {
         use objc2_core_video::*;
         let pool = make_pool(640, 360, PIX_BGRA);
         let n = (secs * fps as f64) as usize;
