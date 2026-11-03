@@ -90,8 +90,18 @@ fn background() -> bool {
     std::env::var_os("REC_GUI_BACKGROUND").is_some()
 }
 
-/// Wake the event loop (from any thread).
+/// A wake that needs a tick (commands, signals, finished work), as opposed
+/// to a preview frame.
+static TICK_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// Wake the event loop for a tick (from any thread).
 fn wake() {
+    TICK_WANTED.store(true, Ordering::SeqCst);
+    wake_frame();
+}
+
+/// A new preview frame: redraw the main window, nothing else.
+fn wake_frame() {
     if let Some(p) = PROXY.get() {
         let _ = p.lock().unwrap().send_event(());
     }
@@ -689,7 +699,9 @@ impl App {
             width: px.width.max(1),
             height: px.height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
+            // One frame queued (two drawables) rather than two: the
+            // preview reaches the display a frame sooner.
+            desired_maximum_frame_latency: 1,
             alpha_mode: if transparent {
                 [wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
                     .into_iter()
@@ -1084,7 +1096,7 @@ impl App {
         // Nor after a refusal: it would fail the same way until a permission
         // changes (`permissions_changed`), and bring a dismissed error back.
         if want && self.st.preview.is_none() && self.st.error.is_none() && !self.st.permissions_missing && !self.st.onboarding {
-            let cb = preview::callback(Arc::new(wake));
+            let cb = preview::callback(Arc::new(wake_frame));
             let cam = self.st.spare_cam.take();
             match self.options(None).and_then(|(o, t)| Session::start_with_camera(&o, t, false, Some(cb), cam)) {
                 Ok(s) => {
@@ -1139,7 +1151,7 @@ impl App {
         if self.st.settings.recording_controls {
             self.open_controls(el);
         }
-        let cb = preview::callback(Arc::new(wake));
+        let cb = preview::callback(Arc::new(wake_frame));
         let r = std::fs::create_dir_all(&self.st.settings.output_dir)
             .map_err(anyhow::Error::from)
             .and_then(|_| self.options(Some(&file)))
@@ -1606,15 +1618,22 @@ impl ApplicationHandler for App {
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, _: ()) {
-        self.tick(el);
+        // Most wakes are preview frames (up to 60 a second): those only
+        // redraw the main window, without the full tick.
+        let cmds = TICK_WANTED.swap(false, Ordering::SeqCst);
+        if cmds {
+            self.tick(el);
+        }
         if let Some(w) = &self.main
             && self.main_visible
             && !w.occluded
         {
             w.window.request_redraw();
         }
-        for w in [&self.settings_win, &self.controls].into_iter().flatten() {
-            w.window.request_redraw();
+        if cmds {
+            for w in [&self.settings_win, &self.controls].into_iter().flatten() {
+                w.window.request_redraw();
+            }
         }
     }
 

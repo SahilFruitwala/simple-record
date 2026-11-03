@@ -21,9 +21,37 @@ pub struct Shared {
     pub error: Mutex<Option<String>>,
     /// Set when the session must end (error from a capture source/writer).
     pub stop: Arc<AtomicBool>,
+    /// The sink's state as of the last pacer pass, for the UI (see `SessionStatus`).
+    status: Mutex<SessionStatus>,
+}
+
+/// What the UI reads about a session each tick and frame. The pacer holds
+/// the sink while it composes a frame (several ms waiting on the GPU): read
+/// through the sink, the main thread stalled behind every render.
+#[derive(Default)]
+struct SessionStatus {
+    stats: Stats,
+    /// Peak levels [system, mic] since the UI last took them.
+    levels: [f32; 2],
+    started: bool,
+    paused: bool,
+    recorded_secs: f64,
+    cam_aspect: Option<f64>,
 }
 
 impl Shared {
+    /// Publish the sink's state for the UI. Call from inside `with`.
+    fn publish(&self, s: &mut Sink) {
+        let mut st = self.status.lock().unwrap();
+        st.stats.clone_from(&s.stats);
+        let lv = s.take_levels();
+        st.levels = [st.levels[0].max(lv[0]), st.levels[1].max(lv[1])];
+        st.started = s.started();
+        st.paused = s.is_paused();
+        st.recorded_secs = s.output_secs();
+        st.cam_aspect = s.cam_aspect();
+    }
+
     pub fn with(&self, f: impl FnOnce(&mut Sink)) {
         if let Some(s) = self.sink.lock().unwrap().as_mut() {
             f(s);
@@ -380,7 +408,7 @@ impl Session {
             sink.set_live(l.clone());
         }
         let stop = Arc::new(AtomicBool::new(false));
-        let shared = Arc::new(Shared { sink: Mutex::new(Some(sink)), error: Mutex::new(None), stop: stop.clone() });
+        let shared = Arc::new(Shared { sink: Mutex::new(Some(sink)), error: Mutex::new(None), stop: stop.clone(), status: Mutex::default() });
         let mut sess = Session {
             shared: shared.clone(),
             stop: stop.clone(),
@@ -423,6 +451,7 @@ impl Session {
         // changes how late system audio is heard) unless the offset is set.
         let follow_latency = o.system_audio && o.system_offset_ms.is_none() && o.test_pattern.is_none();
         sess.pacer = Some(std::thread::spawn(move || {
+            interactive_qos();
             let period = Duration::from_secs_f64(1.0 / fps as f64 / 2.0);
             let mut latency_checked = Instant::now();
             while !pacer_stop.load(Ordering::SeqCst) {
@@ -442,17 +471,25 @@ impl Session {
                 let now = secs(host_now());
                 // Plain threads have no autorelease pool; without one every
                 // autoreleased CoreImage/AVFoundation object would leak.
+                let mut due = None;
                 objc2::rc::autoreleasepool(|_| {
                     let mut failure = None;
                     pacer_shared.with(|s| {
                         s.emit_until(now - s.lag());
                         failure = s.failure().map(str::to_string);
+                        due = s.next_due();
+                        pacer_shared.publish(s);
                     });
                     if let Some(f) = failure {
                         pacer_shared.fail(format!("writer failed: {f}"));
                     }
                 });
-                std::thread::sleep(period);
+                // Wake when the next slot is due rather than on a fixed
+                // half-period, which emitted each frame 0-8 ms late at random
+                // and made the preview judder against the display. A slot
+                // already due (encoder busy) is retried a half-period later.
+                let wait = due.map_or(0.0, |d| d - secs(host_now()));
+                std::thread::sleep(if wait > 0.0 { Duration::from_secs_f64(wait).min(period) } else { period });
             }
         }));
         use objc2_foundation::{NSActivityOptions, NSProcessInfo};
@@ -649,35 +686,38 @@ impl Session {
         self.shared.error.lock().unwrap().clone()
     }
 
+    // The state reads below come from the pacer's last pass (within a
+    // frame period), without waiting for the sink.
+
     pub fn has_frames(&self) -> bool {
-        let mut ok = false;
-        self.shared.with(|s| ok = s.started());
-        ok
+        self.shared.status.lock().unwrap().started
     }
 
     pub fn pause(&self) -> bool {
         let mut ok = false;
-        self.shared.with(|s| ok = s.pause(secs(host_now())));
+        self.shared.with(|s| {
+            ok = s.pause(secs(host_now()));
+            self.shared.publish(s);
+        });
         ok
     }
 
     pub fn resume(&self) -> bool {
         let mut ok = false;
-        self.shared.with(|s| ok = s.resume(secs(host_now())));
+        self.shared.with(|s| {
+            ok = s.resume(secs(host_now()));
+            self.shared.publish(s);
+        });
         ok
     }
 
     pub fn is_paused(&self) -> bool {
-        let mut p = false;
-        self.shared.with(|s| p = s.is_paused());
-        p
+        self.shared.status.lock().unwrap().paused
     }
 
     /// Recorded (output) seconds so far, excluding pauses.
     pub fn recorded_secs(&self) -> f64 {
-        let mut t = 0.0;
-        self.shared.with(|s| t = s.output_secs());
-        t
+        self.shared.status.lock().unwrap().recorded_secs
     }
 
     /// Move or restyle the camera overlay live; also applies to the file.
@@ -704,9 +744,7 @@ impl Session {
     }
 
     pub fn cam_aspect(&self) -> Option<f64> {
-        let mut a = None;
-        self.shared.with(|s| a = s.cam_aspect());
-        a
+        self.shared.status.lock().unwrap().cam_aspect
     }
 
     /// Switch scenes live (with the transition); false if this session
@@ -732,13 +770,8 @@ impl Session {
 
     /// (stats, peak levels [system, mic] since last call).
     pub fn poll(&self) -> (Stats, [f32; 2]) {
-        let mut st = Stats::default();
-        let mut lv = [0f32; 2];
-        self.shared.with(|s| {
-            st = s.stats.clone();
-            lv = s.take_levels();
-        });
-        (st, lv)
+        let mut st = self.shared.status.lock().unwrap();
+        (st.stats.clone(), std::mem::take(&mut st.levels))
     }
 
     /// Stop capture and finalize the file (if any). Blocks until written.

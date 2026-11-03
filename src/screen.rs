@@ -378,7 +378,7 @@ impl ScreenCapture {
             let delegate = ProtocolObject::from_ref(&*output);
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, Some(delegate));
             let out_proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);
-            let vq = DispatchQueue::new("rec.screen.video", None);
+            let vq = interactive_queue("rec.screen.video");
             let aq = DispatchQueue::new("rec.screen.audio", None);
             let mq = DispatchQueue::new("rec.screen.mic", None);
             stream

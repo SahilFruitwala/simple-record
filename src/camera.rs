@@ -302,7 +302,7 @@ impl Camera {
             )])));
             output.setAlwaysDiscardsLateVideoFrames(true);
             let delegate = Self::make_delegate(shared, extra);
-            let queue = DispatchQueue::new("rec.camera", None);
+            let queue = interactive_queue("rec.camera");
             output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*delegate)), Some(&queue));
             if !session.canAddOutput(&output) {
                 bail!("cannot add camera output");

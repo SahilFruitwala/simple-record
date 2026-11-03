@@ -8,6 +8,7 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -223,6 +224,9 @@ type ExtraSource = (crate::layout::Source, VecDeque<(f64, Pb)>, Option<Pb>);
 /// Receives every emitted (composited) video frame, throttled to ~30 fps.
 pub type PreviewFn = std::sync::Arc<dyn Fn(CFRetained<CVPixelBuffer>) + Send + Sync>;
 
+/// Most preview frames per second (the UI lowers it in low power mode).
+pub static PREVIEW_FPS: AtomicU32 = AtomicU32::new(60);
+
 /// The file being written (absent for preview-only sessions).
 /// See `Sink::wait_for_camera`.
 struct CamGate {
@@ -263,7 +267,8 @@ pub struct Sink {
     /// Compositor output pool when there is no writer adaptor pool.
     own_pool: Option<CFRetained<CVPixelBufferPool>>,
     preview: Option<PreviewFn>,
-    last_preview: f64,
+    /// Grid slot of the last preview frame.
+    last_preview: Option<i64>,
     mixer: Option<Mixer>,
     mix_cfg: ([bool; 2], [f32; 2]),
     fps: i64,
@@ -326,6 +331,11 @@ unsafe impl Send for Sink {}
 /// Minimum distance behind real time that emission runs, so late-arriving
 /// frames still land in their own slot.
 pub const LAG_SECS: f64 = 0.05;
+
+/// The same for a preview-only session: the screen's arrival latency plus
+/// this margin, and at least `PREVIEW_LAG_SECS`.
+const PREVIEW_MARGIN_SECS: f64 = 0.004;
+const PREVIEW_LAG_SECS: f64 = 0.01;
 
 /// Frames buffered per source before the oldest are dropped.
 /// ScreenCaptureKit's queue depth is 8: hold at most 7, which covers the
@@ -433,7 +443,7 @@ impl Sink {
             out,
             own_pool,
             preview,
-            last_preview: 0.0,
+            last_preview: None,
             mixer: None,
             mix_cfg: ([system_audio, mic], gains_db),
             fps: v.fps as i64,
@@ -479,7 +489,14 @@ impl Sink {
     /// Current emission lag: webcams deliver frames ~70-90 ms after capture,
     /// so wait for the slowest source seen (plus margin) before emitting a
     /// slot, keeping the overlay in sync with audio.
+    ///
+    /// A preview alone (no file, replay buffer or stream) has nothing to
+    /// keep in sync: it waits only for the screen, and the camera shows its
+    /// newest frame. That takes 50-100 ms off what the preview shows.
     pub fn lag(&self) -> f64 {
+        if self.out.is_none() && !self.live.as_ref().is_some_and(|l| l.active()) {
+            return (self.latency_peak[0] + PREVIEW_MARGIN_SECS).clamp(PREVIEW_LAG_SECS, 0.3);
+        }
         let worst = self.latency_peak[0].max(self.latency_peak[1]);
         (worst + 0.025).clamp(LAG_SECS, 0.3)
     }
@@ -492,6 +509,11 @@ impl Sink {
         let decayed = (*p - 0.05 * (at - self.latency_at[i]).max(0.0)).max(0.0);
         *p = decayed.max(lat);
         self.latency_at[i] = at;
+    }
+
+    /// Host time (seconds) the next slot is due to be emitted.
+    pub fn next_due(&self) -> Option<f64> {
+        self.t0.map(|_| self.slot_ticks(self.next_slot) as f64 / TIMESCALE as f64 + self.lag())
     }
 
     pub fn started(&self) -> bool {
@@ -1101,7 +1123,12 @@ impl Sink {
             if !write {
                 self.stats.paused_slots += 1;
             }
-            let want_preview = self.preview.is_some() && slot_t - self.last_preview >= 1.0 / 30.0;
+            // Counted in whole slots: comparing host-time seconds against
+            // 1/30 s was off by float rounding most of the time, so the
+            // preview stuttered between 20 and 30 fps.
+            let pf = PREVIEW_FPS.load(Ordering::Relaxed).max(1) as i64;
+            let stride = ((self.fps + pf - 1) / pf).max(1);
+            let want_preview = self.preview.is_some() && self.last_preview.is_none_or(|l| slot - l >= stride);
             // The replay buffer and streams get every frame, paused or not.
             let want_live = self.live.as_ref().is_some_and(|l| l.active());
             if !write && !want_preview && !want_live {
@@ -1198,7 +1225,7 @@ impl Sink {
                 l.video(&frame, slot_t, self.fps as u32);
             }
             if want_preview && let Some(p) = self.preview.clone() {
-                self.last_preview = slot_t;
+                self.last_preview = Some(slot);
                 match self.studio_frame(slot_t, screen.as_deref(), &frame) {
                     Some(f) => p(f),
                     None => p(frame),
@@ -1600,6 +1627,64 @@ pub(crate) fn err_text(w: &AVAssetWriter) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The preview gets frames on an exact slot cadence (every slot at
+    /// 60 fps, every 4th in low power), at host times as large as a real
+    /// uptime's. Comparing seconds against 1/30 s used to skip a slot at
+    /// random, so the preview alternated between 20 and 30 fps.
+    #[test]
+    fn preview_only_waits_just_for_the_screen() {
+        use super::*;
+        let spec = VideoSpec { width: 64, height: 36, fps: 60, codec: Codec::H264, bitrate: 1_000_000, pixel_format: PIX_BGRA, hdr_pq: None };
+        let mut sink = Sink::new(None, &spec, false, false, AudioLayout::Both, [0.0; 2], None, Some(std::sync::Arc::new(|_| {}))).unwrap();
+        // A webcam 90 ms behind, the screen 15 ms.
+        sink.note_latency(0, 0.015, 1000.0);
+        sink.note_latency(1, 0.090, 1000.0);
+        assert!((sink.lag() - 0.019).abs() < 1e-9, "{}", sink.lag());
+        // Nothing measured yet: the floor.
+        let fresh = Sink::new(None, &spec, false, false, AudioLayout::Both, [0.0; 2], None, None).unwrap();
+        assert_eq!(fresh.lag(), PREVIEW_LAG_SECS);
+    }
+
+    #[test]
+    fn preview_cadence_is_steady() {
+        use super::*;
+        use std::sync::atomic::AtomicUsize;
+        let spec = VideoSpec { width: 64, height: 36, fps: 60, codec: Codec::H264, bitrate: 1_000_000, pixel_format: PIX_BGRA, hdr_pq: None };
+        let pool = make_pool(64, 36, PIX_BGRA);
+        let frame = || unsafe {
+            let mut buf = std::ptr::null_mut();
+            CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut buf));
+            CFRetained::from_raw(std::ptr::NonNull::new(buf).unwrap())
+        };
+        for (preview_fps, stride) in [(60, 1), (15, 4)] {
+            PREVIEW_FPS.store(preview_fps, Ordering::Relaxed);
+            let shown = std::sync::Arc::new(AtomicUsize::new(0));
+            let s2 = shown.clone();
+            let mut sink = Sink::new(None, &spec, false, false, AudioLayout::Both, [0.0; 2], None, Some(std::sync::Arc::new(move |_| {
+                s2.fetch_add(1, Ordering::Relaxed);
+            })))
+            .unwrap();
+            let t0 = 123_456.789;
+            let mut gaps = vec![];
+            let mut last = None;
+            for i in 0..600i64 {
+                let t = t0 + i as f64 / 60.0;
+                sink.push_screen(unsafe { CMTime::new((t * TIMESCALE as f64).round() as i64, TIMESCALE) }, frame());
+                let before = shown.load(Ordering::Relaxed);
+                sink.emit_until(t + 0.001);
+                if shown.load(Ordering::Relaxed) > before {
+                    if let Some(l) = last {
+                        gaps.push(i - l);
+                    }
+                    last = Some(i);
+                }
+            }
+            assert!(gaps.len() > 100, "{preview_fps} fps: {} frames", gaps.len());
+            assert!(gaps.iter().all(|g| *g == stride), "{preview_fps} fps: gaps {gaps:?}");
+        }
+        PREVIEW_FPS.store(60, Ordering::Relaxed);
+    }
+
     /// Tones from two devices whose clocks drift from the host clock, through
     /// the real sink; `REC_DRIFT_OUT` is the file (scripts/audioclicks.py
     /// counts the clicks).
