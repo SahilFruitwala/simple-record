@@ -19,22 +19,33 @@ pub use crate::layout::Scene;
 pub use crate::shapes::*;
 
 /// Premultiplied BGRA image of `color` with per-pixel `alpha`.
+///
+/// Held in an IOSurface-backed pixel buffer, which CoreImage samples on the
+/// GPU as it is. An image over bitmap data was copied by the CPU into a
+/// texture on every frame instead: for Presenter's full-frame rounded
+/// screen that was 33 MB a frame at 4K, most of the compositor's CPU time.
 fn alpha_image(alpha: &[u8], w: usize, h: usize, color: [u8; 3]) -> Retained<CIImage> {
-    let mut px = Vec::with_capacity(w * h * 4);
-    for &a in alpha {
-        let m = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
-        px.extend_from_slice(&[m(color[2]), m(color[1]), m(color[0]), a]);
-    }
+    use objc2_core_video::*;
+    let pool = make_pool(w, h, PIX_BGRA);
     unsafe {
-        let data = objc2_foundation::NSData::with_bytes(&px);
-        let cs = CGColorSpace::with_name(Some(kCGColorSpaceSRGB));
-        CIImage::imageWithBitmapData_bytesPerRow_size_format_colorSpace(
-            &data,
-            w * 4,
-            CGSize::new(w as f64, h as f64),
-            objc2_core_image::kCIFormatBGRA8,
-            cs.as_deref(),
-        )
+        let mut b = std::ptr::null_mut();
+        CVPixelBufferPool::create_pixel_buffer(None, &pool, std::ptr::NonNull::from(&mut b));
+        let buf: CFRetained<CVPixelBuffer> = CFRetained::from_raw(std::ptr::NonNull::new(b).expect("decoration buffer"));
+        CVPixelBufferLockBaseAddress(&buf, CVPixelBufferLockFlags(0));
+        let base = CVPixelBufferGetBaseAddress(&buf) as *mut u8;
+        let stride = CVPixelBufferGetBytesPerRow(&buf);
+        for (y, row) in alpha.chunks_exact(w).enumerate() {
+            let out = std::slice::from_raw_parts_mut(base.add(y * stride), w * 4);
+            for (px, &a) in out.chunks_exact_mut(4).zip(row) {
+                let m = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
+                px.copy_from_slice(&[m(color[2]), m(color[1]), m(color[0]), a]);
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(&buf, CVPixelBufferLockFlags(0));
+        let cs = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).expect("sRGB colorspace");
+        let cs: Retained<objc2::runtime::AnyObject> = Retained::retain(&*cs as *const CGColorSpace as *mut objc2::runtime::AnyObject).expect("colorspace");
+        let opts = dict(vec![(objc2_core_image::kCIImageColorSpace, cs)]);
+        CIImage::imageWithCVPixelBuffer_options(&buf, Some(&opts))
     }
 }
 
@@ -889,6 +900,84 @@ mod tests {
         assert!(r > 200 && g < 40 && b < 40, "program: {:?}", [b, g, r]);
         let [b, g, r] = pixel(&out, 320 + gap / 2, 90);
         assert!(r < 30 && g < 30 && b < 30, "the gap: {:?}", [b, g, r]);
+    }
+
+    /// Per-frame cost of composing at 4K (`cargo test --release
+    /// compose_cost -- --ignored --nocapture`): wall time (the render waits
+    /// for the GPU) and this process's CPU time, against a plain GPU copy.
+    /// Buffers rotate through pools, as capture and the encoder's do.
+    #[test]
+    #[ignore]
+    fn compose_cost() {
+        let (w, h) = (3840usize, 2160usize);
+        let cpu = || {
+            let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+            let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+            tv(u.ru_utime) + tv(u.ru_stime)
+        };
+        let new = |p: &CVPixelBufferPool| unsafe {
+            let mut b = std::ptr::null_mut();
+            CVPixelBufferPool::create_pixel_buffer(None, p, std::ptr::NonNull::from(&mut b));
+            CFRetained::from_raw(std::ptr::NonNull::new(b).unwrap())
+        };
+        let (sp, cp, op) = (make_pool(w, h, PIX_BGRA), make_pool(1920, 1080, PIX_BGRA), make_pool(w, h, PIX_BGRA));
+        let screens: Vec<_> = (0..4).map(|_| new(&sp)).collect();
+        let cams: Vec<_> = (0..4).map(|_| new(&cp)).collect();
+        const N: usize = 240;
+        let report = |name: &str, f: &mut dyn FnMut(usize)| {
+            for i in 0..10 {
+                f(i);
+            }
+            let mut ts = Vec::with_capacity(N);
+            let c0 = cpu();
+            for i in 0..N {
+                let t = std::time::Instant::now();
+                objc2::rc::autoreleasepool(|_| f(i));
+                ts.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            let c = (cpu() - c0) * 1000.0 / N as f64;
+            ts.sort_by(f64::total_cmp);
+            println!("{name:<34} wall median {:5.2} ms  p95 {:5.2} ms | CPU {:5.2} ms/frame ({:4.1}% of a core at 60 fps)", ts[N / 2], ts[N * 95 / 100], c, c * 6.0);
+        };
+        let copy = unsafe {
+            let mut s = std::ptr::null_mut();
+            objc2_video_toolbox::VTPixelTransferSession::create(None, std::ptr::NonNull::from(&mut s));
+            CFRetained::from_raw(std::ptr::NonNull::new(s).unwrap())
+        };
+        report("floor: GPU copy (VT transfer)", &mut |i| unsafe {
+            copy.transfer_image(&screens[i % 4], &new(&op));
+        });
+        let styled = PipSpec { border: 8.0, shadow: true, ..PipSpec::default() };
+        let square = PipSpec { shape: Shape::Square, size: 0.2, ..PipSpec::default() };
+        for (name, scene, pip) in [
+            ("CoreImage: screen only", Scene::Screen, PipSpec::default()),
+            ("CoreImage: screen + webcam", Scene::ScreenCam, PipSpec::default()),
+            ("CoreImage: + border and shadow", Scene::ScreenCam, styled),
+            ("CoreImage: square webcam", Scene::ScreenCam, square.clone()),
+            ("CoreImage: presenter", Scene::Presenter, PipSpec::default()),
+            ("CoreImage: presenter, square webcam", Scene::Presenter, square),
+        ] {
+            let mut c = Compositor::new(w, h, pip);
+            c.set_scene(SceneSpec::Template(scene), false);
+            report(name, &mut |i| c.render(i as f64 / 60.0, Some(&screens[i % 4]), Some(&cams[i % 4]), &[], &new(&op)));
+        }
+        // A wallpaper background (a 6K photo, scaled once).
+        let wall = std::env::temp_dir().join(format!("rec-wall-{}.png", std::process::id()));
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=6016x3384", "-frames:v", "1"])
+            .arg(&wall)
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            let mut c = Compositor::new(w, h, PipSpec::default());
+            c.set_scene(SceneSpec::Template(Scene::Presenter), false);
+            let mut bg = Background::gradient([0, 0, 0], [0, 0, 0]);
+            bg.image = Some(wall.to_string_lossy().into_owned());
+            c.set_background(bg);
+            report("CoreImage: presenter on a wallpaper", &mut |i| c.render(i as f64 / 60.0, Some(&screens[i % 4]), Some(&cams[i % 4]), &[], &new(&op)));
+            let _ = std::fs::remove_file(&wall);
+        }
     }
 
     /// Bake an overlay with CoreImage and read pixels back.
