@@ -12,6 +12,8 @@ categories = ["multimedia::video"]
 publish = false
 
 [dependencies]
+# The recording engine (capture, compose, encode, audio, streaming).
+zerorec = { path = "../zerorec" }
 anyhow = "1.0.104"
 block2 = "0.6"
 clap = { version = "4.6.7", features = ["derive"] }

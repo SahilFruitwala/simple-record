@@ -1,31 +1,29 @@
 mod app;
-mod appaudio;
-mod browser;
-mod camera;
-mod compose;
-mod effects;
-mod filters;
-mod gif;
-mod hotkey;
-mod layout;
-mod live;
-mod logging;
-mod media;
-mod mixer;
-mod outlatency;
-mod play;
-mod probe;
-mod record;
-mod scale;
-mod screen;
-mod settings;
-mod shapes;
-mod shortcut;
-mod synth;
-mod tcc;
-mod util;
-mod writer;
-mod zoom;
+
+use zerorec::{
+    appaudio,
+    browser,
+    camera,
+    compose,
+    effects,
+    filters,
+    gif,
+    hotkey,
+    layout,
+    live,
+    logging,
+    outlatency,
+    play,
+    probe,
+    record,
+    scale,
+    screen,
+    settings,
+    tcc,
+    util,
+    writer,
+    zoom,
+};
 
 use std::path::PathBuf;
 
@@ -91,6 +89,8 @@ enum Cmd {
         #[arg(long, default_value_t = 60)]
         wait: u64,
     },
+    /// Diagnose hardware, macOS, permissions, encoders, devices and disk space.
+    Doctor,
     /// Ask macOS for Screen Recording from this process (used by `permissions --request`).
     #[command(hide = true)]
     RequestScreen,
@@ -963,6 +963,16 @@ fn devices() -> Result<()> {
 }
 
 fn main() {
+    zerorec::brand::set(zerorec::brand::Brand {
+        cli: "simple-record",
+        prefix: "rec",
+        display: "SimpleRecord",
+        dir: "simple-record",
+        file_stem: "rec",
+        keychain_service: "simple-record stream key",
+        encoder: "simple-record",
+        crash_prefixes: &["simple-record"],
+    });
     // Behave like a normal CLI when piped into `head` etc.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     tcc::disclaim_and_reexec();
@@ -990,6 +1000,12 @@ fn main() {
             println!("screen recording : {s}");
             println!("microphone       : {m}");
             println!("camera           : {c}");
+            Ok(())
+        }
+        Cmd::Doctor => {
+            if zerorec::doctor::run() > 0 {
+                std::process::exit(1);
+            }
             Ok(())
         }
         Cmd::RequestScreen => {
