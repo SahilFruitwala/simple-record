@@ -108,8 +108,10 @@ scripts/synccheck.py FILE        # A/V offset of a flash + beep recording
 Test recordings go to `~/Movies/simple-record-tests/`.
 
 The recording engine (capture, compositing, encoding, audio, streaming) lives in the
-[zerorec](https://github.com/SahilFruitwala/zerorec) crate, checked out next to this repo
-(`../zerorec`). Its platform-independent parts and the SRT end-to-end check are tested there
+[zerorec](https://github.com/SahilFruitwala/zerorec) crate, a private repo that Cargo fetches
+from GitHub at the commit pinned in `Cargo.toml` (with your git credentials; CI uses the
+`ZEROREC_TOKEN` secret). To change both at once, point the dependency at a local checkout
+(`path = "../zerorec"`) for a while. Its platform-independent parts and the SRT end-to-end check are tested there
 (`portable/`, `scripts/srt-e2e.sh`). CI (`.github/workflows/ci.yml`) builds, lints and tests
 the app on macOS.
 
@@ -545,6 +547,6 @@ simple-record record --stream 'srt://ingest.example.com:9000?streamid=live/me&pa
 |---|---|
 | `src/main.rs` | CLI |
 | `src/app/` | App: windows and UI (`ui.rs`), scene gallery and layer editor (`scenes.rs`), menu bar item and app menu, Dock quit/reopen hooks, preview scaler, theme, macOS chrome |
-| `../zerorec` | The engine crate: settings, hotkeys, sessions and pacing, AVAssetWriter sink, ScreenCaptureKit, camera and mic, layouts and compositor, mic filters and mixer, live outputs, permissions, scaling, disk space checks, `doctor` |
+| zerorec (dependency) | The engine crate: settings, hotkeys, sessions and pacing, AVAssetWriter sink, ScreenCaptureKit, camera and mic, layouts and compositor, mic filters and mixer, live outputs, permissions, scaling, disk space checks, `doctor` |
 | `scripts/` | Build, self-test, soak, sync checks (`synccheck.py` with ffmpeg, `avsync.swift` with AVFoundation) and quality metrics (`quality.sh`, `encquality.sh`, `testcard.swift`) |
 | `analysis/OBS_ARCHITECTURE.md` | OBS study |

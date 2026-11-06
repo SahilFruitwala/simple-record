@@ -36,6 +36,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+      - name: Access the private zerorec repo
+        # A fine-grained token with read access to SahilFruitwala/zerorec's contents.
+        run: |
+          if [ -z "$ZEROREC_TOKEN" ]; then echo "::error::Set the ZEROREC_TOKEN secret (read access to SahilFruitwala/zerorec)"; exit 1; fi
+          git config --global url."https://x-access-token:${ZEROREC_TOKEN}@github.com/SahilFruitwala/zerorec".insteadOf "https://github.com/SahilFruitwala/zerorec"
+        env:
+          ZEROREC_TOKEN: ${{ secrets.ZEROREC_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Bump version from the merged PR
         id: bump

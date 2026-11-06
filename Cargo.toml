@@ -13,7 +13,9 @@ publish = false
 
 [dependencies]
 # The recording engine (capture, compose, encode, audio, streaming).
-zerorec = { path = "../zerorec" }
+# The recording engine, from its private GitHub repo (pinned). To work on both
+# at once, point this at a local checkout for a while: path = "../zerorec".
+zerorec = { git = "https://github.com/SahilFruitwala/zerorec", rev = "83c77ada944f30082df3155db9423c22c49705f3" }
 anyhow = "1.0.104"
 block2 = "0.6"
 clap = { version = "4.6.7", features = ["derive"] }
