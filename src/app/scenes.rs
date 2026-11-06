@@ -173,17 +173,24 @@ enum Pick {
     New,
 }
 
-/// The templates, the custom scenes and a "new scene" tile, as a grid of
-/// miniatures. Returns true when the shown scene changed.
-pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> bool {
+/// The templates, the custom scenes and a "new scene" tile, as miniatures:
+/// a grid, or one row (`strip`, under the preview). Returns true when the
+/// shown scene changed.
+pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool, strip: bool) -> bool {
     let p = theme::pal(ui);
-    let cols = 3;
-    let gap = 6.0;
-    let tile_w = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).floor();
     let env = env(st, s);
     let aspect = env.w / env.h;
-    let thumb_h = (tile_w / aspect as f32).min(tile_w * 0.9);
-    let thumb_w = (thumb_h * aspect as f32).min(tile_w);
+    let (cols, gap, tile_w, thumb_w, thumb_h) = if strip {
+        let h = 66.0;
+        let w = (h * aspect as f32).min(118.0);
+        (usize::MAX, 12.0, w.max(96.0), w, (w / aspect as f32).min(h))
+    } else {
+        let cols = 3;
+        let gap = 6.0;
+        let tile_w = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).floor();
+        let thumb_h = (tile_w / aspect as f32).min(tile_w * 0.9);
+        (cols, gap, tile_w, (thumb_h * aspect as f32).min(tile_w), thumb_h)
+    };
     // Studio mode: picking stages a scene; the program is marked.
     let program = s.scene_id();
     let shown = if st.studio { st.staged.unwrap_or(program) } else { program };
@@ -197,13 +204,13 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
         let ok = idle || st.can_switch_live(&layout::SceneSpec::Custom(l.clone()));
         tiles.push((Pick::Custom(i), l.name.clone(), Some(l.resolve(&env)), shown.1 == Some(i), ok, format!("{} (custom scene)", l.name)));
     }
-    tiles.push((Pick::New, "New Scene".into(), None, false, true, "A custom scene, starting from the one shown".into()));
+    tiles.push((Pick::New, "New scene".into(), None, false, true, "A custom scene, starting from the one shown".into()));
     let mut picked = None;
     for row in tiles.chunks(cols) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (i, (pick, label, frame, sel, ok, tip)) in row.iter().enumerate() {
-                let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, thumb_h + 18.0), if *ok { Sense::click() } else { Sense::hover() });
+                let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, thumb_h + if strip { 22.0 } else { 18.0 }), if *ok { Sense::click() } else { Sense::hover() });
                 let t = Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + thumb_h / 2.0), vec2(thumb_w, thumb_h));
                 match frame {
                     Some(f) => thumb(ui, t, f, env.w, env.screen_aspect),
@@ -219,11 +226,11 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
                 let stroke = if *sel {
                     Stroke::new(2.0, theme::accent())
                 } else if resp.hovered() && *ok {
-                    Stroke::new(1.0, p.secondary)
+                    Stroke::new(1.5, p.tertiary)
                 } else {
                     Stroke::new(1.0, p.control_border)
                 };
-                ui.painter().rect_stroke(t, CornerRadius::same(4), stroke, egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(t.expand(if *sel { 1.0 } else { 0.0 }), CornerRadius::same(6), stroke, egui::StrokeKind::Outside);
                 let id = match pick {
                     Pick::Template(sc) => Some((*sc, None)),
                     Pick::Custom(i) => Some((Scene::Screen, Some(*i))),
@@ -239,7 +246,7 @@ pub fn gallery(ui: &mut Ui, st: &mut State, s: &mut Settings, idle: bool) -> boo
                 let mut job = egui::text::LayoutJob::simple_singleline(label.clone(), font, color);
                 job.wrap = egui::text::TextWrapping { max_width: tile_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
                 let galley = ui.painter().layout_job(job);
-                let text_rect = Rect::from_center_size(egui::pos2(rect.center().x, t.bottom() + 9.0), vec2(tile_w, 14.0));
+                let text_rect = Rect::from_center_size(egui::pos2(rect.center().x, t.bottom() + if strip { 11.0 } else { 9.0 }), vec2(tile_w, 14.0));
                 ui.painter().galley(egui::pos2(text_rect.center().x - galley.size().x / 2.0, text_rect.top()), galley, color);
                 let resp = if *ok { resp.on_hover_text(tip.as_str()) } else { resp.on_hover_text("Start the recording with this scene's sources to switch to it live") };
                 if resp.clicked() && !sel {

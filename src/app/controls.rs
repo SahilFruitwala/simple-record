@@ -146,7 +146,7 @@ pub fn bar(ui: &mut Ui, st: &mut State) -> bool {
                     ui.painter().rect_filled(track, CornerRadius::same(1), fg.gamma_multiply(0.15));
                     let mut lit = track;
                     lit.set_width(track.width() * level);
-                    ui.painter().rect_filled(lit, CornerRadius::same(1), theme::MAC_BLUE);
+                    ui.painter().rect_filled(lit, CornerRadius::same(1), theme::accent());
                 }
                 if r.clicked() {
                     match g {

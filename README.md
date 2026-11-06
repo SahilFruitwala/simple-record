@@ -33,7 +33,7 @@ It uses only Apple frameworks:
   noise suppression, next to a built-in low cut, noise gate and compressor.
 
 There is no FFmpeg, OBS or Electron at runtime. The UI is egui on wgpu in the paper-rs style:
-transparent titlebar and the Inter font.
+transparent titlebar, Instrument Sans for the interface and JetBrains Mono for the timecode.
 
 It needs macOS 15 or later on Apple Silicon. Windows and Linux are not supported yet; see
 [PLATFORMS.md](PLATFORMS.md) for what a port involves. It was developed and tested on macOS 27 on an M4

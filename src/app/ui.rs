@@ -15,7 +15,7 @@ use crate::settings::Settings;
 use crate::settings::{FPS, RESOLUTIONS};
 use crate::writer::{AudioLayout, Codec};
 
-const RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x30);
+const RED: Color32 = theme::TALLY;
 /// The sidebar's width range: narrower cuts the scene tiles' names, wider
 /// leaves too little room for the preview in the smallest window.
 const SIDEBAR_MIN: f32 = 280.0;
@@ -38,14 +38,8 @@ fn tilde(p: &std::path::Path) -> String {
 
 /// A Settings section heading, styled like the sidebar's headers.
 fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(12.0);
-    let mut job = egui::text::LayoutJob::default();
-    job.append(
-        &title.to_uppercase(),
-        0.0,
-        egui::TextFormat { font_id: theme::semibold(10.5), color: theme::pal(ui).secondary, extra_letter_spacing: 0.6, ..Default::default() },
-    );
-    ui.label(job);
+    ui.add_space(14.0);
+    ui.label(RichText::new(title).font(theme::semibold(SECONDARY + 1.0)).color(theme::pal(ui).secondary));
     ui.add_space(4.0);
 }
 
@@ -61,14 +55,28 @@ fn toolbar(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
         add(ui);
     });
     let p = theme::pal(ui);
-    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, p.separator));
+    // Edge to edge, past the toolbar's side margins.
+    let full = ui.ctx().content_rect().x_range();
+    ui.painter().with_clip_rect(ui.ctx().content_rect()).hline(full, rect.bottom() - 0.5, Stroke::new(1.0, p.separator));
 }
 
-fn pill(ui: &mut Ui, text: &str, fill: Color32, fg: Color32) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::semibold(SECONDARY), fg);
-    let (rect, _) = ui.allocate_exact_size(galley.size() + vec2(16.0, 6.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(9), fill);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+/// A status pill in the toolbar: a coloured dot and text on a tint of it.
+fn pill(ui: &mut Ui, text: &str, dot: Color32, pulse: bool) {
+    let p = theme::pal(ui);
+    let dark = ui.visuals().dark_mode;
+    let fg = if dot == theme::SIGNAL { p.secondary } else if dark { theme::blend(dot, Color32::from_white_alpha(70)) } else { theme::blend(dot, Color32::from_black_alpha(60)) };
+    let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::new(BODY - 1.0, egui::FontFamily::Name("medium".into())), fg);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + vec2(36.0, 10.0), Sense::hover());
+    let fill = if dot == theme::SIGNAL { p.control } else { dot.gamma_multiply(if dark { 0.16 } else { 0.14 }) };
+    ui.painter().rect_filled(rect, CornerRadius::same(255), fill);
+    let mut a = 1.0;
+    if pulse {
+        let t = ui.input(|i| i.time) as f32;
+        a = 0.35 + 0.65 * (0.5 + 0.5 * (t * std::f32::consts::TAU / 1.2).cos());
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    ui.painter().circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 4.0, dot.gamma_multiply(a));
+    ui.painter().galley(egui::pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0), galley, fg);
 }
 
 pub fn main_window(ui: &mut Ui, st: &mut State) {
@@ -79,20 +87,20 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
         .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::symmetric(12, 0)))
         .show(ui, |ui| {
             toolbar(ui, |ui| {
-                ui.label(RichText::new("SimpleRecord").font(theme::semibold(BODY)));
-                ui.add_space(6.0);
+                ui.label(RichText::new("SimpleRecord").font(theme::semibold(BODY + 1.0)));
+                ui.add_space(10.0);
                 if st.finishing {
-                    pill(ui, "SAVING…", p.control, p.secondary);
+                    pill(ui, "Saving…", p.tertiary, false);
                 } else if st.is_paused() {
-                    pill(ui, &format!("PAUSED  {}", st.clock()), Color32::from_rgb(0xff, 0x95, 0x00), Color32::WHITE);
+                    pill(ui, &format!("Paused at {}", st.clock()), theme::PAUSED, false);
                 } else if recording {
-                    pill(ui, &format!("● REC  {}", st.clock()), RED, Color32::WHITE);
+                    pill(ui, &format!("Recording  {}", st.clock()), RED, true);
                 } else if st.preview.is_some() {
-                    pill(ui, "PREVIEW", p.control, p.secondary);
+                    pill(ui, "Ready to record", theme::SIGNAL, false);
                 }
                 if st.stream_statuses.iter().any(|s| s.live) {
                     ui.add_space(4.0);
-                    pill(ui, "LIVE", RED, Color32::WHITE);
+                    pill(ui, "Live", RED, true);
                 }
                 if let Some((text, at)) = &st.notice
                     && at.elapsed().as_secs_f32() < 4.0
@@ -118,8 +126,8 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
             });
         });
     egui::Panel::bottom("controls")
-        .exact_size(68.0)
-        .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::symmetric(16, 10)))
+        .exact_size(84.0)
+        .frame(egui::Frame::NONE.fill(p.sidebar).stroke(Stroke::new(1.0, p.separator)).inner_margin(Margin::symmetric(20, 12)))
         .show(ui, |ui| controls(ui, st));
     // Our own resize handle (below), not egui's: egui keeps the panel at the
     // size of its very first frame, laid out before the window had its size.
@@ -155,8 +163,20 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
             });
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin::same(16)))
-        .show(ui, |ui| if st.onboarding { super::onboarding::show(ui, st) } else { preview(ui, st) });
+        .frame(egui::Frame::NONE.fill(p.window).inner_margin(Margin { left: 20, right: 20, top: 18, bottom: 14 }))
+        .show(ui, |ui| {
+            if st.onboarding {
+                super::onboarding::show(ui, st)
+            } else {
+                // The scene strip sits under the preview, like a video switcher.
+                egui::Panel::bottom("scene-strip")
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::NONE.inner_margin(Margin { left: 0, right: 0, top: 14, bottom: 0 }))
+                    .show(ui, |ui| scene_strip(ui, st));
+                preview(ui, st)
+            }
+        });
     // A permission answered elsewhere (the macOS prompt, System Settings)
     // shows up without waiting for the pointer to move.
     if !st.perms().all_granted() {
@@ -167,6 +187,35 @@ pub fn main_window(ui: &mut Ui, st: &mut State) {
     // does nothing (avoid accidental recordings).
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
         st.cmds.push(Cmd::ShowSettings);
+    }
+}
+
+/// The scenes as a row of miniatures under the preview, like the buttons of
+/// a video switcher.
+fn scene_strip(ui: &mut Ui, st: &mut State) {
+    let p = theme::pal(ui);
+    let idle = st.recording.is_none() && !st.finishing;
+    let mut s = st.settings.clone();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Scenes").font(theme::semibold(BODY)));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let hint = if st.studio { "Click a scene to stage it. The red dot marks what's recording." } else { "Switch scenes any time, also while recording" };
+            ui.label(RichText::new(hint).size(SECONDARY + 1.0).color(p.tertiary));
+        });
+    });
+    ui.add_space(6.0);
+    let changed = egui::ScrollArea::horizontal()
+        .id_salt("scene-strip")
+        .show(ui, |ui| super::scenes::gallery(ui, st, &mut s, idle, true))
+        .inner;
+    if changed && idle {
+        // Vertical picks 9:16; the next scene goes back.
+        s.follow_scene_canvas();
+    }
+    if s != st.settings {
+        st.settings = s;
+        st.apply_scene();
+        let _ = st.settings.save();
     }
 }
 
@@ -354,20 +403,35 @@ fn preview(ui: &mut Ui, st: &mut State) {
         // (black corners), and the frame already has the source's shape.
         let r = CornerRadius::ZERO;
         let live = st.recording.is_some() || st.preview.is_some();
+        // A soft shadow lifts the picture off the window, like a monitor.
+        let shadow = egui::Shadow { offset: [0, 14], blur: 36, spread: 0, color: Color32::from_black_alpha(if ui.visuals().dark_mode { 110 } else { 40 }) };
+        ui.painter().add(shadow.as_shape(rect, CornerRadius::same(2)));
         match &st.preview_tex {
             Some(id) if live => {
                 egui::Image::new((*id, size)).paint_at(ui, rect);
             }
             _ => {
-                ui.painter().rect_filled(rect, CornerRadius::same(10), theme::pal(ui).control);
+                ui.painter().rect_filled(rect, CornerRadius::same(10), p.control);
                 let msg = if st.finishing { "Saving…" } else { "No preview" };
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, msg, egui::FontId::proportional(BODY), Color32::GRAY);
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, msg, egui::FontId::proportional(BODY), p.tertiary);
             }
         }
         if st.recording.is_some() {
-            let border = if st.is_paused() { Color32::from_rgb(0xff, 0x95, 0x00) } else { RED };
-            // Around the picture, not over its edges.
+            // The tally light: a ring and a glow around the picture (not over
+            // its edges), and a REC tag in its corner.
+            let border = if st.is_paused() { theme::PAUSED } else { RED };
+            ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(3), Stroke::new(5.0, border.gamma_multiply(0.18)), egui::StrokeKind::Outside);
             ui.painter().rect_stroke(rect, r, Stroke::new(2.0, border), egui::StrokeKind::Outside);
+            let text = if st.is_paused() { format!("PAUSED {}", st.clock()) } else { format!("REC {}", st.clock()) };
+            let galley = ui.painter().layout_no_wrap(text, theme::semibold(SECONDARY + 1.0), Color32::WHITE);
+            let tag = egui::Rect::from_min_size(rect.min + vec2(12.0, 12.0), galley.size() + vec2(28.0, 8.0));
+            ui.painter().rect_filled(tag, CornerRadius::same(6), border);
+            let t = ui.input(|i| i.time) as f32;
+            let a = if st.is_paused() { 1.0 } else { 0.35 + 0.65 * (0.5 + 0.5 * (t * std::f32::consts::TAU / 1.2).cos()) };
+            ui.painter().circle_filled(egui::pos2(tag.left() + 11.0, tag.center().y), 3.5, Color32::WHITE.gamma_multiply(a));
+            ui.painter().galley(egui::pos2(tag.left() + 20.0, tag.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
+        } else if live {
+            ui.painter().rect_stroke(rect, r, Stroke::new(1.0, p.separator), egui::StrokeKind::Outside);
         }
         let custom = st.settings.scene_id().1.is_some();
         if live && st.studio {
@@ -698,46 +762,77 @@ fn not_allowed(ui: &mut Ui, status: crate::tcc::Status, why: &str, pane: &str, v
 fn controls(ui: &mut Ui, st: &mut State) {
     let p = theme::pal(ui);
     let recording = st.recording.is_some();
+    let paused = st.is_paused();
     ui.horizontal_centered(|ui| {
-        // Record / stop: a round button like a camera's.
+        ui.spacing_mut().item_spacing.x = 10.0;
+        // Record / stop: a big round button like a camera's.
         // Without Screen Recording there is nothing to record.
         let blocked = !recording && st.perms().screen != crate::tcc::Status::Granted;
-        let (rect, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), if blocked { Sense::hover() } else { Sense::click() });
+        let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), if blocked { Sense::hover() } else { Sense::click() });
         let c = rect.center();
         let painter = ui.painter();
-        painter.circle_stroke(c, 21.0, Stroke::new(3.0, if resp.hovered() { p.text } else { p.secondary }));
+        let ring = if recording { if paused { theme::PAUSED } else { RED } } else if resp.hovered() && !blocked { p.secondary } else { theme::blend(p.control, p.pressed) };
+        painter.circle_stroke(c, 26.5, Stroke::new(3.0, ring));
         if st.finishing {
-            painter.circle_filled(c, 15.0, p.tertiary);
+            painter.circle_filled(c, 19.0, p.tertiary);
         } else if recording {
-            painter.rect_filled(egui::Rect::from_center_size(c, vec2(18.0, 18.0)), CornerRadius::same(4), RED);
+            painter.rect_filled(egui::Rect::from_center_size(c, vec2(20.0, 20.0)), CornerRadius::same(5), RED);
         } else {
-            painter.circle_filled(c, 16.0, if blocked { RED.gamma_multiply(0.35) } else { RED });
+            let r = if resp.hovered() && !blocked { 21.0 } else { 20.0 };
+            painter.circle_filled(c, r, if blocked { RED.gamma_multiply(0.35) } else { RED });
         }
         let key = st.settings.hotkey(Action::Record).map(|c| format!(" ({})", c.label())).unwrap_or_default();
         let tip = if blocked { "Allow Screen Recording to record".to_string() } else { format!("{} recording{key}", if recording { "Stop" } else { "Start" }) };
+        if resp.hovered() && !blocked {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if resp.on_hover_text(tip).clicked() && !st.finishing && !blocked {
             st.cmds.push(Cmd::ToggleRecording);
         }
         ui.add_space(6.0);
-        let paused = st.is_paused();
-        if ui
-            .add_enabled(recording, egui::Button::new(if paused { "Resume" } else { "Pause" }).min_size(vec2(72.0, 26.0)))
-            .clicked()
-        {
-            st.cmds.push(Cmd::TogglePause);
-        }
-        ui.add_space(10.0);
-        let clock = if recording { st.clock() } else { "00:00".into() };
-        let color = if paused { p.secondary } else if recording { RED } else { p.tertiary };
-        ui.label(RichText::new(clock).font(egui::FontId::monospace(22.0)).color(color));
-        ui.add_space(16.0);
-        ui.vertical(|ui| {
+
+        // The timecode, and what the button will do.
+        ui.allocate_ui_with_layout(vec2(150.0, 56.0), Layout::top_down(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(4.0);
+            let clock = if recording { st.clock() } else { "00:00".into() };
+            let color = if paused { theme::PAUSED } else if recording { theme::blend(RED, Color32::from_white_alpha(if ui.visuals().dark_mode { 60 } else { 0 })) } else { p.text };
+            ui.label(RichText::new(clock).font(theme::timecode(26.0)).color(color));
+            let hint = if st.finishing {
+                "Saving…".to_string()
+            } else if blocked {
+                "Screen Recording is off".to_string()
+            } else if paused {
+                "Paused".to_string()
+            } else if recording {
+                match st.settings.hotkey(Action::Record) {
+                    Some(c) => format!("{} to stop", c.label()),
+                    None => "Recording".to_string(),
+                }
+            } else {
+                match st.settings.hotkey(Action::Record) {
+                    Some(c) => format!("Ready. {} to record", c.label()),
+                    None => "Ready".to_string(),
+                }
+            };
+            ui.add(egui::Label::new(RichText::new(hint).size(SECONDARY + 1.0).color(p.tertiary)).truncate());
+        });
+
+        let (sep, _) = ui.allocate_exact_size(vec2(1.0, 40.0), Sense::hover());
+        ui.painter().vline(sep.center().x, sep.y_range(), Stroke::new(1.0, p.separator));
+        ui.add_space(6.0);
+
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.add_space(12.0);
             meter(ui, "System", st.meters[0], st.settings.system_audio);
             meter(ui, "Mic", st.meters[1], st.settings.mic_enabled);
         });
+
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Open Folder").clicked() {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.spacing_mut().button_padding = vec2(14.0, 8.0);
+            if icon_button(ui, Icon::Output).on_hover_text("Open the recordings folder").clicked() {
                 st.cmds.push(Cmd::OpenFolder);
             }
             if st.last_file.is_some() && ui.button("Reveal Last").clicked() {
@@ -747,8 +842,22 @@ fn controls(ui: &mut Ui, st: &mut State) {
                 gif_button(ui, st);
                 zoom_button(ui, st);
             }
+            let label = if paused { "Resume" } else { "Pause" };
+            if ui.add_enabled(recording, egui::Button::new(RichText::new(label).font(egui::FontId::new(BODY, egui::FontFamily::Name("medium".into()))))).clicked() {
+                st.cmds.push(Cmd::TogglePause);
+            }
         });
     });
+}
+
+/// A square button with one of the sidebar's line icons.
+fn icon_button(ui: &mut Ui, icon: Icon) -> egui::Response {
+    let p = theme::pal(ui);
+    let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+    let fill = if resp.is_pointer_button_down_on() { theme::blend(p.control, p.pressed) } else if resp.hovered() { theme::blend(p.control, p.hover) } else { p.control };
+    ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
+    w::paint_icon(ui, egui::Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, p.secondary);
+    resp
 }
 
 /// "Export GIF…": the last recording, or part of it, to a looping GIF next
@@ -914,40 +1023,38 @@ fn level(ui: &mut Ui, db: &mut f32, range: std::ops::RangeInclusive<f32>, enable
     });
 }
 
-/// Horizontal peak meter, -60..0 dBFS, green/yellow/red with a peak tick.
+/// Horizontal peak meter, -60..0 dBFS, in segments like a hardware one:
+/// teal, amber above -18 dB, red above -6 dB, with a peak tick.
 fn meter(ui: &mut Ui, label: &str, m: Meter, on: bool) {
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(44.0, 14.0), egui::Label::new(RichText::new(label).size(SECONDARY).color(p.secondary)));
-        let (rect, _) = ui.allocate_exact_size(vec2(220.0, 8.0), Sense::hover());
+        ui.add_sized(vec2(48.0, 12.0), egui::Label::new(RichText::new(label).size(SECONDARY + 1.0).color(p.secondary)));
+        let (rect, _) = ui.allocate_exact_size(vec2(260.0, 8.0), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(3), p.control);
+        let frac = |db: f32| ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+        let level = if on { frac(m.db) } else { 0.0 };
+        const SEG: f32 = 5.0;
+        const GAP: f32 = 2.0;
+        let n = ((rect.width() + GAP) / (SEG + GAP)).floor() as usize;
+        let off = theme::blend(p.control, Color32::from_black_alpha(10));
+        for i in 0..n {
+            let f0 = i as f32 / n as f32;
+            let x = rect.left() + i as f32 * (SEG + GAP);
+            let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), vec2(SEG, rect.height()));
+            let col = if f0 >= frac(-6.0) { RED } else if f0 >= frac(-18.0) { theme::AMBER } else { theme::SIGNAL };
+            painter.rect_filled(r, CornerRadius::same(1), if f0 < level { col } else { off });
+        }
         if !on {
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, "off", egui::FontId::proportional(9.0), p.tertiary);
+            ui.label(RichText::new("off").size(SECONDARY).color(p.tertiary));
             return;
         }
-        let frac = |db: f32| ((db + 60.0) / 60.0).clamp(0.0, 1.0);
-        let x = |f: f32| rect.left() + rect.width() * f;
-        let level = frac(m.db);
-        for (lo, hi, col) in [
-            (0.0, frac(-18.0), Color32::from_rgb(0x34, 0xc7, 0x59)),
-            (frac(-18.0), frac(-6.0), Color32::from_rgb(0xff, 0xcc, 0x00)),
-            (frac(-6.0), 1.0, RED),
-        ] {
-            let hi = hi.min(level);
-            if hi > lo {
-                let r = egui::Rect::from_x_y_ranges(x(lo)..=x(hi), rect.y_range());
-                painter.rect_filled(r, CornerRadius::same(2), col);
-            }
-        }
         if m.peak_db > -60.0 {
-            let px = x(frac(m.peak_db));
-            painter.vline(px, rect.y_range(), Stroke::new(2.0, p.text));
+            let px = rect.left() + rect.width() * frac(m.peak_db);
+            painter.vline(px, rect.expand(1.0).y_range(), Stroke::new(2.0, p.text));
         }
-        ui.label(
-            RichText::new(if m.db <= -89.0 { "-∞".to_string() } else { format!("{:.0}", m.db) })
-                .size(SECONDARY)
-                .color(p.secondary),
+        ui.add_sized(
+            vec2(24.0, 12.0),
+            egui::Label::new(RichText::new(if m.db <= -89.0 { "-∞".to_string() } else { format!("{:.0}", m.db) }).size(SECONDARY).color(p.tertiary)),
         );
     });
 }
@@ -1008,11 +1115,9 @@ fn sources(ui: &mut Ui, st: &mut State) {
     if tab == SidebarTab::Layout {
         w::header(ui, Icon::Scene, "Scene");
         w::card(ui, |ui| {
-            if super::scenes::gallery(ui, st, &mut s, idle) && idle {
-                // Vertical picks 9:16; the next scene goes back.
-                s.follow_scene_canvas();
-            }
+            // The scenes themselves are in the strip under the preview.
             if s.scene_id().1.is_none() && !st.studio {
+                ui.label(RichText::new(s.scene.label()).font(theme::semibold(BODY)));
                 w::hint(ui, s.scene.description());
             }
             w::divider(ui);
@@ -1079,7 +1184,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
                 let staged = st.staged.unwrap_or(s.scene_id());
                 let differs = staged != s.scene_id();
                 ui.horizontal(|ui| {
-                    let b = egui::Button::new(RichText::new("Transition ▸").font(theme::semibold(BODY)).color(Color32::WHITE)).fill(if differs { theme::accent() } else { p.control }).corner_radius(7).min_size(vec2(0.0, 28.0));
+                    let b = egui::Button::new(RichText::new("Transition ▸").font(theme::semibold(BODY)).color(if differs { theme::ON_ACCENT } else { p.secondary })).fill(if differs { theme::accent() } else { p.control }).corner_radius(7).min_size(vec2(0.0, 28.0));
                     if ui.add_enabled(differs, b).on_hover_text("Make the staged scene the program, with the transition").clicked() {
                         s.show(staged);
                     }
@@ -1397,7 +1502,7 @@ fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         let (fill, fg) = if live {
             (RED, Color32::WHITE)
         } else if ready {
-            (theme::accent(), Color32::WHITE)
+            (theme::accent(), theme::ON_ACCENT)
         } else {
             (p.control, p.secondary)
         };
@@ -1540,7 +1645,7 @@ pub fn settings_window(ui: &mut Ui, st: &mut State) {
                     // The device is locked while recording; the overlay is
                     // applied live, so it stays editable.
                     ui.add_enabled_ui(idle, |ui| settings_form(ui, st, tab));
-                    section(ui, "CAMERA OVERLAY");
+                    section(ui, "Camera overlay");
                     let mut s = st.settings.clone();
                     overlay_controls(ui, &mut s);
                     if s != st.settings {
@@ -1624,7 +1729,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
 
     match tab {
         SettingsTab::General => {
-            section(ui, "OUTPUT");
+            section(ui, "Output");
             grid(ui, "out", &mut |ui| {
                 ui.label("Folder");
                 ui.horizontal(|ui| {
@@ -1642,7 +1747,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 ui.end_row();
             });
 
-            section(ui, "SCENES");
+            section(ui, "Scenes");
             grid(ui, "scenes", &mut |ui| {
                 ui.label("Frame shape").on_hover_text("The shape of the video. Scenes are laid out inside it.");
                 let opts: Vec<(Canvas, String)> = Canvas::ALL
@@ -1671,7 +1776,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 ui.end_row();
             });
 
-            section(ui, "HELP");
+            section(ui, "Help");
             ui.horizontal(|ui| {
                 if ui.button("Report a Problem…").on_hover_text("Saves the logs and details of this Mac (no stream keys or passwords) to a folder on the Desktop").clicked() {
                     st.cmds.push(Cmd::ReportProblem);
@@ -1682,7 +1787,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
             });
             note(ui, &tilde(&crate::logging::log_path()));
 
-            section(ui, "RESET");
+            section(ui, "Reset");
             note(ui, "Puts every setting back to how SimpleRecord came, except the output folder. Custom scenes and shortcuts are reset too.");
             ui.add_space(4.0);
             if w::confirm_button(ui, "restore-defaults", "Restore Defaults…", "Reset all settings?", "Restore Defaults", true) {
@@ -1691,7 +1796,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
         }
 
         SettingsTab::Video => {
-            section(ui, "VIDEO");
+            section(ui, "Video");
             grid(ui, "video", &mut |ui| {
                 ui.label("Resolution");
                 let opts: Vec<(String, String)> = RESOLUTIONS.iter().map(|(l, v)| (v.to_string(), l.to_string())).collect();
@@ -1776,7 +1881,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
         }
 
         SettingsTab::Audio => {
-            section(ui, "AUDIO");
+            section(ui, "Audio");
             grid(ui, "audio", &mut |ui| {
                 ui.label("System audio");
                 ui.add(w::Check::new(&mut s.system_audio, "Record"));
@@ -1806,7 +1911,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
                 ui.end_row();
             });
 
-            section(ui, "MIC FILTERS");
+            section(ui, "Mic filters");
             let f = &mut s.mic_filters;
             grid(ui, "mic-filters", &mut |ui| {
                 ui.label("Low cut").on_hover_text("Removes rumble and desk knocks");
@@ -1861,7 +1966,7 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
         }
 
         SettingsTab::Streaming => {
-            section(ui, "LIVE ENCODE");
+            section(ui, "Live encode");
             note(ui, "The encode the replay buffer and streams share. Recordings use the Video settings.");
             ui.add_space(4.0);
             let streaming = st.streaming();
@@ -1922,14 +2027,14 @@ fn settings_form(ui: &mut Ui, st: &mut State, tab: SettingsTab) {
         }
 
         SettingsTab::Shortcuts => {
-            section(ui, "SHORTCUTS");
+            section(ui, "Shortcuts");
             note(ui, "They work in any app. Click one, then press the keys: Esc cancels, Delete removes it.");
             ui.add_space(4.0);
             shortcuts(ui, st, &mut s);
         }
 
         SettingsTab::Camera => {
-            section(ui, "CAMERA");
+            section(ui, "Camera");
             grid(ui, "cam", &mut |ui| {
                 ui.label("Camera");
                 let mut cams: Vec<(Option<String>, String)> = vec![(None, "Default camera".into())];

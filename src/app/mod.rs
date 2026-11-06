@@ -1673,7 +1673,6 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ThemeChanged(_) => {
-                theme::set_accent(theme::system_accent());
                 theme::apply(&win.ctx);
                 win.window.request_redraw();
             }

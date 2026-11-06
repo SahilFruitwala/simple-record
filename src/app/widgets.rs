@@ -2,16 +2,12 @@
 //! with an icon, soft rounded cards, label/control rows, switches and a
 //! segmented control. Spacing follows an 8 pt grid.
 
-use egui::text::{LayoutJob, TextFormat};
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, pos2, vec2};
 
-use super::theme::{self, Palette, SECONDARY};
+use super::theme::{self, SECONDARY};
 
 /// Height of one row inside a card.
 pub const ROW_H: f32 = 28.0;
-/// Card corner radius and inner padding.
-const CARD_R: u8 = 10;
-const CARD_PAD: i8 = 12;
 
 #[derive(Clone, Copy)]
 pub enum Icon {
@@ -25,44 +21,22 @@ pub enum Icon {
     Stream,
 }
 
-/// Card fill and hairline border for the sidebar.
-fn card_colors(p: &Palette, dark: bool) -> (Color32, Color32) {
-    if dark {
-        (theme::blend(p.sidebar, Color32::from_white_alpha(10)), Color32::from_white_alpha(14))
-    } else {
-        (Color32::WHITE, Color32::from_black_alpha(16))
-    }
-}
 
-/// Section header: a small icon and an uppercase, letter-spaced label.
-pub fn header(ui: &mut Ui, icon: Icon, title: &str) {
+
+/// Section header: a short sentence-case label in the secondary colour.
+/// (The icon is kept in the signature for the call sites' readability.)
+pub fn header(ui: &mut Ui, _icon: Icon, title: &str) {
     let p = theme::pal(ui);
-    ui.add_space(16.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        ui.add_space(2.0);
-        let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-        paint_icon(ui, rect, icon, p.secondary);
-        let mut job = LayoutJob::default();
-        job.append(
-            &title.to_uppercase(),
-            0.0,
-            TextFormat { font_id: theme::semibold(10.5), color: p.secondary, extra_letter_spacing: 0.6, ..Default::default() },
-        );
-        ui.label(job);
-    });
-    ui.add_space(8.0);
+    ui.add_space(18.0);
+    ui.label(egui::RichText::new(title).font(theme::semibold(SECONDARY + 1.0)).color(p.secondary));
+    ui.add_space(4.0);
 }
 
-/// A rounded card holding grouped controls.
+/// A group of controls under a [`header`]: no box around it, the header and
+/// the spacing do the grouping.
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let p = theme::pal(ui);
-    let (fill, border) = card_colors(&p, ui.visuals().dark_mode);
     egui::Frame::new()
-        .fill(fill)
-        .stroke(Stroke::new(1.0, border))
-        .corner_radius(CornerRadius::same(CARD_R))
-        .inner_margin(Margin::symmetric(CARD_PAD, 8))
+        .inner_margin(Margin::symmetric(0, 2))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -120,7 +94,7 @@ pub fn hint(ui: &mut Ui, text: &str) {
 
 /// An iOS/macOS style switch.
 pub fn switch(ui: &mut Ui, on: &mut bool, enabled: bool) -> Response {
-    let size = vec2(30.0, 18.0);
+    let size = vec2(34.0, 20.0);
     let (rect, mut resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
     if enabled && resp.clicked() {
         *on = !*on;
@@ -128,11 +102,11 @@ pub fn switch(ui: &mut Ui, on: &mut bool, enabled: bool) -> Response {
     }
     let p = theme::pal(ui);
     let t = ui.ctx().animate_bool_responsive(resp.id, *on);
-    let off = if ui.visuals().dark_mode { Color32::from_white_alpha(38) } else { Color32::from_black_alpha(30) };
+    let off = if ui.visuals().dark_mode { Color32::from_rgb(0x3a, 0x41, 0x50) } else { Color32::from_rgb(0xc9, 0xce, 0xd8) };
     let track = lerp_color(off, theme::accent(), t);
     let track = if enabled { track } else { track.gamma_multiply(0.45) };
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(9), track);
+    painter.rect_filled(rect, CornerRadius::same(10), track);
     let r = rect.height() / 2.0 - 2.0;
     let cx = egui::lerp(rect.left() + r + 2.0..=rect.right() - r - 2.0, t);
     let c = pos2(cx, rect.center().y);
@@ -175,7 +149,7 @@ impl egui::Widget for Check<'_> {
         let painter = ui.painter();
         if *self.on {
             painter.rect_filled(b, CornerRadius::same(4), theme::accent());
-            let s = Stroke::new(1.8, Color32::WHITE);
+            let s = Stroke::new(1.8, theme::ON_ACCENT);
             painter.line(vec![b.left_top() + vec2(3.5, 7.2), b.left_top() + vec2(6.0, 9.8), b.left_top() + vec2(10.6, 4.4)], s);
         } else {
             let fill = if resp.hovered() && enabled { theme::blend(p.field, p.hover) } else { p.field };
@@ -207,7 +181,7 @@ pub fn confirm_button(ui: &mut Ui, id: &str, label: &str, question: &str, confir
             if ui.button("Cancel").clicked() {
                 ui.data_mut(|d| d.remove::<bool>(id));
             }
-            let b = egui::Button::new(egui::RichText::new(confirm).color(Color32::WHITE)).fill(Color32::from_rgb(0xff, 0x3b, 0x30));
+            let b = egui::Button::new(egui::RichText::new(confirm).color(Color32::WHITE)).fill(theme::TALLY);
             if ui.add(b).clicked() {
                 ui.data_mut(|d| d.remove::<bool>(id));
                 done = true;
@@ -226,7 +200,7 @@ pub fn ask_confirm(ctx: &egui::Context, id: &str) {
 
 /// The window's one prominent action: accent fill, white semibold text.
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
-    let b = egui::Button::new(egui::RichText::new(label).font(theme::semibold(theme::BODY)).color(Color32::WHITE)).fill(theme::accent()).corner_radius(7).min_size(vec2(0.0, 30.0));
+    let b = egui::Button::new(egui::RichText::new(label).font(theme::semibold(theme::BODY)).color(theme::ON_ACCENT)).fill(theme::accent()).corner_radius(7).min_size(vec2(0.0, 30.0));
     ui.add(b)
 }
 
@@ -238,7 +212,7 @@ pub fn popover_actions(ui: &mut Ui, action: &str, enabled: bool) -> bool {
     ui.add_space(6.0);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 30.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        let b = egui::Button::new(egui::RichText::new(action).font(theme::semibold(theme::BODY)).color(Color32::WHITE))
+        let b = egui::Button::new(egui::RichText::new(action).font(theme::semibold(theme::BODY)).color(theme::ON_ACCENT))
             .fill(theme::accent())
             .corner_radius(7)
             .min_size(vec2(88.0, 28.0));
@@ -271,10 +245,10 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T,
     let dark = ui.visuals().dark_mode;
     // The track's own (auto) id keys the segments: two controls in one Ui
     // must not share ids, or a click lands in both.
-    let (track_rect, track_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
-    let track = if dark { Color32::from_black_alpha(70) } else { Color32::from_black_alpha(14) };
-    ui.painter().rect_filled(track_rect, CornerRadius::same(8), track);
-    let inner = track_rect.shrink(2.0);
+    let (track_rect, track_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let track = if dark { Color32::from_rgb(0x1b, 0x1e, 0x25) } else { Color32::from_rgb(0xe8, 0xeb, 0xf0) };
+    ui.painter().rect_filled(track_rect, CornerRadius::same(9), track);
+    let inner = track_rect.shrink(3.0);
     let w = inner.width() / options.len() as f32;
     let mut changed = false;
     for (i, (v, label, ok, why)) in options.iter().enumerate() {
@@ -282,14 +256,16 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T,
         let resp = ui.interact(r, track_resp.id.with(("seg", i)), if *ok { Sense::click() } else { Sense::hover() });
         let sel = *value == *v;
         if sel {
-            let raised = if dark { Color32::from_rgb(0x5a, 0x5a, 0x5e) } else { Color32::WHITE };
-            ui.painter().rect_filled(r.translate(vec2(0.0, 0.5)), CornerRadius::same(6), Color32::from_black_alpha(if dark { 60 } else { 22 }));
-            ui.painter().rect_filled(r, CornerRadius::same(6), raised);
+            let raised = if dark { Color32::from_rgb(0x2c, 0x31, 0x3c) } else { Color32::WHITE };
+            if !dark {
+                ui.painter().rect_filled(r.translate(vec2(0.0, 0.5)), CornerRadius::same(7), Color32::from_black_alpha(18));
+            }
+            ui.painter().rect_filled(r, CornerRadius::same(7), raised);
         } else if resp.hovered() && *ok {
-            ui.painter().rect_filled(r, CornerRadius::same(6), p.hover);
+            ui.painter().rect_filled(r, CornerRadius::same(7), p.hover);
         }
-        let color = if !ok { p.tertiary } else if sel { p.text } else { p.secondary };
-        let font = if sel { theme::semibold(SECONDARY + 1.0) } else { egui::FontId::new(SECONDARY + 1.0, egui::FontFamily::Name("medium".into())) };
+        let color = if !ok { p.tertiary.gamma_multiply(0.7) } else if sel { p.text } else { p.tertiary };
+        let font = egui::FontId::new(SECONDARY + 1.5, egui::FontFamily::Name("medium".into()));
         let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
         ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
         let resp = if *ok { resp } else { resp.on_hover_text(*why) };
