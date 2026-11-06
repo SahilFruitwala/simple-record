@@ -1494,9 +1494,9 @@ impl App {
             self.st.preview_aspect = f.size[0] as f32 / f.size[1] as f32;
             self.st.preview_px = f.size;
             let view = f.texture.create_view(&Default::default());
-            // Drawn pixel-aligned at its own size: nearest is exact, and
-            // avoids a blur when the area is mid-resize.
-            let filter = wgpu::FilterMode::Nearest;
+            // Linear: exact when drawn pixel-aligned at its own size, and
+            // smooth when a frame smaller than the area is scaled up to fill it.
+            let filter = wgpu::FilterMode::Linear;
             match self.st.preview_tex {
                 Some(id) => w.renderer.update_egui_texture_from_wgpu_texture(&gpu.device, &view, filter, id),
                 None => self.st.preview_tex = Some(w.renderer.register_native_texture(&gpu.device, &view, filter)),
@@ -1590,6 +1590,9 @@ impl App {
         if (kind != Kind::Controls && ui::take_drag_request()) || drag_controls {
             let _ = win.window.drag_window();
         }
+        if kind != Kind::Controls && ui::take_title_double_click() {
+            macos::title_bar_double_click(&win.window);
+        }
     }
 }
 
@@ -1673,7 +1676,6 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ThemeChanged(_) => {
-                theme::set_accent(theme::system_accent());
                 theme::apply(&win.ctx);
                 win.window.request_redraw();
             }

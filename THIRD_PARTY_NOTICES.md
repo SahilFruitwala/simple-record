@@ -44,3 +44,14 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+
+## Fonts, SIL Open Font License 1.1
+
+The app embeds these fonts. Their licenses are next to them in `assets/fonts/`.
+
+- Instrument Sans (Regular, Medium, SemiBold), the interface font. Copyright 2022
+  The Instrument Sans Project Authors. `assets/fonts/OFL-InstrumentSans.txt`.
+- JetBrains Mono (Medium), the recording timecode. Copyright 2020 The JetBrains
+  Mono Project Authors. `assets/fonts/OFL-JetBrainsMono.txt`.
+- Inter (Regular, Medium, SemiBold), a fallback for symbols the others lack.
+  `assets/fonts/OFL.txt`.

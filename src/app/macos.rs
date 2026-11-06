@@ -16,6 +16,23 @@ fn ns_window(window: &Window) -> Option<objc2::rc::Retained<NSWindow>> {
     view.window()
 }
 
+/// What a double-click on the title bar does, as set in System Settings ›
+/// Desktop & Dock ("Double-click a window's title bar to"): minimize, nothing,
+/// or (the default, and for both Fill and Zoom) zoom to fill the screen.
+pub fn title_bar_double_click(window: &Window) {
+    let Some(w) = ns_window(window) else { return };
+    let action = objc2_foundation::NSUserDefaults::standardUserDefaults()
+        .stringForKey(&crate::util::ns("AppleActionOnDoubleClick"))
+        .map(|s| s.to_string());
+    match action.as_deref() {
+        Some("Minimize") => w.performMiniaturize(None),
+        Some("None") => {}
+        // A window that can't be resized (Settings) has nothing to zoom to.
+        _ if w.styleMask().contains(objc2_app_kit::NSWindowStyleMask::Resizable) => w.performZoom(None),
+        _ => {}
+    }
+}
+
 /// Whether none of the window can be seen (covered, minimized, on another
 /// Space, or the screen locked): drawing it would be wasted.
 pub fn is_occluded(window: &Window) -> bool {
