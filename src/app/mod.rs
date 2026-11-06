@@ -499,6 +499,7 @@ struct App {
     preview_textures: std::collections::VecDeque<wgpu::Texture>,
     last_tick: Instant,
     last_meter: Instant,
+    last_disk: Instant,
     start_recording: bool,
     launched: Instant,
     menu_shown: bool,
@@ -624,6 +625,7 @@ impl App {
             preview_textures: Default::default(),
             last_tick: Instant::now(),
             last_meter: Instant::now(),
+            last_disk: Instant::now(),
             start_recording,
             launched: Instant::now(),
             menu_shown: false,
@@ -1155,9 +1157,16 @@ impl App {
         let r = std::fs::create_dir_all(&self.st.settings.output_dir)
             .map_err(anyhow::Error::from)
             .and_then(|_| self.options(Some(&file)))
-            .and_then(|(o, t)| Session::start_with_camera(&o, t, true, Some(cb), cam));
+            // Refuses to start on an almost full volume; warns when low.
+            .and_then(|(o, t)| zerorec::disk::preflight(&o.output, o.codec).map(|w| (o, t, w)))
+            .and_then(|(o, t, w)| Session::start_with_camera(&o, t, true, Some(cb), cam).map(|s| (s, w)));
         match r {
-            Ok(sess) => {
+            Ok((sess, low_disk)) => {
+                if let Some(w) = low_disk {
+                    eprintln!("rec: warning: {w}");
+                    self.st.notice = Some((format!("Low disk space: {}", w.split(": ").nth(1).unwrap_or(&w)), Instant::now()));
+                }
+                self.last_disk = Instant::now();
                 let _ = std::fs::write(record::pidfile_path(), format!("{}\n{}\n", std::process::id(), file.display()));
                 self.st.pip_applied = Some(self.st.settings.pip_spec());
                 self.st.scene_started();
@@ -1324,6 +1333,20 @@ impl App {
         }
         if SIG_STOP.swap(false, Ordering::SeqCst) && self.st.recording.is_some() {
             self.stop_recording();
+        }
+        // Stop (and finalize the file) before the volume fills up.
+        if self.last_disk.elapsed() >= Duration::from_secs(1)
+            && let Some(out) = self.st.recording.as_ref().and_then(|s| s.output.clone())
+        {
+            self.last_disk = Instant::now();
+            if let Some(free) = zerorec::disk::free_bytes(&out)
+                && free < zerorec::disk::STOP_BELOW
+            {
+                let free = zerorec::disk::human(free);
+                eprintln!("rec: disk almost full ({free} free); stopping to save the recording");
+                self.stop_recording();
+                self.st.error = Some(format!("Recording stopped: the disk is almost full ({free} free). The recording was saved."));
+            }
         }
         if self.st.recording.as_ref().is_some_and(|s| s.has_frames()) {
             if record::PAUSE_REQ.swap(false, Ordering::SeqCst) {

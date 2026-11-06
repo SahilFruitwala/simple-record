@@ -107,15 +107,13 @@ scripts/synccheck.py FILE        # A/V offset of a flash + beep recording
 
 Test recordings go to `~/Movies/simple-record-tests/`.
 
-The platform-independent parts (scene layouts, shapes, mic filters, shortcuts, MPEG-TS, SRT)
-also build and test on any OS, Linux included, from `portable/`; the SRT output is checked end
-to end against FFmpeg's libsrt by a script. CI (`.github/workflows/ci.yml`) runs both on
-Linux, and builds, lints and tests the app on macOS:
-
-```sh
-cargo test --manifest-path portable/Cargo.toml
-scripts/srt-e2e.sh               # needs ffmpeg with SRT (ffmpeg -protocols | grep srt)
-```
+The recording engine (capture, compositing, encoding, audio, streaming) lives in the
+[zerorec](https://github.com/SahilFruitwala/zerorec) crate, a private repo that Cargo fetches
+from GitHub at the commit pinned in `Cargo.toml` (with your git credentials; CI uses the
+`ZEROREC_TOKEN` secret). To change both at once, point the dependency at a local checkout
+(`path = "../zerorec"`) for a while. Its platform-independent parts and the SRT end-to-end check are tested there
+(`portable/`, `scripts/srt-e2e.sh`). CI (`.github/workflows/ci.yml`) builds, lints and tests
+the app on macOS.
 
 ## Permissions (one time)
 
@@ -549,21 +547,6 @@ simple-record record --stream 'srt://ingest.example.com:9000?streamid=live/me&pa
 |---|---|
 | `src/main.rs` | CLI |
 | `src/app/` | App: windows and UI (`ui.rs`), scene gallery and layer editor (`scenes.rs`), menu bar item and app menu, Dock quit/reopen hooks, preview scaler, theme, macOS chrome |
-| `src/settings.rs` | Persisted settings → record arguments |
-| `src/hotkey.rs` | Global shortcuts (Carbon `RegisterEventHotKey`; needs no Accessibility permission) and their key names |
-| `src/record.rs` | Sessions, pacing thread, signals, `stop`/`pause`/`resume` |
-| `src/writer.rs` | AVAssetWriter sink, constant-frame-rate grid, pause timeline, track layout |
-| `src/screen.rs` | ScreenCaptureKit capture, displays and windows |
-| `src/camera.rs` | Webcam and AVCapture mic, device lists |
-| `src/layout.rs` | Scene templates, custom layouts, frame shapes and transitions (plain geometry) |
-| `src/compose.rs` | CoreImage compositor: layers, outlines, gradients, images, text, transitions |
-| `src/filters.rs` | Mic filters: low cut, RNNoise noise suppression, gate, compressor |
-| `src/mixer.rs` | Real-time audio mixer |
-| `src/live/` | Shared live encode (VideoToolbox H.264, AAC/Opus), replay buffer, RTMP/RTMPS, SRT (with its MPEG-TS muxer) and WHIP outputs, Keychain |
-| `src/tcc.rs` | Permissions and responsibility disclaim |
-| `src/probe.rs` | AVFoundation verification |
-| `src/synth.rs` | Test pattern with flash + beep |
-| `src/scale.rs` | Native-resolution screen scaling (Metal Performance Shaders Lanczos, VideoToolbox fallback) |
-| `portable/` | The platform-independent modules, built from `src/` for tests on any OS, and the SRT end-to-end tools |
-| `scripts/` | Build, self-test, SRT end to end (`srt-e2e.sh`), soak, sync checks (`synccheck.py` with ffmpeg, `avsync.swift` with AVFoundation) and quality metrics (`quality.sh`, `encquality.sh`, `testcard.swift`) |
+| zerorec (dependency) | The engine crate: settings, hotkeys, sessions and pacing, AVAssetWriter sink, ScreenCaptureKit, camera and mic, layouts and compositor, mic filters and mixer, live outputs, permissions, scaling, disk space checks, `doctor` |
+| `scripts/` | Build, self-test, soak, sync checks (`synccheck.py` with ffmpeg, `avsync.swift` with AVFoundation) and quality metrics (`quality.sh`, `encquality.sh`, `testcard.swift`) |
 | `analysis/OBS_ARCHITECTURE.md` | OBS study |

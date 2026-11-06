@@ -3278,6 +3278,7 @@ dependencies = [
  "ureq",
  "wgpu",
  "winit",
+ "zerorec",
 ]
 
 [[package]]
@@ -4832,6 +4833,50 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+
+[[package]]
+name = "zerorec"
+version = "0.1.0"
+source = "git+https://github.com/SahilFruitwala/zerorec?rev=83c77ada944f30082df3155db9423c22c49705f3#83c77ada944f30082df3155db9423c22c49705f3"
+dependencies = [
+ "aes",
+ "aes-kw",
+ "anyhow",
+ "block2 0.6.2",
+ "clap",
+ "ctr",
+ "dispatch2",
+ "getrandom 0.3.4",
+ "libc",
+ "native-tls",
+ "nnnoiseless",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-audio-toolbox",
+ "objc2-av-foundation",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image 0.3.2",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "objc2-image-io",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
+ "objc2-metal-performance-shaders",
+ "objc2-quartz-core 0.3.2",
+ "objc2-screen-capture-kit",
+ "objc2-video-toolbox",
+ "objc2-web-kit",
+ "pbkdf2",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha1",
+ "str0m",
+ "ureq",
+]
 
 [[package]]
 name = "zerotrie"

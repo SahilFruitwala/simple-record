@@ -1,0 +1,4 @@
+# zerorec is a private GitHub repo: fetch it with the git command line, so
+# git's own credentials (the macOS Keychain, `gh auth`, or CI's token) are used.
+[net]
+git-fetch-with-cli = true
