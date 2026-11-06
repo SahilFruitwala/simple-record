@@ -386,10 +386,11 @@ fn preview(ui: &mut Ui, st: &mut State) {
     if size.y > avail.y {
         size = vec2(avail.y * aspect, avail.y);
     }
-    // Show the frame at its own pixel size when it fits (1:1, no second
-    // scaling), e.g. always on Retina, except in low-power mode.
+    // Fill the area. When the frame is (all but) that size already, use its
+    // exact pixel size so texels land on pixels (no second scaling). A frame
+    // smaller than the area (a 1080p recording in a big window) is scaled up.
     let px = vec2(st.preview_px[0] as f32, st.preview_px[1] as f32) / ppp;
-    if px.x > 0.0 && px.x <= avail.x + 0.5 && px.y <= avail.y + 0.5 && !st.settings.preview_low_power {
+    if px.x > 0.0 && (px.x - size.x).abs() <= 1.0 && (px.y - size.y).abs() <= 1.0 && !st.settings.preview_low_power {
         size = px;
     }
     ui.vertical_centered(|ui| {
