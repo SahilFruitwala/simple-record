@@ -1590,6 +1590,9 @@ impl App {
         if (kind != Kind::Controls && ui::take_drag_request()) || drag_controls {
             let _ = win.window.drag_window();
         }
+        if kind != Kind::Controls && ui::take_title_double_click() {
+            macos::title_bar_double_click(&win.window);
+        }
     }
 }
 

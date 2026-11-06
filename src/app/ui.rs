@@ -23,9 +23,17 @@ const SIDEBAR_MAX: f32 = 460.0;
 
 static DRAG: AtomicBool = AtomicBool::new(false);
 
+static TITLE_DOUBLE_CLICK: AtomicBool = AtomicBool::new(false);
+
 /// Whether the toolbar asked to drag the window this frame.
 pub fn take_drag_request() -> bool {
     DRAG.swap(false, Ordering::Relaxed)
+}
+
+/// Whether the toolbar was double-clicked this frame (zoom or minimize, as
+/// the system's title bar setting says).
+pub fn take_title_double_click() -> bool {
+    TITLE_DOUBLE_CLICK.swap(false, Ordering::Relaxed)
 }
 
 /// A path with the home folder shown as `~`.
@@ -49,6 +57,10 @@ fn toolbar(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let bg = ui.interact(rect, ui.id().with("drag"), Sense::click_and_drag());
     if bg.drag_started() {
         DRAG.store(true, Ordering::Relaxed);
+    }
+    // The titlebar is transparent, so the toolbar stands in for it here too.
+    if bg.double_clicked() {
+        TITLE_DOUBLE_CLICK.store(true, Ordering::Relaxed);
     }
     ui.horizontal_centered(|ui| {
         ui.add_space(TRAFFIC_LIGHTS_W);
