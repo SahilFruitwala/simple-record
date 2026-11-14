@@ -1897,12 +1897,12 @@ impl SelfTest {
                     self.step = 3;
                 }
                 3 if t > 8.5 && app.st.recording.is_some() => {
-                    app.st.announce.secs = None;
+                    app.st.announce = crate::announce::Announcement { style: crate::announce::AnnounceStyle::CenterStage, kind: crate::announce::AnnounceKind::Countdown, title: "Starting in".into(), secs: Some(8.0), ..Default::default() };
                     app.st.show_announcement();
                     self.step = 4;
                 }
                 4 if t > 10.5 => {
-                    say(app, "until hidden (recording)");
+                    say(app, "full-screen countdown (recording)");
                     app.st.hide_announcement();
                     self.step = 5;
                 }

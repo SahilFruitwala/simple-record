@@ -1423,7 +1423,7 @@ pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", 
 /// Announcements: a banner above whichever scene is live, for a few seconds
 /// or until hidden.
 fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
-    use crate::announce::AnnounceStyle;
+    use crate::announce::{AnnounceKind, AnnounceStyle};
     const LABEL_W: f32 = 72.0;
     let (can, up) = (st.can_announce(), st.announcing());
     let idle = st.recording.is_none() && !st.finishing;
@@ -1431,12 +1431,37 @@ fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     w::header(ui, Icon::Overlay, "Announce");
     w::card(ui, |ui| {
         let a = &mut st.announce;
-        w::field(ui, "Title", LABEL_W, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut a.title).hint_text("New video is out now").margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY));
+        w::field(ui, "Shows", LABEL_W, |ui| {
+            let opts = AnnounceKind::ALL.map(|v| (v, v.label(), true, ""));
+            if w::segmented(ui, &mut a.kind, &opts) && a.kind == AnnounceKind::Countdown {
+                // Counts down the time it stays up: a minute, not the 5 s of a banner.
+                a.secs = Some(60.0);
+            }
         });
-        w::field(ui, "Second line", LABEL_W, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut a.subtitle).hint_text("Optional").margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY));
+        if a.kind == AnnounceKind::Image {
+            w::field(ui, "Picture", LABEL_W, |ui| {
+                if ui.small_button("Choose…").clicked()
+                    && let Some(f) = rfd::FileDialog::new().add_filter("Images", &super::scenes::IMAGE_EXTENSIONS).pick_file()
+                {
+                    a.image = f.to_string_lossy().into_owned();
+                }
+                let name = std::path::Path::new(&a.image).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                ui.add(egui::Label::new(RichText::new(if name.is_empty() { "none chosen".into() } else { name }).size(SECONDARY)).truncate()).on_hover_text(a.image.as_str());
+            });
+        }
+        let (title, hint) = match a.kind {
+            AnnounceKind::Text => ("Title", "New video is out now"),
+            AnnounceKind::Image => ("Caption", "Optional"),
+            AnnounceKind::Countdown => ("Label", "Starting in"),
+        };
+        w::field(ui, title, LABEL_W, |ui| {
+            ui.add(egui::TextEdit::singleline(&mut a.title).hint_text(hint).margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY));
         });
+        if a.kind != AnnounceKind::Countdown {
+            w::field(ui, "Second line", LABEL_W, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut a.subtitle).hint_text("Optional").margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY));
+            });
+        }
         w::field(ui, "Style", LABEL_W, |ui| {
             let opts = AnnounceStyle::ALL.map(|v| (v, v.label(), true, ""));
             w::segmented(ui, &mut a.style, &opts);
@@ -1444,19 +1469,27 @@ fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         w::field(ui, "Color", LABEL_W, |ui| {
             ui.color_edit_button_srgb(&mut a.accent);
         });
-        w::field(ui, "Stays up", LABEL_W, |ui| {
-            let mut timed = a.secs.is_some();
-            if ui.add(w::Check::new(&mut timed, "For")).changed() {
-                a.secs = timed.then_some(5.0);
-            }
-            if let Some(secs) = &mut a.secs {
-                ui.add(egui::DragValue::new(secs).range(1.0..=600.0).speed(0.2).suffix(" s"));
-            } else {
-                ui.label(RichText::new("until you hide it").size(SECONDARY));
-            }
-        });
+        if a.kind == AnnounceKind::Countdown {
+            w::field(ui, "Counts down", LABEL_W, |ui| {
+                let mut secs = a.secs.unwrap_or(60.0);
+                ui.add(egui::DragValue::new(&mut secs).range(1.0..=7200.0).speed(1.0).suffix(" s"));
+                a.secs = Some(secs);
+            });
+        } else {
+            w::field(ui, "Stays up", LABEL_W, |ui| {
+                let mut timed = a.secs.is_some();
+                if ui.add(w::Check::new(&mut timed, "For")).changed() {
+                    a.secs = timed.then_some(5.0);
+                }
+                if let Some(secs) = &mut a.secs {
+                    ui.add(egui::DragValue::new(secs).range(1.0..=600.0).speed(0.2).suffix(" s"));
+                } else {
+                    ui.label(RichText::new("until you hide it").size(SECONDARY));
+                }
+            });
+        }
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(can && !a.title.trim().is_empty(), |ui| {
+            ui.add_enabled_ui(can && !a.is_blank(), |ui| {
                 show = w::primary_button(ui, if up { "Show again" } else { "Show" }).clicked();
             });
             ui.add_enabled_ui(up, |ui| {
