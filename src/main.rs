@@ -1,6 +1,7 @@
 mod app;
 
 use zerorec::{
+    announce,
     appaudio,
     browser,
     camera,
@@ -621,6 +622,7 @@ fn prepare_with(a: RecordArgs, lenient: bool) -> Result<(record::Options, Option
     }
     let mut opts = record::Options {
         output: a.output.unwrap_or_else(default_output),
+        always_compose: false,
         size: (0, 0),
         screen_size: (0, 0),
         native: (0, 0),

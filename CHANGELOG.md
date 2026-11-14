@@ -6,6 +6,12 @@ First release: screen, system audio, microphone and webcam recording to `.mov`/`
 with live transitions; replay buffer; RTMP, SRT and WHIP streaming; new logo; macOS DMG
 packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
 
+- Announcements (Live tab): show a text, an image or a countdown over whichever scene is live,
+  for N seconds or until hidden. Two styles: a lower-third bar that slides in, and a full-screen
+  card over a dimmed frame. It is in the preview, the recording and every stream, and works on a
+  plain screen recording too ("On a plain screen", on by default: it composes every frame, which
+  costs a copy of each; turn it off to send a plain screen recording to the encoder untouched).
+  Smart-zoom exports leave it out.
 - Permissions: a camera or microphone that isn't allowed no longer stops the preview or a
   recording. SimpleRecord asks the first time it needs one, and otherwise records without it
   and links to that permission's page in System Settings from its card. A dismissed Screen
