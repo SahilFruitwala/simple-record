@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SimpleRecord – Screen and camera recorder for Mac</title>
-<meta name="description" content="A simple, fast, reliable screen and camera recorder for macOS. Scenes, replay buffer and live streaming, with no FFmpeg, OBS or Electron.">
+<meta name="description" content="A simple, fast, reliable screen and camera recorder for macOS. Scenes, replay buffer, live streaming and on-screen announcements, with no FFmpeg, OBS or Electron.">
 <meta name="theme-color" content="#000000">
 <script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <meta property="og:title" content="SimpleRecord – Record. Simply.">
-<meta property="og:description" content="A fast, reliable screen and camera recorder for Mac. Scenes, replay buffer and live streaming.">
+<meta property="og:description" content="A fast, reliable screen and camera recorder for Mac. Scenes, replay buffer, live streaming and on-screen announcements.">
 <meta property="og:image" content="shot-record.webp">
 <link rel="icon" href="logo.webp" type="image/webp">
 <style>
@@ -140,9 +140,9 @@
   .card h3 { margin: 0 0 8px; font-size: 26px; letter-spacing: -.03em; line-height: 1.1; }
   .card p { margin: 0; color: var(--muted); font-size: 17px; line-height: 1.38; }
   .c-a { grid-column: span 4; } .c-b { grid-column: span 2; } .c-c { grid-column: span 2; }
-  .c-d { grid-column: span 2; } .c-e { grid-column: span 2; } .c-f { grid-column: span 3; } .c-g { grid-column: span 3; }
-  .c-a h3 { font-size: 40px; } .c-a p { font-size: 19px; max-width: 460px; }
-  @media (max-width: 820px) { .bento { grid-template-columns: 1fr; } .bento .card { grid-column: auto !important; min-height: 210px; } .c-a h3 { font-size: 30px; } }
+  .c-d { grid-column: span 2; } .c-e { grid-column: span 2; } .c-f { grid-column: span 3; } .c-g { grid-column: span 3; } .c-h { grid-column: span 6; }
+  .c-a h3, .c-h h3 { font-size: 40px; } .c-a p, .c-h p { font-size: 19px; max-width: 460px; } .c-h p { max-width: 620px; }
+  @media (max-width: 820px) { .bento { grid-template-columns: 1fr; } .bento .card { grid-column: auto !important; min-height: 210px; } .c-a h3, .c-h h3 { font-size: 30px; } }
 
   /* Specs */
   .specs { list-style: none; padding: 0; margin: 0 auto; max-width: 720px; }
@@ -244,6 +244,7 @@
       <div class="card c-e rv" style="--d:200"><div class="ico">🔑</div><h3>Private by design</h3><p>Stream keys live in the macOS Keychain. Nothing leaves your Mac.</p></div>
       <div class="card c-f rv"><div class="ico">🎬</div><h3>Opens anywhere</h3><p>Records <code>.mov</code> or <code>.mp4</code> that plays in QuickTime and imports into Final Cut, Premiere and DaVinci Resolve.</p></div>
       <div class="card c-g rv" style="--d:100"><div class="ico">⚡️</div><h3>Hardware encoding</h3><p>H.264, HEVC or ProRes 422 through VideoToolbox, so your Mac stays cool and quiet.</p></div>
+      <div class="card c-h rv"><div class="ico">📣</div><h3>Announcements</h3><p>Pop a text, an image or a countdown over whatever is on screen, for a few seconds or until you hide it. A lower-third bar or a full-screen card, in the preview, the recording and every stream.</p></div>
     </div>
   </div>
 </section>
