@@ -1401,6 +1401,7 @@ fn sources(ui: &mut Ui, st: &mut State) {
     }
 
     if tab == SidebarTab::Live {
+        announce_controls(ui, st, &mut s);
         live_controls(ui, st, &mut s);
     }
 
@@ -1419,6 +1420,66 @@ pub const STREAM_DESTS: [(&str, &str); 3] = [("youtube", "YouTube"), ("twitch", 
 
 /// Replay buffer and streaming: both use the shared live encode and run
 /// with or without a recording.
+/// Announcements: a banner above whichever scene is live, for a few seconds
+/// or until hidden.
+fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
+    use crate::announce::AnnounceStyle;
+    const LABEL_W: f32 = 72.0;
+    let (can, up) = (st.can_announce(), st.announcing());
+    let idle = st.recording.is_none() && !st.finishing;
+    let (mut show, mut hide) = (false, false);
+    w::header(ui, Icon::Overlay, "Announce");
+    w::card(ui, |ui| {
+        let a = &mut st.announce;
+        w::field(ui, "Title", LABEL_W, |ui| {
+            ui.add(egui::TextEdit::singleline(&mut a.title).hint_text("New video is out now").margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY));
+        });
+        w::field(ui, "Second line", LABEL_W, |ui| {
+            ui.add(egui::TextEdit::singleline(&mut a.subtitle).hint_text("Optional").margin(vec2(8.0, 4.0)).desired_width(f32::INFINITY));
+        });
+        w::field(ui, "Style", LABEL_W, |ui| {
+            let opts = AnnounceStyle::ALL.map(|v| (v, v.label(), true, ""));
+            w::segmented(ui, &mut a.style, &opts);
+        });
+        w::field(ui, "Color", LABEL_W, |ui| {
+            ui.color_edit_button_srgb(&mut a.accent);
+        });
+        w::field(ui, "Stays up", LABEL_W, |ui| {
+            let mut timed = a.secs.is_some();
+            if ui.add(w::Check::new(&mut timed, "For")).changed() {
+                a.secs = timed.then_some(5.0);
+            }
+            if let Some(secs) = &mut a.secs {
+                ui.add(egui::DragValue::new(secs).range(1.0..=600.0).speed(0.2).suffix(" s"));
+            } else {
+                ui.label(RichText::new("until you hide it").size(SECONDARY));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(can && !a.title.trim().is_empty(), |ui| {
+                show = w::primary_button(ui, if up { "Show again" } else { "Show" }).clicked();
+            });
+            ui.add_enabled_ui(up, |ui| {
+                hide = ui.button("Hide").clicked();
+            });
+        });
+        w::divider(ui);
+        w::row(ui, "On a plain screen", |ui| w::switch(ui, &mut s.announcements, idle)).on_hover_text("A plain screen recording goes to the encoder untouched, so there is nowhere to draw. This composes every frame so announcements work there too: it costs a copy of each frame.");
+        if !can && !s.announcements {
+            w::hint(ui, "Shown over whichever scene is live. Add the camera or another layer, or turn on \"On a plain screen\".");
+        }
+    });
+    if let Some(note) = &st.announce_note {
+        w::hint(ui, note);
+    }
+    if show {
+        st.show_announcement();
+    }
+    if hide {
+        st.hide_announcement();
+    }
+}
+
 fn live_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     let p = theme::pal(ui);
     // While streaming, the controls stay (Stop Stream must be reachable).

@@ -205,6 +205,10 @@ pub struct State {
     /// UI requests handled after the frame.
     pub cmds: Vec<Cmd>,
     pub refresh_devices: bool,
+    /// The announcement being written in the Live tab (not saved yet).
+    pub announce: crate::announce::Announcement,
+    /// Why the last Show did nothing, for the Live tab.
+    pub announce_note: Option<String>,
     /// Overlay last sent to the running session.
     pip_applied: Option<crate::compose::PipSpec>,
     /// Scene (which one, and what it shows) and look (background,
@@ -322,6 +326,37 @@ impl State {
     pub fn delete_stream_key(&mut self, url: &str) {
         let _ = crate::live::keychain::delete(url);
         self.key_saved.insert(url.to_string(), false);
+    }
+
+    /// The session an announcement goes to: the recording, else the preview.
+    fn announce_session(&self) -> Option<&Session> {
+        self.recording.as_ref().or(self.preview.as_ref())
+    }
+
+    /// Whether an announcement can be drawn now: a session whose frames go
+    /// through the compositor (a plain screen recording has none).
+    pub fn can_announce(&self) -> bool {
+        self.announce_session().is_some_and(|s| s.composed())
+    }
+
+    pub fn announcing(&self) -> bool {
+        self.announce_session().is_some_and(|s| s.announcing())
+    }
+
+    /// Show the announcement being written, above whichever scene is live.
+    pub fn show_announcement(&mut self) {
+        let a = self.announce.clone();
+        self.announce_note = match self.announce_session() {
+            None => Some("Nothing is running to show it in.".into()),
+            Some(s) if !s.set_announcement(a) => Some("This session doesn't compose the picture (a plain screen recording), so there is nowhere to draw it. Add the camera or another layer, or pick another scene.".into()),
+            Some(_) => None,
+        };
+    }
+
+    pub fn hide_announcement(&self) {
+        if let Some(s) = self.announce_session() {
+            s.hide_announcement();
+        }
     }
 
     pub fn streaming(&self) -> bool {
@@ -563,6 +598,8 @@ impl App {
             refresh_devices: false,
             permissions_missing: false,
             welcome_dismissed: false,
+            announce: crate::announce::Announcement::default(),
+            announce_note: None,
             pip_applied: None,
             scene_applied: None,
             look_applied: None,
@@ -852,6 +889,7 @@ impl App {
         o.live = Some(self.st.live.clone());
         o.scene = self.st.settings.scene_spec();
         o.mic_filters = self.st.settings.mic_filters;
+        o.always_compose = self.st.settings.announcements;
         o.pip.effects = self.st.settings.camera_effects;
         // The command line has the colours only; the screen's inset too.
         o.background = self.st.settings.background.clone();
@@ -1833,6 +1871,50 @@ impl SelfTest {
                     }
                     push(Cmd::Quit);
                     self.step = 5;
+                }
+                _ => {}
+            }
+            return;
+        }
+        // REC_GUI_SELFTEST=announce: an announcement shows in the live session,
+        // leaves by itself, then shows in a recording until hidden by hand.
+        if std::env::var("REC_GUI_SELFTEST").as_deref() == Ok("announce") {
+            let say = |app: &App, what: &str| println!("selftest: announce {what}: can={} up={} error={:?}", app.st.can_announce(), app.st.announcing(), app.st.announce_note);
+            match self.step {
+                0 if t > 3.0 => {
+                    say(app, "before");
+                    app.st.announce = crate::announce::Announcement { title: "Selftest banner".into(), subtitle: "shown from the app".into(), secs: Some(2.0), ..Default::default() };
+                    app.st.show_announcement();
+                    self.step = 1;
+                }
+                1 if t > 4.0 => {
+                    say(app, "while up (preview)");
+                    self.step = 2;
+                }
+                2 if t > 7.0 => {
+                    say(app, "after its time (preview)");
+                    push(Cmd::ToggleRecording);
+                    self.step = 3;
+                }
+                3 if t > 8.5 && app.st.recording.is_some() => {
+                    app.st.announce.secs = None;
+                    app.st.show_announcement();
+                    self.step = 4;
+                }
+                4 if t > 10.5 => {
+                    say(app, "until hidden (recording)");
+                    app.st.hide_announcement();
+                    self.step = 5;
+                }
+                5 if t > 12.0 => {
+                    say(app, "after hide (recording)");
+                    push(Cmd::ToggleRecording);
+                    self.step = 6;
+                }
+                6 if !app.st.finishing && app.st.recording.is_none() => {
+                    println!("selftest: announce saved={:?} error={:?}", app.st.last_file, app.st.error);
+                    push(Cmd::Quit);
+                    self.step = 7;
                 }
                 _ => {}
             }
