@@ -13,5 +13,6 @@ ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname "SimpleRecord" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
-shasum -a 256 "$DMG" | tee "$DMG.sha256"
+# Hash from inside dist/ so the file lists the bare name and `shasum -c` works where it is downloaded.
+(cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")") | tee "$DMG.sha256"
 echo "packaged $DMG"

@@ -1577,7 +1577,7 @@ impl App {
         let input = win.egui.take_egui_input(&win.window);
         let st = &mut self.st;
         let mut drag_controls = false;
-        let out = win.ctx.run_ui(input, |ui| match kind {
+        let mut out = win.ctx.run_ui(input, |ui| match kind {
             Kind::Main => ui::main_window(ui, st),
             Kind::Settings => ui::settings_window(ui, st),
             Kind::Controls => drag_controls = controls::bar(ui, st),
@@ -1605,6 +1605,8 @@ impl App {
                 for id in &out.textures_delta.free {
                     win.renderer.free_texture(id);
                 }
+                // Handled: egui's Drop asserts (debug builds) on unhandled deltas.
+                out.textures_delta.clear();
                 return;
             }
         };
@@ -1646,6 +1648,7 @@ impl App {
         for id in &out.textures_delta.free {
             win.renderer.free_texture(id);
         }
+        out.textures_delta.clear();
         // Drag the window by the toolbar (the titlebar is transparent), or
         // the controls by their grip.
         if (kind != Kind::Controls && ui::take_drag_request()) || drag_controls {
