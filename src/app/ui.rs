@@ -1431,13 +1431,13 @@ fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
     w::header(ui, Icon::Overlay, "Announce");
     w::card(ui, |ui| {
         let a = &mut st.announce;
-        w::field(ui, "Shows", LABEL_W, |ui| {
-            let opts = AnnounceKind::ALL.map(|v| (v, v.label(), true, ""));
-            if w::segmented(ui, &mut a.kind, &opts) && a.kind == AnnounceKind::Countdown {
-                // Counts down the time it stays up: a minute, not the 5 s of a banner.
-                a.secs = Some(60.0);
-            }
-        });
+        // Full width: three labels don't fit in a field's value column.
+        let opts = AnnounceKind::ALL.map(|v| (v, v.label(), true, ""));
+        if w::segmented(ui, &mut a.kind, &opts) && a.kind == AnnounceKind::Countdown {
+            // Counts down the time it stays up: a minute, not the 5 s of a banner.
+            a.secs = Some(60.0);
+        }
+        ui.add_space(6.0);
         if a.kind == AnnounceKind::Image {
             w::field(ui, "Picture", LABEL_W, |ui| {
                 if ui.small_button("Choose…").clicked()
@@ -1470,9 +1470,9 @@ fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
             ui.color_edit_button_srgb(&mut a.accent);
         });
         if a.kind == AnnounceKind::Countdown {
-            w::field(ui, "Counts down", LABEL_W, |ui| {
+            w::field(ui, "Duration", LABEL_W, |ui| {
                 let mut secs = a.secs.unwrap_or(60.0);
-                ui.add(egui::DragValue::new(&mut secs).range(1.0..=7200.0).speed(1.0).suffix(" s"));
+                ui.add(egui::DragValue::new(&mut secs).range(1.0..=7200.0).speed(1.0).fixed_decimals(0).suffix(" s"));
                 a.secs = Some(secs);
             });
         } else {
@@ -1482,7 +1482,7 @@ fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
                     a.secs = timed.then_some(5.0);
                 }
                 if let Some(secs) = &mut a.secs {
-                    ui.add(egui::DragValue::new(secs).range(1.0..=600.0).speed(0.2).suffix(" s"));
+                    ui.add(egui::DragValue::new(secs).range(1.0..=600.0).speed(0.2).fixed_decimals(0).suffix(" s"));
                 } else {
                     ui.label(RichText::new("until you hide it").size(SECONDARY));
                 }
@@ -1490,7 +1490,7 @@ fn announce_controls(ui: &mut Ui, st: &mut State, s: &mut Settings) {
         }
         ui.horizontal(|ui| {
             ui.add_enabled_ui(can && !a.is_blank(), |ui| {
-                show = w::primary_button(ui, if up { "Show again" } else { "Show" }).clicked();
+                show = w::primary_button(ui, "Show").clicked();
             });
             ui.add_enabled_ui(up, |ui| {
                 hide = ui.button("Hide").clicked();
