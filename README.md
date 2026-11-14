@@ -7,8 +7,9 @@ to OBS for recording YouTube videos. It records the screen, system audio, microp
 into one `.mov` or `.mp4` that plays in QuickTime and imports into Final Cut, Premiere and
 DaVinci Resolve. **Scenes** lay out the screen, the webcam, other displays, images and text,
 from nine ready-made templates (Presenter, Side by Side, Reaction, Vertical for Shorts…) or
-your own, and switch live with animated transitions. It can also keep a **replay buffer** of
-the last seconds and **stream** over RTMP/RTMPS (YouTube, Twitch, any server), SRT or WHIP
+your own, and switch live with animated transitions. **Announcements** put a text, an image or
+a countdown over the live picture for a few seconds or until you hide them. It can also keep a
+**replay buffer** of the last seconds and **stream** over RTMP/RTMPS (YouTube, Twitch, any server), SRT or WHIP
 (WebRTC) to several destinations at once, from one shared hardware encode, with or without
 recording.
 
@@ -251,6 +252,16 @@ The **main window** contains:
   to Twitch beside 1440p to YouTube). The stream key is typed once and stored in the Keychain (per destination URL),
   never in the settings file or logs. **Go Live** / **Stop Stream**, with each stream's
   duration, bitrate and dropped frames, and a LIVE badge.
+- **Announce** (Live tab): show a **text** (a title and an optional second line), an **image**
+  (with an optional caption) or a **countdown** (the time left, labeled with its title) over
+  whichever scene is live, for N seconds or until you press **Hide**. Two styles: **Lower
+  third** (a bar that slides in from the left) and **Full screen** (the frame dims and the
+  content is centered). It is drawn above the scene, so it is in the preview, the recording and
+  every stream, and stays over a scene change. A countdown counts down the time it stays up.
+  **On a plain screen** (on by default) composes every frame so announcements also work on the
+  plain Screen scene; that costs a copy of each frame (about 1 ms of CPU per 4K frame, measured
+  on Apple Silicon), and turning it off sends a plain screen recording to the encoder untouched.
+  Smart-zoom exports leave announcements out, and the text you type isn't saved yet.
 
   The sidebar is resizable: drag its left edge (280–460 pt). The width is remembered, and
   double-clicking the edge restores the default.
