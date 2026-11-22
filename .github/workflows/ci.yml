@@ -6,6 +6,7 @@ on:
     paths:
       - "src/**"
       - "vendor/**"
+      - "zerorec/**"
       - "scripts/**"
       - "support/**"
       - "assets/**"
@@ -16,6 +17,7 @@ on:
     paths:
       - "src/**"
       - "vendor/**"
+      - "zerorec/**"
       - "scripts/**"
       - "support/**"
       - "assets/**"
@@ -30,13 +32,6 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Access the private zerorec repo
-        # A fine-grained token with read access to SahilFruitwala/zerorec's contents.
-        run: |
-          if [ -z "$ZEROREC_TOKEN" ]; then echo "::error::Set the ZEROREC_TOKEN secret (read access to SahilFruitwala/zerorec)"; exit 1; fi
-          git config --global url."https://x-access-token:${ZEROREC_TOKEN}@github.com/SahilFruitwala/zerorec".insteadOf "https://github.com/SahilFruitwala/zerorec"
-        env:
-          ZEROREC_TOKEN: ${{ secrets.ZEROREC_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -48,6 +43,29 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Tests
         run: cargo test --locked
+      - name: Engine smart zoom tests
+        run: cargo test --locked -p zerorec --lib zoom::
       - name: Scene sources end to end (video file, web page, chroma key)
         run: scripts/sources-check.sh target/debug/simple-record
-      # The portable tests and SRT end to end moved to the zerorec repo with the engine.
+
+  portable:
+    # The engine's platform-independent parts, on Linux (cheaper than macOS
+    # runners, and it keeps that code free of macOS-only APIs).
+    name: Engine portable tests and SRT end to end (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install ffmpeg (with libsrt, libx264, libx265)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: Unit tests (layouts, shapes, mic filters, shortcuts, MPEG-TS, SRT)
+        run: cargo test --manifest-path zerorec/portable/Cargo.toml
+      - name: Install MediaMTX (a second, independent SRT implementation)
+        run: |
+          tag=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/bluenviron/mediamtx/releases/latest | jq -r .tag_name)
+          curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/$tag/mediamtx_${tag}_linux_amd64.tar.gz" | sudo tar xz -C /usr/local/bin mediamtx
+          mediamtx --version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: SRT end to end (libsrt plain, AES-128/256, HEVC, 5% loss, wrong passphrase; MediaMTX)
+        run: zerorec/scripts/srt-e2e.sh

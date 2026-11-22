@@ -12,10 +12,9 @@ categories = ["multimedia::video"]
 publish = false
 
 [dependencies]
-# The recording engine (capture, compose, encode, audio, streaming).
-# The recording engine, from its private GitHub repo (pinned). To work on both
-# at once, point this at a local checkout for a while: path = "../zerorec".
-zerorec = { git = "https://github.com/SahilFruitwala/zerorec", rev = "f0f656e323e4561f6b0117cf7c7b868fa82cc51f" }
+# The recording engine (capture, compose, encode, audio, streaming), kept in
+# this repository: copied from SahilFruitwala/zerorec at f0f656e (v0.4.0).
+zerorec = { path = "zerorec" }
 anyhow = "1.0.104"
 block2 = "0.6"
 clap = { version = "4.6.7", features = ["derive"] }

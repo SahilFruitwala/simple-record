@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+*.DS_Store
+/site/dist
+/tmp
+*.mp4
+*.mov
+*.mkv
+*.ips
+*.crash
+
+/portable/target

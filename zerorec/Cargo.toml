@@ -1,0 +1,61 @@
+[package]
+name = "zerorec"
+version = "0.4.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Zero-copy, high-performance screen recording and live streaming engine for macOS"
+readme = "README.md"
+keywords = ["screen-recording", "screencapturekit", "videotoolbox", "macos", "streaming"]
+categories = ["multimedia::video", "multimedia::audio"]
+exclude = ["site/", "scripts/", "bench_results.json"]
+publish = false
+
+[lib]
+name = "zerorec"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zerorec"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+block2 = "0.6"
+clap = { version = "4.6.7", features = ["derive"] }
+dispatch2 = "0.3"
+libc = "0.2.190"
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-app-kit = { version = "0.3", features = ["objc2-quartz-core", "objc2-core-foundation"] }
+objc2-av-foundation = { version = "0.3", features = ["block2", "dispatch2", "objc2-core-media", "objc2-core-video", "objc2-core-foundation", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-core-image = { version = "0.3", features = ["objc2-core-video", "objc2-core-graphics", "objc2-core-foundation", "objc2-metal"] }
+objc2-core-media = { version = "0.3", features = ["objc2-core-video", "dispatch2", "block2", "objc2-core-audio-types"] }
+objc2-core-video = { version = "0.3", features = ["objc2-core-graphics", "objc2-io-surface", "objc2-metal"] }
+objc2-foundation = { version = "0.3", features = ["block2"] }
+objc2-io-surface = "0.3"
+objc2-quartz-core = "0.3"
+objc2-screen-capture-kit = { version = "0.3", features = ["block2", "dispatch2", "objc2-core-media", "objc2-core-graphics", "objc2-core-foundation", "objc2-av-foundation"] }
+objc2-audio-toolbox = "0.3"
+objc2-video-toolbox = { version = "0.3", features = ["objc2-core-media", "objc2-core-video"] }
+security-framework = "3"
+native-tls = "0.2"
+getrandom = "0.3"
+str0m = { version = "0.24", default-features = false, features = ["apple-crypto"] }
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
+objc2-metal-performance-shaders = "0.3"
+objc2-image-io = "0.3"
+nnnoiseless = { version = "0.5.2", default-features = false }
+aes = { version = "0.8", default-features = false }
+ctr = { version = "0.9", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
+aes-kw = "0.2"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKSnapshotConfiguration", "WKNavigationDelegate", "block2", "objc2-app-kit", "objc2-core-foundation"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The release profile and the apple-cryptokit-rs patch are set in the root
+# Cargo.toml (cargo ignores them in a dependency).

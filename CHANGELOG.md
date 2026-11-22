@@ -9,6 +9,12 @@ packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
 - Preview window after recording: play and scrub the take, and for a smart zoom recording edit
   its zooms on a timeline (move, resize, add, delete, change the level) with the picture zoomed
   as the export will be, then export the zoomed copy with those edits.
+- Smart zoom catches every click: a quick click or trackpad tap that went down and up between
+  two frames was never logged, so it got no zoom. Presses are now counted however short they
+  are (recordings made before this still use the old detection).
+- The recording engine (zerorec) now lives in this repository (`zerorec/`) instead of being
+  fetched from a private repo, so building no longer needs GitHub credentials or the
+  `ZEROREC_TOKEN` secret.
 - Smart zoom moves smoothly: zooming in and out no longer drifts up and down before settling,
   and a zoom ends after 8 s even while you keep clicking or typing (then stays out for 2 s).
 - Mic monitoring: **Listen**, next to the Mic meter, plays your mic as it is recorded, after
