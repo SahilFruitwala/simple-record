@@ -4837,7 +4837,7 @@ checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 [[package]]
 name = "zerorec"
 version = "0.2.0"
-source = "git+https://github.com/SahilFruitwala/zerorec?rev=7a0c2351b03e5b4c1141d4057d3a741c15d62f9e#7a0c2351b03e5b4c1141d4057d3a741c15d62f9e"
+source = "git+https://github.com/SahilFruitwala/zerorec?rev=0f36d2dd4b62adb02ab8c4f344b6469e9df2f33e#0f36d2dd4b62adb02ab8c4f344b6469e9df2f33e"
 dependencies = [
  "aes",
  "aes-kw",

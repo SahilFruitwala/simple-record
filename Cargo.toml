@@ -15,7 +15,7 @@ publish = false
 # The recording engine (capture, compose, encode, audio, streaming).
 # The recording engine, from its private GitHub repo (pinned). To work on both
 # at once, point this at a local checkout for a while: path = "../zerorec".
-zerorec = { git = "https://github.com/SahilFruitwala/zerorec", rev = "7a0c2351b03e5b4c1141d4057d3a741c15d62f9e" }
+zerorec = { git = "https://github.com/SahilFruitwala/zerorec", rev = "0f36d2dd4b62adb02ab8c4f344b6469e9df2f33e" }
 anyhow = "1.0.104"
 block2 = "0.6"
 clap = { version = "4.6.7", features = ["derive"] }

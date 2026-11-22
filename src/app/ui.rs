@@ -802,6 +802,31 @@ fn controls(ui: &mut Ui, st: &mut State) {
         if resp.on_hover_text(tip).clicked() && !st.finishing && !blocked {
             st.cmds.push(Cmd::ToggleRecording);
         }
+        // While recording: pause / resume beside the stop button.
+        if recording && !st.finishing {
+            let (rect, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
+            let c = rect.center();
+            let painter = ui.painter();
+            let fill = if resp.is_pointer_button_down_on() { theme::blend(p.control, p.pressed) } else if resp.hovered() { theme::blend(p.control, p.hover) } else { p.control };
+            painter.circle_filled(c, 19.0, fill);
+            let ink = if paused { theme::PAUSED } else { p.text };
+            if paused {
+                // Play: a triangle, nudged right to look centred.
+                let pts = vec![egui::pos2(c.x - 5.0, c.y - 8.0), egui::pos2(c.x + 9.0, c.y), egui::pos2(c.x - 5.0, c.y + 8.0)];
+                painter.add(egui::Shape::convex_polygon(pts, ink, Stroke::NONE));
+            } else {
+                for dx in [-4.5, 4.5] {
+                    painter.rect_filled(egui::Rect::from_center_size(egui::pos2(c.x + dx, c.y), vec2(4.5, 15.0)), CornerRadius::same(1), ink);
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let key = st.settings.hotkey(Action::Pause).map(|c| format!(" ({})", c.label())).unwrap_or_default();
+            if resp.on_hover_text(format!("{}{key}", if paused { "Resume" } else { "Pause" })).clicked() {
+                st.cmds.push(Cmd::TogglePause);
+            }
+        }
         ui.add_space(6.0);
 
         // The timecode, and what the button will do.
@@ -839,7 +864,16 @@ fn controls(ui: &mut Ui, st: &mut State) {
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.add_space(12.0);
             meter(ui, "System", st.meters[0], st.settings.system_audio);
-            meter(ui, "Mic", st.meters[1], st.settings.mic_enabled);
+            ui.horizontal(|ui| {
+                meter(ui, "Mic", st.meters[1], st.settings.mic_enabled);
+                let on = crate::monitor::enabled();
+                let r = ui
+                    .add_enabled(st.settings.mic_enabled, egui::Button::selectable(on, RichText::new("Listen").size(SECONDARY)))
+                    .on_hover_text("Hear your mic as it is recorded (after noise suppression and the other mic filters). Use headphones, or the mic picks up the speakers.");
+                if r.clicked() {
+                    crate::monitor::set_enabled(!on);
+                }
+            });
         });
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -854,10 +888,6 @@ fn controls(ui: &mut Ui, st: &mut State) {
             if st.last_file.is_some() && !recording {
                 gif_button(ui, st);
                 zoom_button(ui, st);
-            }
-            let label = if paused { "Resume" } else { "Pause" };
-            if ui.add_enabled(recording, egui::Button::new(RichText::new(label).font(egui::FontId::new(BODY, egui::FontFamily::Name("medium".into()))))).clicked() {
-                st.cmds.push(Cmd::TogglePause);
             }
         });
     });

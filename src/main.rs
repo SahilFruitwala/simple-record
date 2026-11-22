@@ -13,6 +13,7 @@ use zerorec::{
     layout,
     live,
     logging,
+    monitor,
     outlatency,
     play,
     probe,
