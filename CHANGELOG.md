@@ -6,6 +6,11 @@ First release: screen, system audio, microphone and webcam recording to `.mov`/`
 with live transitions; replay buffer; RTMP, SRT and WHIP streaming; new logo; macOS DMG
 packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
 
+- Mic monitoring: **Listen**, next to the Mic meter, plays your mic as it is recorded, after
+  noise suppression and the other mic filters, so you hear how you sound and how much noise gets
+  through. Works in the preview too. Use headphones. Off at every launch.
+- Pause and resume next to the stop button: a round pause / play button appears beside it while
+  recording (it replaces the text Pause button on the right).
 - Announcements (Live tab): show a text, an image or a countdown over whichever scene is live,
   for N seconds or until hidden. Two styles: a lower-third bar that slides in, and a full-screen
   card over a dimmed frame. It is in the preview, the recording and every stream, and works on a
