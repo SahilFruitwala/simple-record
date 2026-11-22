@@ -1,0 +1,25 @@
+//! The engine's platform-independent modules, as they are in `src/`.
+#![allow(dead_code)]
+
+#[path = "../../src/announce.rs"]
+pub mod announce;
+#[path = "../../src/brand.rs"]
+pub mod brand;
+#[path = "../../src/appaudio.rs"]
+pub mod appaudio;
+#[path = "../../src/effects.rs"]
+pub mod effects;
+#[path = "../../src/filters.rs"]
+pub mod filters;
+#[path = "../../src/layout.rs"]
+pub mod layout;
+#[path = "../../src/logging.rs"]
+pub mod logging;
+#[path = "../../src/shapes.rs"]
+pub mod shapes;
+#[path = "../../src/shortcut.rs"]
+pub mod shortcut;
+#[path = "../../src/live/srt.rs"]
+pub mod srt;
+#[path = "../../src/live/ts.rs"]
+pub mod ts;
