@@ -52,7 +52,7 @@ fn section(ui: &mut Ui, title: &str) {
 }
 
 /// Toolbar strip: empty space drags the window.
-fn toolbar(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+pub(super) fn toolbar(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let rect = ui.max_rect();
     let bg = ui.interact(rect, ui.id().with("drag"), Sense::click_and_drag());
     if bg.drag_started() {
@@ -884,6 +884,9 @@ fn controls(ui: &mut Ui, st: &mut State) {
             }
             if st.last_file.is_some() && ui.button("Reveal Last").clicked() {
                 st.cmds.push(Cmd::RevealLast);
+            }
+            if st.last_file.is_some() && !recording && ui.button("Preview").on_hover_text("Play the last recording, and edit its zooms").clicked() {
+                st.cmds.push(Cmd::ShowEditor);
             }
             if st.last_file.is_some() && !recording {
                 gif_button(ui, st);

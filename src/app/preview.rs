@@ -220,7 +220,7 @@ impl Worker {
 
 /// A wgpu texture over a BGRA pixel buffer's IOSurface (no copy). The
 /// buffer must outlive the texture's use.
-fn texture_from_buffer(device: &wgpu::Device, buf: &CVPixelBuffer, w: u32, h: u32) -> Option<wgpu::Texture> {
+pub(super) fn texture_from_buffer(device: &wgpu::Device, buf: &CVPixelBuffer, w: u32, h: u32) -> Option<wgpu::Texture> {
     use wgpu::hal::api::Metal;
     let surface = CVPixelBufferGetIOSurface(Some(buf))?;
     unsafe {

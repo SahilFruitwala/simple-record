@@ -3232,7 +3232,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple-record"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "aes",
  "aes-kw",
@@ -4836,8 +4836,8 @@ checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zerorec"
-version = "0.2.0"
-source = "git+https://github.com/SahilFruitwala/zerorec?rev=0f36d2dd4b62adb02ab8c4f344b6469e9df2f33e#0f36d2dd4b62adb02ab8c4f344b6469e9df2f33e"
+version = "0.4.0"
+source = "git+https://github.com/SahilFruitwala/zerorec?rev=f0f656e323e4561f6b0117cf7c7b868fa82cc51f#f0f656e323e4561f6b0117cf7c7b868fa82cc51f"
 dependencies = [
  "aes",
  "aes-kw",

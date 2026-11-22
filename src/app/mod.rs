@@ -10,9 +10,11 @@
 
 mod controls;
 mod dock;
+mod editor;
 pub(crate) mod macos;
 mod menubar;
 mod onboarding;
+mod player;
 mod preview;
 mod scenes;
 mod theme;
@@ -47,6 +49,10 @@ pub enum Cmd {
     ExportGif,
     /// Export the last recording's smart zoom version.
     ExportZoom,
+    /// Export the zoomed copy with the zooms edited in the Preview window.
+    ExportEdited,
+    /// Open the last recording in the Preview window.
+    ShowEditor,
     /// Stop the running recording and move its file to the Trash.
     DeleteRecording,
     ShowWindow,
@@ -287,6 +293,8 @@ pub struct State {
     pub zoom_source: Option<(PathBuf, Result<crate::zoom::Activity, String>)>,
     pub zoom_progress: Option<Arc<std::sync::atomic::AtomicU32>>,
     zoom_job: Option<std::thread::JoinHandle<Result<(PathBuf, crate::zoom::ZoomStats)>>>,
+    /// The recording open in the Preview window.
+    pub editor: Option<editor::Editor>,
 }
 
 impl State {
@@ -511,12 +519,17 @@ enum Kind {
     Main,
     Settings,
     Controls,
+    Editor,
 }
 
 struct App {
     gpu: Option<Gpu>,
     main: Option<Win>,
     settings_win: Option<Win>,
+    /// The Preview window (see `editor.rs`).
+    editor_win: Option<Win>,
+    /// Frames the Preview window's textures are over (egui may still draw them).
+    editor_frames: std::collections::VecDeque<(crate::util::SendBox<objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>>, wgpu::Texture)>,
     /// The floating recording controls (see `controls.rs`).
     controls: Option<Win>,
     /// Where the controls were last left, to reopen them there.
@@ -639,6 +652,7 @@ impl App {
             zoom_source: None,
             zoom_progress: None,
             zoom_job: None,
+            editor: None,
         };
         st.live.set_config(st.settings.live_config());
         load_devices(&mut st);
@@ -650,6 +664,8 @@ impl App {
             gpu: None,
             main: None,
             settings_win: None,
+            editor_win: None,
+            editor_frames: Default::default(),
             controls: None,
             controls_pos: None,
             after_finish: None,
@@ -871,6 +887,43 @@ impl App {
         if !background() {
             macos::activate();
         }
+    }
+
+    /// Open the last recording in the Preview window.
+    fn show_editor(&mut self, el: &ActiveEventLoop) {
+        let Some(file) = self.st.last_file.clone() else { return };
+        if self.st.editor.as_ref().is_none_or(|e| e.file != file) {
+            match editor::Editor::open(&file) {
+                Ok(e) => {
+                    self.st.editor = Some(e);
+                    self.editor_frames.clear();
+                }
+                Err(e) => {
+                    eprintln!("rec: preview: {e:#}");
+                    self.st.error = Some(format!("Preview: {e:#}"));
+                    return;
+                }
+            }
+        }
+        if self.editor_win.is_none() {
+            let w = self.open_window(el, "SimpleRecord Preview", (1100.0, 760.0), (720.0, 520.0));
+            self.editor_win = Some(w);
+        }
+        if let Some(w) = &self.editor_win {
+            if !background() {
+                w.window.focus_window();
+            }
+            w.window.request_redraw();
+        }
+        if !background() {
+            macos::activate();
+        }
+    }
+
+    fn close_editor(&mut self) {
+        self.editor_win = None;
+        self.st.editor = None;
+        self.editor_frames.clear();
     }
 
     fn options(&mut self, output: Option<&std::path::Path>) -> Result<(record::Options, Option<crate::screen::Target>)> {
@@ -1259,15 +1312,16 @@ impl App {
         }));
     }
 
-    fn export_zoom(&mut self) {
-        let Some(file) = self.st.last_file.clone() else { return };
+    /// Export `file`'s zoomed copy: with the zooms found again at the level
+    /// chosen (`fresh`, the Smart Zoom popover), or as saved (the Preview
+    /// window's edits, like the CLI).
+    fn export_zoom(&mut self, file: Option<PathBuf>, fresh: bool) {
+        let Some(file) = file else { return };
         if self.st.zoom_job.is_some() {
             return;
         }
         let out = crate::zoom::zoomed_path(&file);
-        // The app always finds the zooms at the level chosen (the CLI
-        // reuses an edited zoom.json).
-        let opts = crate::zoom::ZoomOptions { fresh: true, ..self.st.zoom_opts };
+        let opts = crate::zoom::ZoomOptions { fresh, ..self.st.zoom_opts };
         let keep = self.st.settings.zoom_keep_data;
         let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
         self.st.zoom_progress = Some(progress.clone());
@@ -1329,7 +1383,19 @@ impl App {
             }
             Cmd::RestartRecording | Cmd::DeleteRecording => {}
             Cmd::ExportGif => self.export_gif(),
-            Cmd::ExportZoom => self.export_zoom(),
+            Cmd::ExportZoom => {
+                let f = self.st.last_file.clone();
+                // Found again: the Preview window shows the new ones.
+                if self.st.editor.as_ref().is_some_and(|e| Some(&e.file) == f.as_ref()) {
+                    self.close_editor();
+                }
+                self.export_zoom(f, true);
+            }
+            Cmd::ExportEdited => {
+                let f = self.st.editor.as_ref().map(|e| e.file.clone());
+                self.export_zoom(f, false);
+            }
+            Cmd::ShowEditor => self.show_editor(el),
             Cmd::TogglePause => self.toggle_pause(),
             Cmd::ShowWindow => self.show_main(el),
             Cmd::ShowSettings => self.show_settings(el),
@@ -1477,6 +1543,10 @@ impl App {
                         eprintln!("rec: camera saved {}", c.display());
                     }
                     self.st.last_file = Some(file);
+                    // Show the take (not in scripted runs).
+                    if self.selftest.is_none() && !background() && std::env::var_os("REC_GUI_HIDDEN").is_none() {
+                        push(Cmd::ShowEditor);
+                    }
                 }
                 (Err(e), None) => self.st.error = Some(format!("Recording failed: {e}")),
             }
@@ -1538,6 +1608,8 @@ impl App {
             Some(Kind::Settings)
         } else if is(&self.controls) {
             Some(Kind::Controls)
+        } else if is(&self.editor_win) {
+            Some(Kind::Editor)
         } else {
             None
         }
@@ -1568,10 +1640,29 @@ impl App {
             }
             self.st.frames_shown += 1;
         }
+        if kind == Kind::Editor
+            && let Some(ed) = self.st.editor.as_mut()
+            && let Some(w) = self.editor_win.as_mut()
+            && let Some((buf, fw, fh)) = ed.player.frame()
+            && let Some(tex) = preview::texture_from_buffer(&gpu.device, &buf, fw, fh)
+        {
+            let view = tex.create_view(&Default::default());
+            let filter = wgpu::FilterMode::Linear;
+            match ed.tex {
+                Some(id) => w.renderer.update_egui_texture_from_wgpu_texture(&gpu.device, &view, filter, id),
+                None => ed.tex = Some(w.renderer.register_native_texture(&gpu.device, &view, filter)),
+            }
+            ed.px = [fw, fh];
+            self.editor_frames.push_back((crate::util::SendBox(buf), tex));
+            while self.editor_frames.len() > 3 {
+                self.editor_frames.pop_front();
+            }
+        }
         let win = match kind {
             Kind::Main => self.main.as_mut(),
             Kind::Settings => self.settings_win.as_mut(),
             Kind::Controls => self.controls.as_mut(),
+            Kind::Editor => self.editor_win.as_mut(),
         };
         let Some(win) = win else { return };
         let input = win.egui.take_egui_input(&win.window);
@@ -1581,6 +1672,7 @@ impl App {
             Kind::Main => ui::main_window(ui, st),
             Kind::Settings => ui::settings_window(ui, st),
             Kind::Controls => drag_controls = controls::bar(ui, st),
+            Kind::Editor => editor::window(ui, st),
         });
         if kind == Kind::Controls {
             let solid = win.ctx.input(|i| i.pointer.has_pointer()) || st.controls_confirm.is_some();
@@ -1678,6 +1770,11 @@ impl ApplicationHandler for App {
         if self.start_recording {
             push(Cmd::ToggleRecording);
         }
+        // REC_PREVIEW=FILE: open FILE in the Preview window (checks, screenshots).
+        if let Some(f) = std::env::var_os("REC_PREVIEW") {
+            self.st.last_file = Some(PathBuf::from(f));
+            push(Cmd::ShowEditor);
+        }
         match self.st.settings.hotkey(crate::hotkey::Action::Record) {
             Some(c) => eprintln!("rec: app running ({} toggles recording)", c.label()),
             None => eprintln!("rec: app running"),
@@ -1698,7 +1795,7 @@ impl ApplicationHandler for App {
             w.window.request_redraw();
         }
         if cmds {
-            for w in [&self.settings_win, &self.controls].into_iter().flatten() {
+            for w in [&self.settings_win, &self.controls, &self.editor_win].into_iter().flatten() {
                 w.window.request_redraw();
             }
         }
@@ -1711,6 +1808,7 @@ impl ApplicationHandler for App {
             Kind::Main => self.main.as_mut(),
             Kind::Settings => self.settings_win.as_mut(),
             Kind::Controls => self.controls.as_mut(),
+            Kind::Editor => self.editor_win.as_mut(),
         };
         let Some(win) = win else { return };
         let resp = win.egui.on_window_event(&win.window, &event);
@@ -1718,6 +1816,7 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => match kind {
                 Kind::Main => self.hide_main(),
                 Kind::Settings => self.settings_win = None,
+                Kind::Editor => self.close_editor(),
                 // Not closable (no title bar); Stop or Settings hide it.
                 Kind::Controls => {}
             },
@@ -1769,7 +1868,7 @@ impl ApplicationHandler for App {
         let mut next = now + Duration::from_millis(if live { 100 } else { 250 });
         // The occlusion event only reports changes (not a window created
         // while the screen is locked): ask AppKit each pass.
-        for (w, main) in [(self.main.as_mut(), true), (self.settings_win.as_mut(), false), (self.controls.as_mut(), false)] {
+        for (w, main) in [(self.main.as_mut(), true), (self.settings_win.as_mut(), false), (self.controls.as_mut(), false), (self.editor_win.as_mut(), false)] {
             if let Some(w) = w {
                 let o = macos::is_occluded(&w.window);
                 if o != w.occluded {
@@ -1780,7 +1879,7 @@ impl ApplicationHandler for App {
                 }
             }
         }
-        for w in [self.main.as_mut(), self.settings_win.as_mut(), self.controls.as_mut()].into_iter().flatten() {
+        for w in [self.main.as_mut(), self.settings_win.as_mut(), self.controls.as_mut(), self.editor_win.as_mut()].into_iter().flatten() {
             let visible = w.window.is_visible().unwrap_or(true) && !w.occluded;
             if live && visible {
                 // Timer, meters: ~15 fps; preview frames wake us on arrival.

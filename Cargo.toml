@@ -1,6 +1,6 @@
 [package]
 name = "simple-record"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A simple, fast, reliable screen and camera recorder for macOS"
@@ -15,7 +15,7 @@ publish = false
 # The recording engine (capture, compose, encode, audio, streaming).
 # The recording engine, from its private GitHub repo (pinned). To work on both
 # at once, point this at a local checkout for a while: path = "../zerorec".
-zerorec = { git = "https://github.com/SahilFruitwala/zerorec", rev = "0f36d2dd4b62adb02ab8c4f344b6469e9df2f33e" }
+zerorec = { git = "https://github.com/SahilFruitwala/zerorec", rev = "f0f656e323e4561f6b0117cf7c7b868fa82cc51f" }
 anyhow = "1.0.104"
 block2 = "0.6"
 clap = { version = "4.6.7", features = ["derive"] }

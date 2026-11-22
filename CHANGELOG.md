@@ -6,6 +6,11 @@ First release: screen, system audio, microphone and webcam recording to `.mov`/`
 with live transitions; replay buffer; RTMP, SRT and WHIP streaming; new logo; macOS DMG
 packaging and a tag-triggered release workflow. macOS 15+ on Apple Silicon only.
 
+- Preview window after recording: play and scrub the take, and for a smart zoom recording edit
+  its zooms on a timeline (move, resize, add, delete, change the level) with the picture zoomed
+  as the export will be, then export the zoomed copy with those edits.
+- Smart zoom moves smoothly: zooming in and out no longer drifts up and down before settling,
+  and a zoom ends after 8 s even while you keep clicking or typing (then stays out for 2 s).
 - Mic monitoring: **Listen**, next to the Mic meter, plays your mic as it is recorded, after
   noise suppression and the other mic filters, so you hear how you sound and how much noise gets
   through. Works in the preview too. Use headphones. Off at every launch.

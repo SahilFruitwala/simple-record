@@ -230,6 +230,15 @@ The **main window** contains:
   to move that folder to the Trash once a zoomed copy is saved. Not available for HDR
   recordings, or scenes showing other displays, cameras, videos or web pages. The cursor is
   the one ScreenCaptureKit draws, so it is magnified with the screen.
+- **Preview** opens after each recording (and from the **Preview** button): play the take
+  (Space plays and pauses, ← → step a frame, ⇧← ⇧→ a second) and scrub on the timeline. For a
+  smart zoom recording, the timeline shows its zooms and the picture zooms as the export will:
+  drag a zoom to move it, drag its ends to resize it, double-click the track to add one where
+  the cursor was, set a zoom's level, or Delete it. **Re-detect** finds them from the clicks
+  again; **Export Zoomed Copy** writes `…-zoomed.mov` with these zooms. Edits are saved to
+  `<name>.zoom.json` in the hidden folder as you make them (the same file `simple-record zoom`
+  reads). For a recording with a camera or scene, the preview shows the screen; the export adds
+  the camera and background as recorded.
 - **Separate files**: Save screen separately (`…-screen.mov`, the screen before the camera and
   scene are added) and Save camera separately (`…-camera.mov`), both on the recording's
   timeline.
